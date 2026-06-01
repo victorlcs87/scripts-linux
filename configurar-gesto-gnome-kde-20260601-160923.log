@@ -1,0 +1,59 @@
+============================================================
+Configurando gesto estilo GNOME no KDE Plasma
+============================================================
+Usuário: victorlcs
+Home: /home/victorlcs
+Diretório de execução: /home/victorlcs/repositorios/scripts-linux
+Log: /home/victorlcs/repositorios/scripts-linux/configurar-gesto-gnome-kde-20260601-160923.log
+
+Sessão atual:
+  XDG_SESSION_TYPE=wayland
+  XDG_CURRENT_DESKTOP=KDE
+  DESKTOP_SESSION=/usr/share/wayland-sessions/plasma.desktop
+Dependências do pacman já instaladas.
+libinput-gestures já está instalado.
+Adicionando usuário 'victorlcs' ao grupo input...
+
+$ sudo gpasswd -a victorlcs input
+Adicionando usuário victorlcs ao grupo input
+
+IMPORTANTE: você precisa encerrar a sessão e entrar de novo, ou reiniciar, para o grupo input valer.
+Comando auxiliar criado em: /home/victorlcs/.local/bin/kde-gnome-like-overview
+
+$ cp -a /home/victorlcs/.config/libinput-gestures.conf /home/victorlcs/.config/libinput-gestures.conf.backup-20260601-160923
+Backup criado em: /home/victorlcs/.config/libinput-gestures.conf.backup-20260601-160923
+Configuração criada em: /home/victorlcs/.config/libinput-gestures.conf
+Ativando autostart do libinput-gestures...
+
+$ libinput-gestures-setup autostart
+installed or updated /home/victorlcs/.config/autostart/libinput-gestures.desktop
+Reiniciando libinput-gestures...
+
+$ libinput-gestures-setup stop
+
+$ libinput-gestures-setup start
+libinput-gestures failed to start as a desktop application.
+
+Status:
+
+$ libinput-gestures-setup status
+libinput-gestures is installed.
+libinput-gestures is set up as a desktop application.
+libinput-gestures is not currently running.
+libinput-gestures is set to autostart as a desktop application.
+libinput-gestures is using custom configuration file.
+
+Testando comando auxiliar da Visão Geral...
+Comando de Overview executado com sucesso.
+
+============================================================
+Concluído
+============================================================
+Teste agora:
+  3 dedos para cima no touchpad
+
+Se não funcionar imediatamente, encerre a sessão e entre de novo.
+Se ainda não funcionar, execute:
+  bash configurar-gesto-gnome-kde.sh status
+
+Log salvo em: /home/victorlcs/repositorios/scripts-linux/configurar-gesto-gnome-kde-20260601-160923.log
