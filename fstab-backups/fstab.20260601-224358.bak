@@ -1,0 +1,44 @@
+# /etc/fstab: static file system information.
+#
+# Use 'blkid' to print the universally unique identifier for a device; this may
+# be used with UUID= as a more robust way to name devices that works even if
+# disks are added and removed. See fstab(5).
+#
+# <file system>             <mount point>  <type>  <options>  <dump>  <pass>
+UUID=0b22e8c5-4b8d-4d7a-86d9-d61d8ddf77e5 swap           swap    defaults   0 0
+UUID=700D-A7D5                            /boot          vfat    defaults,umask=0077 0 2
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /              btrfs   subvol=/@,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /home          btrfs   subvol=/@home,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /root          btrfs   subvol=/@root,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /srv           btrfs   subvol=/@srv,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /var/cache     btrfs   subvol=/@cache,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /var/tmp       btrfs   subvol=/@tmp,defaults,noatime,compress=zstd:1 0 0
+UUID=59afca5e-cb50-4e27-9bed-93f40e56c7b0 /var/log       btrfs   subvol=/@log,defaults,noatime,compress=zstd:1 0 0
+tmpfs                                     /tmp           tmpfs   defaults,noatime,mode=1777 0 0
+
+# >>> VICTOR-FSTAB-AUTOMOUNT-BEGIN
+# Montagens fixas geradas por configurar-fstab-automount-cachyos.sh
+# Data: 2026-06-01 22:32:34
+# Usuário: victorlcs87
+#
+# Opções usadas:
+# - nofail: evita travar o boot se a partição falhar.
+# - x-systemd.automount: monta sob demanda.
+# - x-systemd.idle-timeout=10min: desmonta após inatividade.
+# - noatime: reduz escritas no NVMe.
+# - commit=60 em ext4: reduz frequência de commits em disco.
+#
+# Partições propositalmente ignoradas:
+# - nvme0n1p1 / UUID=7894-893D / vfat/FAT32 / Provável EFI. Não montar automaticamente.
+# - nvme0n1p4 / UUID=A0D8BC16D8BBE924 / ntfs sem label / Pode ser Recovery/partição do Windows. Não montar automaticamente.
+
+# WINDOWS
+UUID=3620968B209651AB /mnt/windows ntfs3 rw,nofail,x-systemd.automount,x-systemd.idle-timeout=10min,x-systemd.device-timeout=10,uid=1000,gid=1000,umask=022,windows_names,prealloc,noatime 0 0
+
+# DADOS WINDOWS
+UUID=A234FA5C34FA3341 /mnt/dados-windows ntfs3 rw,nofail,x-systemd.automount,x-systemd.idle-timeout=10min,x-systemd.device-timeout=10,uid=1000,gid=1000,umask=022,windows_names,prealloc,noatime 0 0
+
+# JOGOS LINUX
+UUID=71944da5-b86c-4a0c-8973-c89a2a6e873f /mnt/jogos-linux ext4 defaults,nofail,x-systemd.automount,x-systemd.idle-timeout=10min,x-systemd.device-timeout=10,noatime,commit=60 0 2
+
+# <<< VICTOR-FSTAB-AUTOMOUNT-END
