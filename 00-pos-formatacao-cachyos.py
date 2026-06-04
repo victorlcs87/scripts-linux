@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
-from postformat.cli import main
+from pathlib import Path
+import sys
+
+from postformat.bootstrap import BootstrapError, ensure_bootstrap
+
+
+def run() -> int:
+    try:
+        ensure_bootstrap(Path(__file__).resolve().parent)
+    except BootstrapError as exc:
+        print(f"[bootstrap] {exc}", file=sys.stderr)
+        return 1
+    from postformat.cli import main
+
+    return main()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

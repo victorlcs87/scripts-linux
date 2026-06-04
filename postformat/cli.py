@@ -109,6 +109,7 @@ def run_action_safe(step_cls: type[Step], action: str, logger: Logger) -> StepRu
 
 
 def run_all(action: str, logger: Logger) -> None:
+    clear_screen()
     total = len(ALL_STEPS)
     results: list[StepRunResult] = []
     overall_started = time.monotonic()
@@ -193,14 +194,6 @@ def run_all(action: str, logger: Logger) -> None:
 
 def choose_step(logger: Logger) -> type[Step] | None:
     options = [MenuOption(str(index), step_cls.title, display_key=f"{index:02d}") for index, step_cls in enumerate(ALL_STEPS, 1)]
-    initial_lines = [
-        divider(char="~", tone=Color.ACCENT),
-        paint("Escolha a etapa que voce quer abrir", Color.TITLE),
-        *render_menu_options(options, 0),
-    ]
-    clear_screen()
-    for line in initial_lines:
-        print(line)
     try:
         index = choose_option(
             "Digite o numero da etapa",
@@ -209,7 +202,6 @@ def choose_step(logger: Logger) -> type[Step] | None:
             detail="O sisteminha esta aguardando sua escolha de etapa.",
             prompt_label="Etapa",
             render=lambda selected: [divider(char="~", tone=Color.ACCENT), paint("Escolha a etapa que voce quer abrir", Color.TITLE), *render_menu_options(options, selected)],
-            pre_rendered_lines=len(initial_lines),
         )
     except PromptInterruptedError as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
@@ -248,17 +240,6 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
         MenuOption("5", "Sair"),
     ]
     while True:
-        clear_screen()
-        menu_lines = render_menu(
-            f"Etapa {step_cls.id} - {step_cls.title}",
-            logger,
-            options,
-            footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
-        ).splitlines()
-        print(
-            "\n"
-            + "\n".join(menu_lines)
-        )
         try:
             option = choose_option(
                 "Escolha uma acao para esta etapa",
@@ -273,7 +254,6 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
                     footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
                     selected_index=selected,
                 ).splitlines(),
-                pre_rendered_lines=len(menu_lines),
             )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
@@ -301,17 +281,6 @@ def main_menu(logger: Logger) -> None:
         MenuOption("7", "Sair"),
     ]
     while True:
-        clear_screen()
-        menu_lines = render_menu(
-            "Sisteminha pos-formatacao CachyOS/KDE",
-            logger,
-            options,
-            footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
-        ).splitlines()
-        print(
-            "\n"
-            + "\n".join(menu_lines)
-        )
         try:
             option = choose_option(
                 "Escolha uma opcao do menu principal",
@@ -326,7 +295,6 @@ def main_menu(logger: Logger) -> None:
                     footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
                     selected_index=selected,
                 ).splitlines(),
-                pre_rendered_lines=len(menu_lines),
             )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")

@@ -1,6 +1,8 @@
 from pathlib import Path
 
 import pytest
+import termios
+import tty
 
 from postformat.core import (
     Logger,
@@ -8,6 +10,7 @@ from postformat.core import (
     PromptInterruptedError,
     PrivilegeEscalationBlockedError,
     Runner,
+    _choose_option_tty,
     backup_path,
     choose_option,
     load_env_file,
@@ -185,3 +188,33 @@ def test_choose_option_tty_interrupt_is_reported_cleanly(monkeypatch, tmp_path: 
     log = logger.path.read_text(encoding="utf-8")
     assert "[skipped]" in log
     assert "Opcao interrompido pelo usuario" in log
+
+
+def test_choose_option_tty_moves_with_down_arrow(monkeypatch) -> None:
+    options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
+    keys = iter(["down", "enter"])
+
+    monkeypatch.setattr("postformat.core._read_menu_key", lambda: next(keys))
+    monkeypatch.setattr("postformat.core._clear_interactive_screen", lambda: None)
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: ["state"])
+    monkeypatch.setattr(termios, "tcsetattr", lambda *_args: None)
+    monkeypatch.setattr(tty, "setraw", lambda _fd: None)
+
+    selected = _choose_option_tty(options)
+
+    assert selected == 1
+
+
+def test_choose_option_tty_accepts_single_digit_plus_enter_when_longer_prefix_exists(monkeypatch) -> None:
+    options = [MenuOption("1", "Primeira"), MenuOption("10", "Decima")]
+    keys = iter(["1", "enter"])
+
+    monkeypatch.setattr("postformat.core._read_menu_key", lambda: next(keys))
+    monkeypatch.setattr("postformat.core._clear_interactive_screen", lambda: None)
+    monkeypatch.setattr(termios, "tcgetattr", lambda _fd: ["state"])
+    monkeypatch.setattr(termios, "tcsetattr", lambda *_args: None)
+    monkeypatch.setattr(tty, "setraw", lambda _fd: None)
+
+    selected = _choose_option_tty(options)
+
+    assert selected == 0

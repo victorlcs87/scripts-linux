@@ -232,7 +232,6 @@ def choose_option(
     prompt_label: str = "Escolha",
     initial_index: int = 0,
     render: Callable[[int], list[str]] | None = None,
-    pre_rendered_lines: int = 0,
 ) -> int:
     if not options:
         raise ValueError("lista de opcoes nao pode ser vazia")
@@ -248,13 +247,14 @@ def choose_option(
                 options,
                 initial_index=initial_index,
                 render=render,
-                pre_rendered_lines=pre_rendered_lines,
             )
         except PromptInterruptedError as exc:
             logger.log_only(f"{badge('skipped', Color.WARNING)} {prompt_label} interrompido pelo usuario.")
             raise PromptInterruptedError(f"entrada interrompida pelo usuario: {prompt}") from exc
         logger.log_only(f"{badge('choice', Color.CHOICE)} {options[selected].key} - {options[selected].label}")
         return selected
+    if render is not None:
+        print("\n".join(render(initial_index)))
     answer = _choose_option_fallback(prompt, logger, options, detail=detail, prompt_label=prompt_label)
     logger.log_only(f"{badge('choice', Color.CHOICE)} {options[answer].key} - {options[answer].label}")
     return answer
@@ -291,7 +291,6 @@ def _choose_option_tty(
     *,
     initial_index: int = 0,
     render: Callable[[int], list[str]] | None = None,
-    pre_rendered_lines: int = 0,
 ) -> int:
     import termios
     import tty
@@ -301,16 +300,11 @@ def _choose_option_tty(
     fd = sys.stdin.fileno()
     previous = termios.tcgetattr(fd)
     tty.setraw(fd)
-    lines_rendered = pre_rendered_lines
+    lines_rendered = 0
     try:
         while True:
             lines = render(selected) if render is not None else render_menu_options(options, selected)
-            if lines_rendered:
-                sys.stdout.write(f"\033[{lines_rendered}F")
-            for line in lines:
-                sys.stdout.write("\r\033[2K" + line + "\n")
-            sys.stdout.flush()
-            lines_rendered = len(lines)
+            lines_rendered = _redraw_interactive_lines(lines, lines_rendered)
             key = _read_menu_key()
             if key == "up":
                 selected = (selected - 1) % len(options)
@@ -343,7 +337,25 @@ def _choose_option_tty(
             else:
                 digits = ""
     finally:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+
+
+def _redraw_interactive_lines(lines: Sequence[str], previous_lines: int) -> int:
+    if previous_lines:
+        sys.stdout.write(f"\033[{previous_lines}F")
+    else:
+        _clear_interactive_screen()
+    for line in lines:
+        sys.stdout.write("\r\033[2K" + line + "\n")
+    sys.stdout.flush()
+    return len(lines)
+
+
+def _clear_interactive_screen() -> None:
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
 
 
 def _read_menu_key() -> str:

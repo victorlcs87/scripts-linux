@@ -11,6 +11,8 @@ No fish:
 python 00-pos-formatacao-cachyos.py
 ```
 
+Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `pytest`.
+
 Tambem da para abrir uma etapa especifica por wrapper:
 
 ```fish
@@ -43,6 +45,12 @@ Cada wrapper numerado abre um menu proprio com:
 - `Status`
 - `Undo`
 - `Sair`
+
+Nos menus interativos, voce pode:
+
+- usar `↑` e `↓` para navegar
+- pressionar `Enter` para confirmar
+- digitar o numero da opcao como atalho
 
 ## Ordem Das Etapas
 
@@ -197,12 +205,6 @@ Rodar testes:
 
 ```fish
 python -m pytest
-```
-
-Se `pytest` nao estiver instalado:
-
-```fish
-sudo pacman -S --needed python-pytest
 ```
 
 ## Git E Arquivos Ignorados

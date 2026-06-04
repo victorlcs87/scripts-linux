@@ -1,7 +1,7 @@
 from pathlib import Path
 from subprocess import CompletedProcess
 
-from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, step_menu
+from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep
 from postformat.steps_base import StepContext
@@ -353,3 +353,18 @@ def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:
     step_menu(ALL_STEPS[0], logger)
 
     assert called == ["status"]
+
+
+def test_run_all_clears_screen_before_first_step(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    call_order: list[str] = []
+
+    monkeypatch.setattr("postformat.cli.clear_screen", lambda: call_order.append("clear"))
+    monkeypatch.setattr("postformat.cli.run_action", lambda *_args, **_kwargs: call_order.append("run") or StepRunResult("00", "Preparar", "done", "ok", "aplicado", 0.1))
+    monkeypatch.setattr("postformat.cli.render_run_summary", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("postformat.cli.prompt_return_to_menu", lambda *_args, **_kwargs: None)
+
+    run_all("apply", logger)
+
+    assert call_order[0] == "clear"
+    assert "run" in call_order
