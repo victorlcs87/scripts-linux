@@ -1,48 +1,44 @@
-# Kit pós-formatação — CachyOS KDE / Alienware 16 Aurora
+# Documentacao Legada
 
-Este pacote organiza as etapas pós-formatação do notebook em uma ordem lógica.
+Este arquivo foi preservado apenas como referencia historica da versao antiga do kit pos-formatacao.
 
-## Como usar
+O fluxo atual nao usa mais a estrutura `scripts/` descrita anteriormente. A automacao principal agora fica na raiz do repositorio e usa o pacote Python `postformat/`.
 
-```bash
-unzip kit-pos-formatacao-cachyos-completo-v2.zip
-cd kit-pos-formatacao-cachyos-completo
-python scripts/00-pos-formatacao-cachyos.py
+## Como Usar A Versao Atual
+
+No fish, a partir da raiz do repositorio:
+
+```fish
+python 00-pos-formatacao-cachyos.py
 ```
 
-Ou execute scripts individualmente:
+Ou execute uma etapa especifica:
 
-```bash
-bash scripts/01-atualizar-sistema-cachyos.sh
-bash scripts/09-instalar-apps-jogos-comunicacao-dev.sh
+```fish
+bash 09-instalar-apps-jogos-comunicacao-dev.sh
+python -m postformat step 09 dry-run
 ```
 
-## Ordem sugerida
+## Onde Esta A Documentacao Atual
 
-1. Abrir o Shelly e habilitar Flatpak, AppImage e repositórios/AUR.
-2. Atualizar o sistema.
-3. Instalar Linux Toys.
-4. Instalar Firefox Flatpak, Bitwarden, FirefoxPWA e preparar extensões.
-5. Criar WebApps: ChatGPT e GSV Calendar.
-6. Validar NVIDIA, Steam e jogos.
-7. Configurar Git/GitHub e clonar `scripts-linux` em `/home/repositorios`.
-8. Configurar Google Drive/rclone.
-9. Configurar montagem de discos via fstab.
-10. Ajustar KDE, gestos e aparência.
-11. Instalar apps: Steam, Heroic, Hydra Launcher, Discord, TeamSpeak, ZapZap, Bitwarden, ONLYOFFICE, Google Chrome, Minecraft Bedrock Launcher e Google Antigravity.
-12. Fixar Num Lock.
+Leia o README principal:
 
-## Padrão aplicado nos scripts
+```text
+../README.md
+```
 
-- Menu interativo.
-- Opções: Apply, Dry-run, Status, Undo e Sair quando aplicável.
-- Logs em `./LOGS` dentro do diretório onde o script foi executado.
-- Nada executado como root diretamente; usa `sudo` apenas quando necessário.
-- Detecta o usuário real com `SUDO_USER` quando aplicável.
-- Usa home por variável, sem hardcode de `/home/victorlcs`.
-- Colorido.
-- Backups antes de alterações sensíveis.
+Ele descreve:
 
-## Observação sobre Shelly
+- menu principal;
+- scripts numerados;
+- ordem das etapas;
+- WebApps via FirefoxPWA/WebApp Manager/fallback;
+- suporte AppImage com `fuse2`;
+- instalacao de apps e Codex CLI;
+- Num Lock no KDE e SDDM;
+- Antigravity IDE;
+- testes e arquivos ignorados.
 
-O Shelly é tratado como etapa manual assistida. O script abre o Shelly quando encontrado e pausa para você habilitar Flatpak, AppImage e AUR antes de continuar.
+## Scripts Arquivados
+
+Os scripts neste diretorio nao devem ser usados como fluxo principal. Eles foram mantidos para consulta, comparacao e recuperacao manual de alguma logica antiga.
