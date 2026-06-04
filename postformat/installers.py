@@ -31,7 +31,7 @@ def install_pacman(pkg: str, runner: Runner) -> None:
     if pacman_installed(pkg):
         runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {pkg} ja instalado")
         return
-    runner.run(["pacman", "-S", "--needed", pkg], sudo=True)
+    runner.run(["pacman", "-S", "--needed", pkg], sudo=True, action=f"Instalando pacote {pkg}")
 
 
 def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) -> bool:
@@ -46,7 +46,7 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
         return True
     helper = aur_helper()
     if aur_pkg and helper:
-        runner.run([helper, "-S", "--needed", aur_pkg])
+        runner.run([helper, "-S", "--needed", aur_pkg], action=f"Instalando pacote AUR {aur_pkg}")
         return True
     runner.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote para {system_pkg}")
     return False
@@ -58,6 +58,9 @@ def ensure_flatpak(runner: Runner) -> None:
     runner.run(
         ["flatpak", "remote-add", "--if-not-exists", "flathub", "https://flathub.org/repo/flathub.flatpakrepo"],
         check=False,
+        action="Garantindo remote Flathub",
+        show_progress=False,
+        quiet_success=True,
     )
 
 
@@ -66,11 +69,11 @@ def install_flatpak(app_id: str, runner: Runner) -> None:
     if flatpak_installed(app_id):
         runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {app_id} ja instalado via Flatpak")
         return
-    runner.run(["flatpak", "install", "-y", "flathub", app_id])
+    runner.run(["flatpak", "install", "-y", "flathub", app_id], action=f"Instalando Flatpak {app_id}")
 
 
 def remove_flatpak(app_id: str, runner: Runner) -> None:
-    runner.run(["flatpak", "uninstall", "-y", app_id], check=False)
+    runner.run(["flatpak", "uninstall", "-y", app_id], check=False, action=f"Removendo Flatpak {app_id}")
 
 
 def copy_asset(source: Path, target: Path, runner: Runner) -> None:

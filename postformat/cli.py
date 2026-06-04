@@ -14,6 +14,7 @@ from .core import (
     is_root,
     no_new_privs_enabled,
     paint,
+    prompt_user,
 )
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
@@ -57,11 +58,11 @@ def run_action(step_cls: type[Step], action: str, logger: Logger) -> None:
 
 
 def run_all(action: str, logger: Logger) -> None:
-    for step_cls in ALL_STEPS:
+    total = len(ALL_STEPS)
+    for index, step_cls in enumerate(ALL_STEPS, 1):
         logger.write("")
-        logger.write(divider())
-        logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}")
-        logger.write(divider())
+        logger.write(paint(f"■■ Etapa {index:02d}/{total:02d}", Color.ACCENT))
+        logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}  {paint(f'modo: {action}', Color.MUTED)}")
         try:
             run_action(step_cls, action, logger)
         except PrivilegeEscalationBlockedError as exc:
@@ -71,13 +72,25 @@ def run_all(action: str, logger: Logger) -> None:
         except Exception as exc:
             logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
             if action in {"apply", "dry-run"}:
-                input("Pressione ENTER para continuar com a proxima etapa ou Ctrl+C para parar...")
+                prompt_user(
+                    "Pressione ENTER para continuar com a proxima etapa ou Ctrl+C para parar",
+                    logger,
+                    detail="O fluxo esta pausado aguardando sua decisao.",
+                    prompt_label="ENTER",
+                )
 
 
-def choose_step() -> type[Step] | None:
+def choose_step(logger: Logger) -> type[Step] | None:
+    print(divider(char="~", tone=Color.ACCENT))
+    print(paint("Escolha a etapa que voce quer abrir", Color.TITLE))
     for index, step_cls in enumerate(ALL_STEPS, 1):
         print(f"{paint(f'{index:02d}.', Color.CHOICE)} {badge(step_cls.id, Color.ACCENT)} {paint(step_cls.title, Color.INFO)}")
-    choice = input("Etapa: ").strip()
+    choice = prompt_user(
+        "Digite o numero da etapa",
+        logger,
+        detail="O sisteminha esta aguardando sua escolha de etapa.",
+        prompt_label="Etapa",
+    ).strip()
     if not choice.isdigit():
         print(paint("Opcao invalida", Color.ERROR))
         return None
@@ -90,8 +103,9 @@ def choose_step() -> type[Step] | None:
 
 def render_menu(title: str, logger: Logger, items: list[str], *, footer: str | None = None) -> str:
     body = [
-        divider(),
+        divider(char="#", tone=Color.TITLE),
         paint(title, Color.TITLE),
+        paint("Visual impactante ativo  |  estados vivos  |  prompts explicitamente sinalizados", Color.ACCENT),
         paint(f"Log: {logger.path}", Color.MUTED),
         divider(char="-", tone=Color.BOX),
     ]
@@ -116,9 +130,15 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
                     f"{paint('4.', Color.CHOICE)} {paint('Undo', Color.WARNING)}",
                     f"{paint('5.', Color.CHOICE)} {paint('Sair', Color.MUTED)}",
                 ],
+                footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
             )
         )
-        option = input("Escolha: ").strip()
+        option = prompt_user(
+            "Escolha uma acao para esta etapa",
+            logger,
+            detail="O sisteminha esta aguardando sua escolha.",
+            prompt_label="Escolha",
+        ).strip()
         if option == "1":
             run_action(step_cls, "apply", logger)
         elif option == "2":
@@ -152,7 +172,12 @@ def main_menu(logger: Logger) -> None:
                 footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
             )
         )
-        option = input("Escolha: ").strip()
+        option = prompt_user(
+            "Escolha uma opcao do menu principal",
+            logger,
+            detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
+            prompt_label="Escolha",
+        ).strip()
         if option == "1":
             run_all("apply", logger)
         elif option == "2":
@@ -160,15 +185,15 @@ def main_menu(logger: Logger) -> None:
         elif option == "3":
             run_all("status", logger)
         elif option == "4":
-            step = choose_step()
+            step = choose_step(logger)
             if step:
                 run_action(step, "apply", logger)
         elif option == "5":
-            step = choose_step()
+            step = choose_step(logger)
             if step:
                 run_action(step, "dry-run", logger)
         elif option == "6":
-            step = choose_step()
+            step = choose_step(logger)
             if step:
                 run_action(step, "undo", logger)
         elif option == "7":
