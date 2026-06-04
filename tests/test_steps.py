@@ -1,7 +1,7 @@
 from pathlib import Path
 from subprocess import CompletedProcess
 
-from postformat.cli import render_run_summary, render_status_overview
+from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep
 from postformat.steps_base import StepContext
@@ -314,3 +314,42 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
 
     assert "libinput-gestures" in log
     assert "ausente" in log
+
+
+def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+
+    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: 1)
+
+    selected = choose_step(logger)
+
+    assert selected is ALL_STEPS[1]
+
+
+def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    choices = iter([0, 6])
+    called: list[str] = []
+
+    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("postformat.cli.run_all", lambda action, _logger: called.append(action))
+
+    main_menu(logger)
+
+    assert called == ["apply"]
+
+
+def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    choices = iter([2, 4])
+    called: list[str] = []
+
+    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("postformat.cli.run_action_safe", lambda _step_cls, action, _logger: called.append(action))
+
+    step_menu(ALL_STEPS[0], logger)
+
+    assert called == ["status"]

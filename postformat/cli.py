@@ -9,11 +9,13 @@ from .core import (
     Color,
     CommandInterruptedError,
     Logger,
+    MenuOption,
     PromptInterruptedError,
     PrivilegeEscalationBlockedError,
     Runner,
     StepRunResult,
     badge,
+    choose_option,
     detect_user,
     divider,
     is_root,
@@ -21,6 +23,7 @@ from .core import (
     paint,
     progress_bar,
     prompt_user,
+    render_menu_options,
     format_elapsed,
     announce,
 )
@@ -189,32 +192,39 @@ def run_all(action: str, logger: Logger) -> None:
 
 
 def choose_step(logger: Logger) -> type[Step] | None:
+    options = [MenuOption(str(index), step_cls.title, display_key=f"{index:02d}") for index, step_cls in enumerate(ALL_STEPS, 1)]
+    initial_lines = [
+        divider(char="~", tone=Color.ACCENT),
+        paint("Escolha a etapa que voce quer abrir", Color.TITLE),
+        *render_menu_options(options, 0),
+    ]
     clear_screen()
-    print(divider(char="~", tone=Color.ACCENT))
-    print(paint("Escolha a etapa que voce quer abrir", Color.TITLE))
-    for index, step_cls in enumerate(ALL_STEPS, 1):
-        print(f"{paint(f'{index:02d}.', Color.CHOICE)} {paint(step_cls.title, Color.INFO)}")
+    for line in initial_lines:
+        print(line)
     try:
-        choice = prompt_user(
+        index = choose_option(
             "Digite o numero da etapa",
             logger,
+            options,
             detail="O sisteminha esta aguardando sua escolha de etapa.",
             prompt_label="Etapa",
-        ).strip()
+            render=lambda selected: [divider(char="~", tone=Color.ACCENT), paint("Escolha a etapa que voce quer abrir", Color.TITLE), *render_menu_options(options, selected)],
+            pre_rendered_lines=len(initial_lines),
+        )
     except PromptInterruptedError as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
         return None
-    if not choice.isdigit():
-        print(paint("Opcao invalida", Color.ERROR))
-        return None
-    index = int(choice)
-    if index < 1 or index > len(ALL_STEPS):
-        print(paint("Opcao invalida", Color.ERROR))
-        return None
-    return ALL_STEPS[index - 1]
+    return ALL_STEPS[index]
 
 
-def render_menu(title: str, logger: Logger, items: list[str], *, footer: str | None = None) -> str:
+def render_menu(
+    title: str,
+    logger: Logger,
+    items: list[MenuOption],
+    *,
+    footer: str | None = None,
+    selected_index: int = 0,
+) -> str:
     body = [
         divider(char="#", tone=Color.TITLE),
         paint(title, Color.TITLE),
@@ -222,7 +232,7 @@ def render_menu(title: str, logger: Logger, items: list[str], *, footer: str | N
         paint(f"Log: {logger.path}", Color.MUTED),
         divider(char="-", tone=Color.BOX),
     ]
-    body.extend(items)
+    body.extend(render_menu_options(items, selected_index))
     if footer:
         body.extend([divider(char="-", tone=Color.BOX), paint(footer, Color.MUTED)])
     body.append(divider())
@@ -230,99 +240,117 @@ def render_menu(title: str, logger: Logger, items: list[str], *, footer: str | N
 
 
 def step_menu(step_cls: type[Step], logger: Logger) -> None:
+    options = [
+        MenuOption("1", "Apply"),
+        MenuOption("2", "Dry-run"),
+        MenuOption("3", "Status"),
+        MenuOption("4", "Undo"),
+        MenuOption("5", "Sair"),
+    ]
     while True:
         clear_screen()
+        menu_lines = render_menu(
+            f"Etapa {step_cls.id} - {step_cls.title}",
+            logger,
+            options,
+            footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
+        ).splitlines()
         print(
             "\n"
-            + render_menu(
-                f"Etapa {step_cls.id} - {step_cls.title}",
-                logger,
-                [
-                    f"{paint('1.', Color.CHOICE)} {paint('Apply', Color.SUCCESS)}",
-                    f"{paint('2.', Color.CHOICE)} {paint('Dry-run', Color.DRY_RUN)}",
-                    f"{paint('3.', Color.CHOICE)} {paint('Status', Color.INFO)}",
-                    f"{paint('4.', Color.CHOICE)} {paint('Undo', Color.WARNING)}",
-                    f"{paint('5.', Color.CHOICE)} {paint('Sair', Color.MUTED)}",
-                ],
-                footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
-            )
+            + "\n".join(menu_lines)
         )
         try:
-            option = prompt_user(
+            option = choose_option(
                 "Escolha uma acao para esta etapa",
                 logger,
+                options,
                 detail="O sisteminha esta aguardando sua escolha.",
                 prompt_label="Escolha",
-            ).strip()
+                render=lambda selected: render_menu(
+                    f"Etapa {step_cls.id} - {step_cls.title}",
+                    logger,
+                    options,
+                    footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
+                    selected_index=selected,
+                ).splitlines(),
+                pre_rendered_lines=len(menu_lines),
+            )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
             return
-        if option == "1":
+        if option == 0:
             run_action_safe(step_cls, "apply", logger)
-        elif option == "2":
+        elif option == 1:
             run_action_safe(step_cls, "dry-run", logger)
-        elif option == "3":
+        elif option == 2:
             run_action_safe(step_cls, "status", logger)
-        elif option == "4":
+        elif option == 3:
             run_action_safe(step_cls, "undo", logger)
-        elif option == "5":
+        elif option == 4:
             return
-        else:
-            print(paint("Opcao invalida", Color.ERROR))
 
 
 def main_menu(logger: Logger) -> None:
+    options = [
+        MenuOption("1", "Apply completo"),
+        MenuOption("2", "Dry-run completo"),
+        MenuOption("3", "Status completo"),
+        MenuOption("4", "Apply por etapa"),
+        MenuOption("5", "Dry-run por etapa"),
+        MenuOption("6", "Undo por etapa"),
+        MenuOption("7", "Sair"),
+    ]
     while True:
         clear_screen()
+        menu_lines = render_menu(
+            "Sisteminha pos-formatacao CachyOS/KDE",
+            logger,
+            options,
+            footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
+        ).splitlines()
         print(
             "\n"
-            + render_menu(
-                "Sisteminha pos-formatacao CachyOS/KDE",
-                logger,
-                [
-                    f"{paint('1.', Color.CHOICE)} {paint('Apply completo', Color.SUCCESS)}",
-                    f"{paint('2.', Color.CHOICE)} {paint('Dry-run completo', Color.DRY_RUN)}",
-                    f"{paint('3.', Color.CHOICE)} {paint('Status completo', Color.INFO)}",
-                    f"{paint('4.', Color.CHOICE)} {paint('Apply por etapa', Color.ACCENT)}",
-                    f"{paint('5.', Color.CHOICE)} {paint('Dry-run por etapa', Color.ACCENT)}",
-                    f"{paint('6.', Color.CHOICE)} {paint('Undo por etapa', Color.WARNING)}",
-                    f"{paint('7.', Color.CHOICE)} {paint('Sair', Color.MUTED)}",
-                ],
-                footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
-            )
+            + "\n".join(menu_lines)
         )
         try:
-            option = prompt_user(
+            option = choose_option(
                 "Escolha uma opcao do menu principal",
                 logger,
+                options,
                 detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
                 prompt_label="Escolha",
-            ).strip()
+                render=lambda selected: render_menu(
+                    "Sisteminha pos-formatacao CachyOS/KDE",
+                    logger,
+                    options,
+                    footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
+                    selected_index=selected,
+                ).splitlines(),
+                pre_rendered_lines=len(menu_lines),
+            )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
             return
-        if option == "1":
+        if option == 0:
             run_all("apply", logger)
-        elif option == "2":
+        elif option == 1:
             run_all("dry-run", logger)
-        elif option == "3":
+        elif option == 2:
             run_all("status", logger)
-        elif option == "4":
+        elif option == 3:
             step = choose_step(logger)
             if step:
                 run_action_safe(step, "apply", logger)
-        elif option == "5":
+        elif option == 4:
             step = choose_step(logger)
             if step:
                 run_action_safe(step, "dry-run", logger)
-        elif option == "6":
+        elif option == 5:
             step = choose_step(logger)
             if step:
                 run_action_safe(step, "undo", logger)
-        elif option == "7":
+        elif option == 6:
             return
-        else:
-            print(paint("Opcao invalida", Color.ERROR))
 
 
 def main(argv: list[str] | None = None) -> int:

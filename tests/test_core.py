@@ -4,10 +4,12 @@ import pytest
 
 from postformat.core import (
     Logger,
+    MenuOption,
     PromptInterruptedError,
     PrivilegeEscalationBlockedError,
     Runner,
     backup_path,
+    choose_option,
     load_env_file,
     progress_bar,
     prompt_user,
@@ -136,3 +138,50 @@ def test_prompt_user_handles_ctrl_c_cleanly(monkeypatch, tmp_path: Path) -> None
     log = logger.path.read_text(encoding="utf-8")
     assert "[skipped]" in log
     assert "Campo interrompido pelo usuario" in log
+
+
+def test_choose_option_fallback_accepts_number(monkeypatch, tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
+
+    monkeypatch.setattr("postformat.core._supports_arrow_navigation", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
+
+    selected = choose_option("Escolha algo", logger, options, prompt_label="Opcao")
+
+    assert selected == 1
+    log = logger.path.read_text(encoding="utf-8")
+    assert "[choice] 2 - Segunda" in log
+
+
+def test_choose_option_fallback_retries_after_invalid_number(monkeypatch, tmp_path: Path, capsys) -> None:
+    logger = Logger(tmp_path, "test")
+    options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
+    answers = iter(["9", "2"])
+
+    monkeypatch.setattr("postformat.core._supports_arrow_navigation", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+
+    selected = choose_option("Escolha algo", logger, options, prompt_label="Opcao")
+
+    assert selected == 1
+    captured = capsys.readouterr()
+    assert "Opcao invalida" in captured.out
+
+
+def test_choose_option_tty_interrupt_is_reported_cleanly(monkeypatch, tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
+
+    monkeypatch.setattr("postformat.core._supports_arrow_navigation", lambda: True)
+    monkeypatch.setattr(
+        "postformat.core._choose_option_tty",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PromptInterruptedError("entrada interrompida pelo usuario")),
+    )
+
+    with pytest.raises(PromptInterruptedError):
+        choose_option("Escolha algo", logger, options, prompt_label="Opcao")
+
+    log = logger.path.read_text(encoding="utf-8")
+    assert "[skipped]" in log
+    assert "Opcao interrompido pelo usuario" in log
