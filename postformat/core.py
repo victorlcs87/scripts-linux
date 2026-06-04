@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pwd
 import shutil
+import sys
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -11,14 +12,29 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
+ANSI_ENABLED = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM", "dumb") != "dumb"
+
+
 class Color:
-    RESET = "\033[0m"
-    RED = "\033[0;31m"
-    GREEN = "\033[0;32m"
-    YELLOW = "\033[1;33m"
-    BLUE = "\033[0;34m"
-    CYAN = "\033[0;36m"
-    BOLD = "\033[1m"
+    RESET = "\033[0m" if ANSI_ENABLED else ""
+    BOLD = "\033[1m" if ANSI_ENABLED else ""
+    DIM = "\033[2m" if ANSI_ENABLED else ""
+    TITLE = "\033[1;38;5;213m" if ANSI_ENABLED else ""
+    ACCENT = "\033[1;38;5;45m" if ANSI_ENABLED else ""
+    INFO = "\033[1;38;5;81m" if ANSI_ENABLED else ""
+    SUCCESS = "\033[1;38;5;48m" if ANSI_ENABLED else ""
+    WARNING = "\033[1;38;5;226m" if ANSI_ENABLED else ""
+    ERROR = "\033[1;38;5;196m" if ANSI_ENABLED else ""
+    MUTED = "\033[38;5;245m" if ANSI_ENABLED else ""
+    COMMAND = "\033[1;38;5;51m" if ANSI_ENABLED else ""
+    DRY_RUN = "\033[1;38;5;214m" if ANSI_ENABLED else ""
+    BOX = "\033[38;5;39m" if ANSI_ENABLED else ""
+    CHOICE = "\033[1;38;5;118m" if ANSI_ENABLED else ""
+    RED = ERROR
+    GREEN = SUCCESS
+    YELLOW = WARNING
+    BLUE = ACCENT
+    CYAN = INFO
 
 
 @dataclass(frozen=True)
@@ -56,6 +72,20 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
 
 
+def paint(text: str, tone: str) -> str:
+    if not tone:
+        return text
+    return f"{tone}{text}{Color.RESET}"
+
+
+def divider(width: int = 72, *, tone: str | None = None, char: str = "=") -> str:
+    return paint(char * width, tone or Color.BOX)
+
+
+def badge(label: str, tone: str) -> str:
+    return paint(f"[{label}]", tone)
+
+
 class Runner:
     def __init__(self, logger: Logger, dry_run: bool = False) -> None:
         self.logger = logger
@@ -79,7 +109,7 @@ class Runner:
     ) -> subprocess.CompletedProcess[str] | None:
         printable = self.cmd_text(cmd, sudo=sudo)
         if self.dry_run:
-            self.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} {printable}")
+            self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
         full_cmd: Sequence[str] | str
         if sudo:
@@ -90,7 +120,7 @@ class Runner:
                 full_cmd = ["sudo", *cmd]
         else:
             full_cmd = cmd
-        self.logger.write(f"{Color.CYAN}$ {printable}{Color.RESET}")
+        self.logger.write(f"{paint('$', Color.COMMAND)} {paint(printable, Color.COMMAND)}")
         result = subprocess.run(
             full_cmd,
             cwd=str(cwd) if cwd else None,
@@ -137,10 +167,10 @@ def backup_existing(path: Path, runner: Runner, *, sudo: bool = False) -> Path |
         runner.run(["cp", "-a", str(path), str(target)], sudo=True)
     else:
         if runner.dry_run:
-            runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} cp -a {path} {target}")
+            runner.logger.write(f"{badge('dry-run', Color.DRY_RUN)} cp -a {path} {target}")
         else:
             shutil.copy2(path, target)
-            runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} Backup criado: {target}")
+            runner.logger.write(f"{badge('backup', Color.SUCCESS)} Backup criado: {target}")
     return target
 
 
@@ -151,10 +181,10 @@ def write_text(path: Path, content: str, runner: Runner, *, mode: int = 0o644) -
         except UnicodeDecodeError:
             current = None
         if current == content and (path.stat().st_mode & 0o777) == mode:
-            runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {path} ja esta atualizado")
+            runner.logger.write(f"{badge('ok', Color.SUCCESS)} {path} ja esta atualizado")
             return
     if runner.dry_run:
-        runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} escreveria {path}")
+        runner.logger.write(f"{badge('dry-run', Color.DRY_RUN)} escreveria {path}")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -168,10 +198,10 @@ def write_text_sudo(path: Path, content: str, runner: Runner, *, mode: int = 0o6
         except (PermissionError, UnicodeDecodeError):
             current = None
         if current == content and (path.stat().st_mode & 0o777) == mode:
-            runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {path} ja esta atualizado")
+            runner.logger.write(f"{badge('ok', Color.SUCCESS)} {path} ja esta atualizado")
             return
     if runner.dry_run:
-        runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} escreveria {path} com sudo")
+        runner.logger.write(f"{badge('dry-run', Color.DRY_RUN)} escreveria {path} com sudo")
         return
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(content)

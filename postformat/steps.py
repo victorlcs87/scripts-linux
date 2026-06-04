@@ -6,22 +6,28 @@ from pathlib import Path
 
 from .core import (
     Color,
+    badge,
     backup_existing,
     command_exists,
     confirm_phrase,
+    divider,
     ensure_owner,
+    paint,
     print_lines,
     write_text,
     write_text_sudo,
 )
 from .desktop import DesktopEntry, install_desktop_entry
 from .installers import (
+    aur_helper,
     copy_asset,
+    ensure_flatpak,
     install_flatpak,
     install_pacman,
     install_system_or_aur,
     npm_global_installed,
     pacman_exists,
+    pacman_installed,
     remove_flatpak,
 )
 from .steps_base import Step
@@ -29,41 +35,87 @@ from .steps_base import Step
 
 def header(step: Step, title: str) -> None:
     step.ctx.logger.write("")
-    step.ctx.logger.write(f"{Color.CYAN}{'=' * 60}{Color.RESET}")
-    step.ctx.logger.write(f"{Color.CYAN}{title}{Color.RESET}")
-    step.ctx.logger.write(f"{Color.CYAN}{'=' * 60}{Color.RESET}")
+    step.ctx.logger.write(divider())
+    step.ctx.logger.write(f"{badge(step.id, Color.TITLE)} {paint(title, Color.TITLE)}")
+    step.ctx.logger.write(divider())
 
 
 class ShellyStep(Step):
     id = "00"
-    title = "Abrir Shelly e habilitar Flatpak, AppImage e AUR"
+    title = "Preparar ecossistema CachyOS"
 
     def apply(self) -> None:
         header(self, self.title)
+        ready_before = self._basic_support_ready()
+        if not command_exists("shelly"):
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Shelly nao encontrado. Vou preparar o suporte pelo sistema mesmo assim.")
+        else:
+            self.ctx.logger.write(f"{badge('info', Color.INFO)} Shelly CLI detectado com suporte a flatpak, appimage e aur.")
+        ensure_flatpak(self.ctx.runner)
+        install_pacman("fuse2", self.ctx.runner)
+        self._ensure_aur_helper()
         if self._basic_support_ready():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Flatpak, AppImage/fuse2 e AUR helper parecem prontos. Pulando abertura do Shelly.")
+            if ready_before:
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Flatpak, flathub, AppImage/fuse2 e AUR helper ja estavam prontos.")
+            else:
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Ecossistema preparado com sucesso.")
             return
-        self.ctx.logger.write("Habilite Flatpak, AppImage e AUR no Shelly antes de continuar.")
-        if command_exists("shelly"):
+        self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos. Vou abrir o fallback assistido do Shelly.")
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} abriria Shelly ou Shelly UI para concluir ajustes manuais")
+            return
+        if command_exists("shelly-ui"):
+            self.ctx.runner.run(["shelly-ui"], check=False)
+        elif command_exists("shelly"):
             self.ctx.runner.run(["shelly"], check=False)
         elif command_exists("cachyos-hello"):
-            self.ctx.runner.run(["cachyos-hello", "--startpage", "shelly"], check=False)
+            self.ctx.runner.run(["cachyos-hello", "launch", "package-installer"], check=False)
         else:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Shelly/CachyOS Hello nao encontrado.")
-        if not self.ctx.runner.dry_run:
-            input("Depois de ajustar no Shelly, pressione ENTER para continuar...")
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Shelly/CachyOS Hello nao encontrado.")
+            return
+        input("Depois de revisar no Shelly, pressione ENTER para continuar...")
 
     def status(self) -> None:
-        header(self, "Status Shelly")
+        header(self, "Status do ecossistema")
+        flatpak_ready = command_exists("flatpak")
+        flathub_ready = self._flathub_ready() if flatpak_ready else False
+        fuse2_ready = pacman_installed("fuse2")
+        helper = aur_helper()
         print_lines(self.ctx.logger, [
-            f"shelly: {'OK' if command_exists('shelly') else 'ausente'}",
-            f"cachyos-hello: {'OK' if command_exists('cachyos-hello') else 'ausente'}",
-            f"flatpak: {'OK' if command_exists('flatpak') else 'ausente'}",
-            f"AUR helper: {'OK' if command_exists('paru') or command_exists('yay') else 'ausente'}",
+            f"{badge('shelly', Color.INFO)} {'OK' if command_exists('shelly') else 'ausente'}",
+            f"{badge('shelly-ui', Color.INFO)} {'OK' if command_exists('shelly-ui') else 'ausente'}",
+            f"{badge('cachyos-hello', Color.INFO)} {'OK' if command_exists('cachyos-hello') else 'ausente'}",
+            f"{badge('flatpak', Color.SUCCESS if flatpak_ready else Color.WARNING)} {'OK' if flatpak_ready else 'ausente'}",
+            f"{badge('flathub', Color.SUCCESS if flathub_ready else Color.WARNING)} {'OK' if flathub_ready else 'ausente'}",
+            f"{badge('fuse2', Color.SUCCESS if fuse2_ready else Color.WARNING)} {'OK' if fuse2_ready else 'ausente'}",
+            f"{badge('aur', Color.SUCCESS if helper else Color.WARNING)} {helper or 'ausente'}",
         ])
+        if command_exists("shelly") and flatpak_ready:
+            self.ctx.runner.run(["shelly", "flatpak", "list-remotes"], check=False)
 
     def _basic_support_ready(self) -> bool:
-        return command_exists("flatpak") and (command_exists("paru") or command_exists("yay"))
+        return command_exists("flatpak") and self._flathub_ready() and pacman_installed("fuse2") and aur_helper() is not None
+
+    def _flathub_ready(self) -> bool:
+        result = self.ctx.runner.run(["flatpak", "remote-list", "--columns=name"], check=False)
+        if result and result.stdout:
+            return any(line.strip() == "flathub" for line in result.stdout.splitlines())
+        return self.ctx.runner.dry_run and command_exists("flatpak")
+
+    def _ensure_aur_helper(self) -> None:
+        if aur_helper():
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} AUR helper detectado: {aur_helper()}")
+            return
+        for candidate in ("paru", "yay"):
+            if pacman_exists(candidate):
+                install_pacman(candidate, self.ctx.runner)
+                if aur_helper():
+                    self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} AUR helper preparado: {aur_helper()}")
+                    return
+        self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Nao consegui instalar automaticamente um helper AUR.")
+
+    def undo(self) -> None:
+        self.ctx.logger.write("Nao ha undo seguro para Flatpak/flathub/fuse2/AUR helper. Se quiser, remova manualmente os componentes preparados.")
 
 
 class UpdateSystemStep(Step):
@@ -86,7 +138,7 @@ class UpdateSystemStep(Step):
 
 
 class LinuxToysStep(Step):
-    id = "00.2"
+    id = "02"
     title = "Instalar Linux Toys"
 
     def apply(self) -> None:
@@ -97,23 +149,8 @@ class LinuxToysStep(Step):
         self.ctx.runner.run("curl -fsSL https://linux.toys/install.sh | bash", shell=True)
 
 
-class AppImageSupportStep(Step):
-    id = "00.3"
-    title = "Suporte AppImage / fuse2"
-
-    def apply(self) -> None:
-        header(self, self.title)
-        install_pacman("fuse2", self.ctx.runner)
-        self.ctx.logger.write("fuse2 pronto para compatibilidade com AppImages.")
-
-    def status(self) -> None:
-        header(self, self.title)
-        self.ctx.runner.run(["pacman", "-Q", "fuse2"], check=False)
-        self.ctx.runner.run(["grep", "-w", "fuse", "/proc/filesystems"], check=False)
-
-
 class BrowserStep(Step):
-    id = "02"
+    id = "03"
     title = "Navegador e extensoes"
 
     def apply(self) -> None:
@@ -144,7 +181,7 @@ WEBAPPS = (
 
 
 class WebAppsStep(Step):
-    id = "03"
+    id = "04"
     title = "WebApps"
 
     def apply(self) -> None:
@@ -248,7 +285,7 @@ class WebAppsStep(Step):
 
 
 class NvidiaSteamStep(Step):
-    id = "04"
+    id = "05"
     title = "Validar NVIDIA / jogos / Steam"
 
     def apply(self) -> None:
@@ -264,7 +301,7 @@ class NvidiaSteamStep(Step):
 
 
 class GitStep(Step):
-    id = "05"
+    id = "06"
     title = "Git / GitHub"
 
     def apply(self) -> None:
@@ -297,7 +334,7 @@ class GitStep(Step):
 
 
 class RcloneStep(Step):
-    id = "06"
+    id = "07"
     title = "Google Drive / rclone"
     remote = "Google Drive:"
 
@@ -366,7 +403,7 @@ WantedBy=default.target
 
 
 class FstabStep(Step):
-    id = "07"
+    id = "08"
     title = "Montagem de discos / fstab"
     labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX")
     begin = "# BEGIN pos-formatacao-cachyos"
@@ -449,7 +486,7 @@ class FstabStep(Step):
 
 
 class GesturesStep(Step):
-    id = "08"
+    id = "09"
     title = "Gestos KDE"
 
     def apply(self) -> None:
@@ -501,8 +538,8 @@ exit 1
 
 
 class AppsStep(Step):
-    id = "09"
-    title = "Apps jogos/comunicacao/dev"
+    id = "10"
+    title = "Apps / jogos / comunicacao / dev"
     flatpaks = {
         "Discord": "com.discordapp.Discord",
         "TeamSpeak": "com.teamspeak.TeamSpeak",
@@ -580,7 +617,7 @@ class AppsStep(Step):
 
 
 class NumLockStep(Step):
-    id = "10"
+    id = "11"
     title = "Fixar Num Lock"
     sddm_file = Path("/etc/sddm.conf.d/10-numlock.conf")
 
@@ -669,7 +706,7 @@ class NumLockStep(Step):
 
 
 class AntigravityStep(Step):
-    id = "11"
+    id = "12"
     title = "Google Antigravity IDE"
     url = "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.4-6381998290370560/linux-x64/Antigravity%20IDE.tar.gz"
     version = "2.0.4-6381998290370560"
@@ -791,7 +828,6 @@ ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
     UpdateSystemStep,
     LinuxToysStep,
-    AppImageSupportStep,
     BrowserStep,
     WebAppsStep,
     NvidiaSteamStep,

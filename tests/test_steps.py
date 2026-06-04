@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from postformat.core import Logger, Runner, UserInfo
-from postformat.steps import AppsStep, NumLockStep
+from postformat.steps import ALL_STEPS, AppsStep, NumLockStep, ShellyStep
 from postformat.steps_base import StepContext
 
 
@@ -28,6 +28,38 @@ def test_numlock_ini_value_is_updated(tmp_path: Path) -> None:
     assert "NumLock=0" in updated
     assert "NumLock=2" not in updated
     assert "RepeatDelay=600" in updated
+
+
+def test_all_steps_use_sequential_ids() -> None:
+    ids = [step.id for step in ALL_STEPS]
+
+    assert ids == [f"{index:02d}" for index in range(len(ALL_STEPS))]
+    assert all("." not in step_id for step_id in ids)
+
+
+def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = ShellyStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"flatpak", "shelly"})
+    monkeypatch.setattr("postformat.steps.aur_helper", lambda: "paru")
+    monkeypatch.setattr("postformat.steps.pacman_installed", lambda pkg: pkg == "fuse2")
+
+    def fake_run(cmd, **kwargs):
+        if cmd == ["flatpak", "remote-list", "--columns=name"]:
+            class Result:
+                stdout = "flathub\n"
+                returncode = 0
+            return Result()
+        return None
+
+    monkeypatch.setattr(ctx.runner, "run", fake_run)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "Ecossistema" in log or "ja estavam prontos" in log
+    assert "abriria Shelly" not in log
 
 
 def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path) -> None:
