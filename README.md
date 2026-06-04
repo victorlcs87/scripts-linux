@@ -14,7 +14,7 @@ python 00-pos-formatacao-cachyos.py
 Tambem da para abrir uma etapa especifica pelo wrapper numerado:
 
 ```fish
-bash 09-instalar-apps-jogos-comunicacao-dev.sh
+bash scripts/09-instalar-apps-jogos-comunicacao-dev.sh
 ```
 
 Ou chamar diretamente o modulo Python:
@@ -144,12 +144,9 @@ fish_add_path ~/.local/bin
 ```text
 .
 ├── 00-pos-formatacao-cachyos.py
-├── 01-atualizar-sistema-cachyos.sh
-├── ...
-├── 11-instalar-antigravity-ide.sh
+├── pyproject.toml
 ├── assets/
 │   └── hydra.png
-├── legacy/
 ├── postformat/
 │   ├── cli.py
 │   ├── core.py
@@ -157,6 +154,10 @@ fish_add_path ~/.local/bin
 │   ├── installers.py
 │   ├── steps.py
 │   └── steps_base.py
+├── scripts/
+│   ├── 01-atualizar-sistema-cachyos.sh
+│   ├── ...
+│   └── 11-instalar-antigravity-ide.sh
 └── tests/
 ```
 
@@ -195,4 +196,4 @@ Esses arquivos podem existir no disco local, mas nao devem voltar para o GitHub.
 
 ## Legado
 
-Scripts antigos foram movidos para `legacy/` apenas para consulta historica. O fluxo mantido e suportado fica no CLI Python e nos wrappers numerados da raiz.
+Scripts antigos foram removidos da arvore atual para manter o repositorio enxuto. Caso seja necessario consultar alguma versao antiga, use o historico Git. O fluxo mantido e suportado fica no CLI Python e nos wrappers em `scripts/`.
