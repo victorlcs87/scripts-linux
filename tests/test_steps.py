@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from postformat.core import Logger, Runner, UserInfo
+from postformat.cli import render_run_summary
+from postformat.core import Logger, Runner, StepRunResult, UserInfo
 from postformat.steps import ALL_STEPS, AppsStep, NumLockStep, ShellyStep
 from postformat.steps_base import StepContext
 
@@ -72,3 +73,22 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path) -> None:
     assert "fuse2" in log
     assert "@openai/codex" in log
     assert "com.discordapp.Discord" in log
+
+
+def test_render_run_summary_aggregates_counts(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    results = [
+        StepRunResult("00", "Preparar", "done", "ok", 1.2),
+        StepRunResult("01", "Atualizar", "skipped", "skip", 0.1),
+        StepRunResult("02", "Linux Toys", "manual", "manual", 0.3),
+        StepRunResult("03", "Browser", "failed", "fail", 0.2),
+    ]
+
+    render_run_summary(logger, "apply", results, 13, 4.8)
+    log = logger.path.read_text(encoding="utf-8")
+
+    assert "Resumo final do fluxo" in log
+    assert "[done] 1" in log
+    assert "[skipped] 1" in log
+    assert "[manual] 1" in log
+    assert "[failed] 1" in log

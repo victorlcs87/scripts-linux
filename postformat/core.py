@@ -52,6 +52,15 @@ class PrivilegeEscalationBlockedError(RuntimeError):
     pass
 
 
+@dataclass
+class StepRunResult:
+    step_id: str
+    title: str
+    status: str
+    message: str
+    duration_seconds: float
+
+
 def detect_user() -> UserInfo:
     name = os.environ.get("SUDO_USER") or os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
     entry = pwd.getpwnam(name)
@@ -117,6 +126,9 @@ def announce(logger: Logger, kind: str, message: str) -> None:
         "done": Color.SUCCESS,
         "failed": Color.ERROR,
         "skipped": Color.WARNING,
+        "manual": Color.WARNING,
+        "blocked": Color.ERROR,
+        "summary": Color.TITLE,
         "info": Color.INFO,
     }
     logger.write(f"{badge(kind, tones.get(kind, Color.INFO))} {message}")
@@ -127,6 +139,15 @@ def format_elapsed(seconds: float) -> str:
         return f"{seconds:.1f}s"
     minutes, remainder = divmod(int(seconds), 60)
     return f"{minutes}m{remainder:02d}s"
+
+
+def progress_bar(current: int, total: int, width: int = 24) -> str:
+    if total <= 0:
+        return "[------------------------] 0%"
+    ratio = max(0.0, min(1.0, current / total))
+    filled = round(width * ratio)
+    bar = "█" * filled + "·" * (width - filled)
+    return f"[{bar}] {int(ratio * 100):3d}%"
 
 
 def prompt_user(
@@ -171,11 +192,15 @@ class Runner:
         action: str | None = None,
         show_progress: bool = True,
         quiet_success: bool = False,
+        interactive: bool = False,
+        manual_message: str | None = None,
     ) -> subprocess.CompletedProcess[str] | None:
         printable = self.cmd_text(cmd, sudo=sudo)
         action = action or infer_action(cmd, sudo=sudo)
         if self.dry_run:
             announce(self.logger, "action", action)
+            if interactive:
+                announce(self.logger, "manual", manual_message or "Comando interativo: pode aguardar sua entrada e isso nao e travamento.")
             self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
         if sudo and no_new_privs_enabled():
@@ -193,6 +218,8 @@ class Runner:
         else:
             full_cmd = cmd
         announce(self.logger, "action", action)
+        if interactive:
+            announce(self.logger, "manual", manual_message or "Comando interativo: a janela ou terminal pode aguardar sua entrada.")
         self.logger.write(f"{paint('$', Color.COMMAND)} {paint(printable, Color.COMMAND)}")
         started = time.monotonic()
         process = subprocess.Popen(

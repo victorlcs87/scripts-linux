@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from .core import Color, Runner, command_exists
+from .core import Color, Runner, announce, command_exists
 
 
 def pacman_installed(pkg: str) -> bool:
@@ -29,17 +29,17 @@ def aur_helper() -> str | None:
 
 def install_pacman(pkg: str, runner: Runner) -> None:
     if pacman_installed(pkg):
-        runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {pkg} ja instalado")
+        announce(runner.logger, "skipped", f"{pkg} ja instalado")
         return
     runner.run(["pacman", "-S", "--needed", pkg], sudo=True, action=f"Instalando pacote {pkg}")
 
 
 def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) -> bool:
     if pacman_installed(system_pkg):
-        runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {system_pkg} ja instalado")
+        announce(runner.logger, "skipped", f"{system_pkg} ja instalado")
         return True
     if aur_pkg and pacman_installed(aur_pkg):
-        runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {aur_pkg} ja instalado")
+        announce(runner.logger, "skipped", f"{aur_pkg} ja instalado")
         return True
     if pacman_exists(system_pkg):
         install_pacman(system_pkg, runner)
@@ -67,7 +67,7 @@ def ensure_flatpak(runner: Runner) -> None:
 def install_flatpak(app_id: str, runner: Runner) -> None:
     ensure_flatpak(runner)
     if flatpak_installed(app_id):
-        runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {app_id} ja instalado via Flatpak")
+        announce(runner.logger, "skipped", f"{app_id} ja instalado via Flatpak")
         return
     runner.run(["flatpak", "install", "-y", "flathub", app_id], action=f"Instalando Flatpak {app_id}")
 
@@ -78,7 +78,7 @@ def remove_flatpak(app_id: str, runner: Runner) -> None:
 
 def copy_asset(source: Path, target: Path, runner: Runner) -> None:
     if target.exists() and source.exists() and target.read_bytes() == source.read_bytes():
-        runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {target} ja esta atualizado")
+        announce(runner.logger, "skipped", f"{target} ja esta atualizado")
         return
     if runner.dry_run:
         runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} cp {source} {target}")

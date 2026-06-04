@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from .core import (
@@ -8,13 +9,17 @@ from .core import (
     Logger,
     PrivilegeEscalationBlockedError,
     Runner,
+    StepRunResult,
     badge,
     detect_user,
     divider,
     is_root,
     no_new_privs_enabled,
     paint,
+    progress_bar,
     prompt_user,
+    format_elapsed,
+    announce,
 )
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
@@ -42,9 +47,10 @@ def step_by_id(step_id: str) -> type[Step] | None:
     return None
 
 
-def run_action(step_cls: type[Step], action: str, logger: Logger) -> None:
+def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult:
     dry = action == "dry-run"
     step = build_step(step_cls, logger, dry_run=dry)
+    started = time.monotonic()
     if action == "apply":
         step.apply()
     elif action == "dry-run":
@@ -55,22 +61,54 @@ def run_action(step_cls: type[Step], action: str, logger: Logger) -> None:
         step.undo()
     else:
         raise ValueError(f"acao invalida: {action}")
+    if not step.result.message:
+        step.result.message = default_step_message(action, step.result.status)
+    return StepRunResult(
+        step_id=step_cls.id,
+        title=step_cls.title,
+        status=step.result.status,
+        message=step.result.message,
+        duration_seconds=time.monotonic() - started,
+    )
 
 
 def run_all(action: str, logger: Logger) -> None:
     total = len(ALL_STEPS)
+    results: list[StepRunResult] = []
+    overall_started = time.monotonic()
     for index, step_cls in enumerate(ALL_STEPS, 1):
+        percent = index / total
         logger.write("")
-        logger.write(paint(f"■■ Etapa {index:02d}/{total:02d}", Color.ACCENT))
-        logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}  {paint(f'modo: {action}', Color.MUTED)}")
+        logger.write(paint(progress_bar(index, total), Color.ACCENT))
+        logger.write(paint(f"Etapa {index:02d}/{total:02d}  |  {int(percent * 100):02d}%  |  modo: {action}", Color.MUTED))
+        logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}")
         try:
-            run_action(step_cls, action, logger)
+            result = run_action(step_cls, action, logger)
+            results.append(result)
         except PrivilegeEscalationBlockedError as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             logger.write(f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente.")
+            results.append(
+                StepRunResult(
+                    step_id=step_cls.id,
+                    title=step_cls.title,
+                    status="blocked",
+                    message=str(exc),
+                    duration_seconds=0.0,
+                )
+            )
             break
         except Exception as exc:
             logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
+            results.append(
+                StepRunResult(
+                    step_id=step_cls.id,
+                    title=step_cls.title,
+                    status="failed",
+                    message=str(exc),
+                    duration_seconds=0.0,
+                )
+            )
             if action in {"apply", "dry-run"}:
                 prompt_user(
                     "Pressione ENTER para continuar com a proxima etapa ou Ctrl+C para parar",
@@ -78,6 +116,7 @@ def run_all(action: str, logger: Logger) -> None:
                     detail="O fluxo esta pausado aguardando sua decisao.",
                     prompt_label="ENTER",
                 )
+    render_run_summary(logger, action, results, total, time.monotonic() - overall_started)
 
 
 def choose_step(logger: Logger) -> type[Step] | None:
@@ -231,6 +270,63 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     main_menu(logger)
     return 0
+
+
+def default_step_message(action: str, status: str) -> str:
+    if status == "skipped":
+        return "Nada novo para fazer nesta etapa."
+    if status == "manual":
+        return "A etapa dependeu de interacao manual."
+    if action == "status":
+        return "Status coletado."
+    if action == "dry-run":
+        return "Dry-run concluido."
+    if action == "undo":
+        return "Undo concluido."
+    return "Etapa concluida."
+
+
+def render_run_summary(
+    logger: Logger,
+    action: str,
+    results: list[StepRunResult],
+    total_steps: int,
+    duration_seconds: float,
+) -> None:
+    counts = {
+        "done": sum(1 for item in results if item.status == "done"),
+        "skipped": sum(1 for item in results if item.status == "skipped"),
+        "failed": sum(1 for item in results if item.status == "failed"),
+        "manual": sum(1 for item in results if item.status == "manual"),
+        "blocked": sum(1 for item in results if item.status == "blocked"),
+    }
+    logger.write("")
+    logger.write(divider(char="#", tone=Color.TITLE))
+    logger.write(paint("Resumo final do fluxo", Color.TITLE))
+    logger.write(paint(f"Modo: {action}  |  Duracao total: {format_elapsed(duration_seconds)}  |  Log: {logger.path}", Color.MUTED))
+    logger.write(divider(char="-", tone=Color.BOX))
+    logger.write(f"{badge('done', Color.SUCCESS)} {counts['done']} concluida(s)")
+    logger.write(f"{badge('skipped', Color.WARNING)} {counts['skipped']} pulada(s)")
+    logger.write(f"{badge('manual', Color.WARNING)} {counts['manual']} com interacao manual")
+    logger.write(f"{badge('failed', Color.ERROR)} {counts['failed']} falha(s)")
+    logger.write(f"{badge('blocked', Color.ERROR)} {counts['blocked']} bloqueada(s)")
+    logger.write(paint(f"Executadas: {len(results)}/{total_steps}", Color.ACCENT))
+    logger.write(divider(char="-", tone=Color.BOX))
+    for item in results:
+        tone = {
+            "done": Color.SUCCESS,
+            "skipped": Color.WARNING,
+            "manual": Color.WARNING,
+            "failed": Color.ERROR,
+            "blocked": Color.ERROR,
+        }.get(item.status, Color.INFO)
+        logger.write(
+            f"{badge(item.status, tone)} [{item.step_id}] {item.title}  "
+            f"{paint(f'({format_elapsed(item.duration_seconds)})', Color.MUTED)}"
+        )
+        if item.message:
+            logger.write(paint(item.message, Color.MUTED))
+    logger.write(divider(char="#", tone=Color.TITLE))
 
 
 if __name__ == "__main__":

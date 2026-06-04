@@ -7,6 +7,7 @@ from postformat.core import (
     PrivilegeEscalationBlockedError,
     Runner,
     backup_path,
+    progress_bar,
     prompt_user,
     write_text,
 )
@@ -89,3 +90,21 @@ def test_prompt_user_logs_waiting(monkeypatch, tmp_path: Path) -> None:
     assert answer == "resposta"
     assert "[waiting]" in log
     assert "Informe algo" in log
+
+
+def test_progress_bar_has_percentage() -> None:
+    rendered = progress_bar(4, 13)
+
+    assert "30%" in rendered
+    assert "[" in rendered and "]" in rendered
+
+
+def test_runner_marks_interactive_commands(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger, dry_run=True)
+
+    runner.run(["rclone", "config"], interactive=True, manual_message="interativo")
+    log = logger.path.read_text(encoding="utf-8")
+
+    assert "[manual]" in log
+    assert "interativo" in log
