@@ -56,12 +56,17 @@ class CommandInterruptedError(RuntimeError):
     pass
 
 
+class PromptInterruptedError(RuntimeError):
+    pass
+
+
 @dataclass
 class StepRunResult:
     step_id: str
     title: str
     status: str
     message: str
+    compliance: str
     duration_seconds: float
 
 
@@ -183,7 +188,11 @@ def prompt_user(
     announce(logger, "waiting", prompt)
     if detail:
         logger.write(paint(detail, Color.MUTED))
-    answer = input(f"{paint(prompt_label + ':', Color.CHOICE)} ").strip()
+    try:
+        answer = input(f"{paint(prompt_label + ':', Color.CHOICE)} ").strip()
+    except (KeyboardInterrupt, EOFError) as exc:
+        announce(logger, "skipped", f"{prompt_label} interrompido pelo usuario.")
+        raise PromptInterruptedError(f"entrada interrompida pelo usuario: {prompt}") from exc
     if answer or allow_empty:
         return answer
     announce(logger, "waiting", "Entrada vazia. Tente novamente.")
@@ -258,6 +267,11 @@ class Runner:
                     text=True,
                     check=False,
                 )
+            except FileNotFoundError as exc:
+                announce(self.logger, "failed", f"{action} nao pode iniciar: comando ausente")
+                if check:
+                    raise RuntimeError(f"comando nao encontrado: {printable}") from exc
+                return subprocess.CompletedProcess(args=full_cmd, returncode=127, stdout="", stderr=str(exc))
             except KeyboardInterrupt as exc:
                 elapsed = format_elapsed(time.monotonic() - started)
                 announce(self.logger, "failed", f"{action} interrompido pelo usuario em {elapsed}")
@@ -271,15 +285,21 @@ class Runner:
             if check and result.returncode != 0:
                 raise RuntimeError(f"comando falhou ({result.returncode}): {printable}")
             return result
-        process = subprocess.Popen(
-            full_cmd,
-            cwd=str(cwd) if cwd else None,
-            shell=shell,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=False,
-            env=env,
-        )
+        try:
+            process = subprocess.Popen(
+                full_cmd,
+                cwd=str(cwd) if cwd else None,
+                shell=shell,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,
+                env=env,
+            )
+        except FileNotFoundError as exc:
+            announce(self.logger, "failed", f"{action} nao pode iniciar: comando ausente")
+            if check:
+                raise RuntimeError(f"comando nao encontrado: {printable}") from exc
+            return subprocess.CompletedProcess(args=full_cmd, returncode=127, stdout="", stderr=str(exc))
         assert process.stdout is not None
         os.set_blocking(process.stdout.fileno(), False)
         collected: list[str] = []

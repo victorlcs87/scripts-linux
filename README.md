@@ -53,12 +53,12 @@ Cada wrapper numerado abre um menu proprio com:
 | `02` | Linux Toys | Instala Linux Toys via script oficial. |
 | `03` | Navegador | Instala Firefox do sistema, FirefoxPWA e Bitwarden Flatpak. |
 | `04` | WebApps | Tenta FirefoxPWA, depois WebApp Manager, depois fallback `.desktop`. |
-| `05` | NVIDIA / jogos | Apenas valida GPU, sessao, Steam e Heroic. |
+| `05` | NVIDIA / jogos | Faz um diagnostico amigavel da sessao grafica, GPUs, Steam e Heroic. |
 | `06` | Git / GitHub | Instala Git e clona/puxa `scripts-linux` em `/home/repositorios`. |
 | `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label para Windows, dados Windows e jogos Linux. |
-| `09` | Gestos KDE | Mantem apenas gestos; nao altera splash do KDE. |
-| `10` | Apps | Instala Steam/Heroic por pacote, demais apps via Flatpak, Hydra AppImage e Codex CLI. |
+| `09` | Gestos KDE | Instala e configura gestos com `libinput-gestures`; nao altera splash do KDE. |
+| `10` | Apps | Detecta apps ja instalados por sistema, Flatpak ou AppImage antes de instalar Steam/Heroic, demais Flatpaks, Hydra e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e na tela de login SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, cria atalho e comando `antigravity-ide`. |
 
@@ -103,7 +103,8 @@ https://addons.mozilla.org/firefox/addon/pwas-for-firefox/
 A etapa `10` usa:
 
 - Steam e Heroic com preferencia por pacote do sistema/AUR.
-- Discord, TeamSpeak, ZapZap, ONLYOFFICE, Chrome, Minecraft Bedrock Launcher e Bitwarden via Flatpak.
+- Discord, TeamSpeak, ONLYOFFICE, Chrome, Minecraft Bedrock Launcher e Bitwarden via Flatpak.
+- ZapZap com preferencia por pacote nativo/AUR.
 - Hydra via AppImage, com icone em `assets/hydra.png`.
 - Codex CLI com:
 

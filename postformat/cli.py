@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from .core import (
     Color,
     CommandInterruptedError,
     Logger,
+    PromptInterruptedError,
     PrivilegeEscalationBlockedError,
     Runner,
     StepRunResult,
@@ -27,6 +29,14 @@ from .steps_base import Step, StepContext
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def clear_screen() -> None:
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+    else:
+        print("\n" * 3)
 
 
 def build_step(step_cls: type[Step], logger: Logger, *, dry_run: bool = False) -> Step:
@@ -64,13 +74,35 @@ def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResu
         raise ValueError(f"acao invalida: {action}")
     if not step.result.message:
         step.result.message = default_step_message(action, step.result.status)
+    if not step.result.summary:
+        step.result.summary = default_step_summary(action, step.result)
     return StepRunResult(
         step_id=step_cls.id,
         title=step_cls.title,
         status=step.result.status,
-        message=step.result.message,
+        message=step.result.summary,
+        compliance=step.result.compliance,
         duration_seconds=time.monotonic() - started,
     )
+
+
+def run_action_safe(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult | None:
+    try:
+        clear_screen()
+        result = run_action(step_cls, action, logger)
+        render_step_summary(logger, action, result)
+        prompt_return_to_menu(logger)
+        return result
+    except PrivilegeEscalationBlockedError as exc:
+        logger.write(f"{badge('erro', Color.ERROR)} {exc}")
+    except CommandInterruptedError as exc:
+        logger.write(f"{badge('erro', Color.ERROR)} {exc}")
+    except PromptInterruptedError as exc:
+        logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+    except Exception as exc:
+        logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
+        prompt_return_to_menu(logger)
+    return None
 
 
 def run_all(action: str, logger: Logger) -> None:
@@ -95,6 +127,7 @@ def run_all(action: str, logger: Logger) -> None:
                     title=step_cls.title,
                     status="blocked",
                     message=str(exc),
+                    compliance="atencao",
                     duration_seconds=0.0,
                 )
             )
@@ -107,6 +140,20 @@ def run_all(action: str, logger: Logger) -> None:
                     title=step_cls.title,
                     status="blocked",
                     message=str(exc),
+                    compliance="atencao",
+                    duration_seconds=0.0,
+                )
+            )
+            break
+        except PromptInterruptedError as exc:
+            logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+            results.append(
+                StepRunResult(
+                    step_id=step_cls.id,
+                    title=step_cls.title,
+                    status="manual",
+                    message=str(exc),
+                    compliance="atencao",
                     duration_seconds=0.0,
                 )
             )
@@ -119,30 +166,44 @@ def run_all(action: str, logger: Logger) -> None:
                     title=step_cls.title,
                     status="failed",
                     message=str(exc),
+                    compliance="atencao",
                     duration_seconds=0.0,
                 )
             )
             if action in {"apply", "dry-run"}:
-                prompt_user(
-                    "Pressione ENTER para continuar com a proxima etapa ou Ctrl+C para parar",
-                    logger,
-                    detail="O fluxo esta pausado aguardando sua decisao.",
-                    prompt_label="ENTER",
-                )
-    render_run_summary(logger, action, results, total, time.monotonic() - overall_started)
+                try:
+                    prompt_user(
+                        "Pressione ENTER para continuar com a proxima etapa ou Ctrl+C para parar",
+                        logger,
+                        detail="O fluxo esta pausado aguardando sua decisao.",
+                        prompt_label="ENTER",
+                    )
+                except PromptInterruptedError as prompt_exc:
+                    logger.write(f"{badge('aviso', Color.WARNING)} {prompt_exc}")
+                    break
+    if action == "status":
+        render_status_overview(logger, results, total, time.monotonic() - overall_started)
+    else:
+        render_run_summary(logger, action, results, total, time.monotonic() - overall_started)
+    prompt_return_to_menu(logger)
 
 
 def choose_step(logger: Logger) -> type[Step] | None:
+    clear_screen()
     print(divider(char="~", tone=Color.ACCENT))
     print(paint("Escolha a etapa que voce quer abrir", Color.TITLE))
     for index, step_cls in enumerate(ALL_STEPS, 1):
-        print(f"{paint(f'{index:02d}.', Color.CHOICE)} {badge(step_cls.id, Color.ACCENT)} {paint(step_cls.title, Color.INFO)}")
-    choice = prompt_user(
-        "Digite o numero da etapa",
-        logger,
-        detail="O sisteminha esta aguardando sua escolha de etapa.",
-        prompt_label="Etapa",
-    ).strip()
+        print(f"{paint(f'{index:02d}.', Color.CHOICE)} {paint(step_cls.title, Color.INFO)}")
+    try:
+        choice = prompt_user(
+            "Digite o numero da etapa",
+            logger,
+            detail="O sisteminha esta aguardando sua escolha de etapa.",
+            prompt_label="Etapa",
+        ).strip()
+    except PromptInterruptedError as exc:
+        logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+        return None
     if not choice.isdigit():
         print(paint("Opcao invalida", Color.ERROR))
         return None
@@ -170,6 +231,7 @@ def render_menu(title: str, logger: Logger, items: list[str], *, footer: str | N
 
 def step_menu(step_cls: type[Step], logger: Logger) -> None:
     while True:
+        clear_screen()
         print(
             "\n"
             + render_menu(
@@ -185,20 +247,24 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
                 footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
             )
         )
-        option = prompt_user(
-            "Escolha uma acao para esta etapa",
-            logger,
-            detail="O sisteminha esta aguardando sua escolha.",
-            prompt_label="Escolha",
-        ).strip()
+        try:
+            option = prompt_user(
+                "Escolha uma acao para esta etapa",
+                logger,
+                detail="O sisteminha esta aguardando sua escolha.",
+                prompt_label="Escolha",
+            ).strip()
+        except PromptInterruptedError as exc:
+            logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+            return
         if option == "1":
-            run_action(step_cls, "apply", logger)
+            run_action_safe(step_cls, "apply", logger)
         elif option == "2":
-            run_action(step_cls, "dry-run", logger)
+            run_action_safe(step_cls, "dry-run", logger)
         elif option == "3":
-            run_action(step_cls, "status", logger)
+            run_action_safe(step_cls, "status", logger)
         elif option == "4":
-            run_action(step_cls, "undo", logger)
+            run_action_safe(step_cls, "undo", logger)
         elif option == "5":
             return
         else:
@@ -207,6 +273,7 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
 
 def main_menu(logger: Logger) -> None:
     while True:
+        clear_screen()
         print(
             "\n"
             + render_menu(
@@ -224,12 +291,16 @@ def main_menu(logger: Logger) -> None:
                 footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
             )
         )
-        option = prompt_user(
-            "Escolha uma opcao do menu principal",
-            logger,
-            detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
-            prompt_label="Escolha",
-        ).strip()
+        try:
+            option = prompt_user(
+                "Escolha uma opcao do menu principal",
+                logger,
+                detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
+                prompt_label="Escolha",
+            ).strip()
+        except PromptInterruptedError as exc:
+            logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+            return
         if option == "1":
             run_all("apply", logger)
         elif option == "2":
@@ -239,15 +310,15 @@ def main_menu(logger: Logger) -> None:
         elif option == "4":
             step = choose_step(logger)
             if step:
-                run_action(step, "apply", logger)
+                run_action_safe(step, "apply", logger)
         elif option == "5":
             step = choose_step(logger)
             if step:
-                run_action(step, "dry-run", logger)
+                run_action_safe(step, "dry-run", logger)
         elif option == "6":
             step = choose_step(logger)
             if step:
-                run_action(step, "undo", logger)
+                run_action_safe(step, "undo", logger)
         elif option == "7":
             return
         else:
@@ -277,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
                 step_menu(step_cls, logger)
             else:
                 run_action(step_cls, action, logger)
-        except (PrivilegeEscalationBlockedError, CommandInterruptedError) as exc:
+        except (PrivilegeEscalationBlockedError, CommandInterruptedError, PromptInterruptedError) as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return 1
         return 0
@@ -297,6 +368,81 @@ def default_step_message(action: str, status: str) -> str:
     if action == "undo":
         return "Undo concluido."
     return "Etapa concluida."
+
+
+def default_step_summary(action: str, result) -> str:
+    if action == "status":
+        if result.compliance == "aplicado":
+            return result.summary or "Etapa aplicada."
+        if result.compliance == "pendente":
+            return result.summary or "Ha itens pendentes nesta etapa."
+        if result.compliance == "atencao":
+            return result.summary or "A etapa requer atencao."
+        return "Status coletado."
+    if action == "dry-run":
+        return result.summary or "Dry-run concluido."
+    if action == "undo":
+        return result.summary or "Undo concluido."
+    return result.summary or result.message or "Etapa concluida."
+
+
+def render_step_summary(logger: Logger, action: str, result: StepRunResult) -> None:
+    tone = {
+        "done": Color.SUCCESS,
+        "skipped": Color.WARNING,
+        "manual": Color.WARNING,
+        "failed": Color.ERROR,
+        "blocked": Color.ERROR,
+    }.get(result.status, Color.INFO)
+    logger.write("")
+    logger.write(divider(char="#", tone=Color.TITLE))
+    logger.write(paint("Resumo da etapa", Color.TITLE))
+    logger.write(paint(f"Modo: {action}  |  Etapa: [{result.step_id}] {result.title}  |  Duracao: {format_elapsed(result.duration_seconds)}", Color.MUTED))
+    logger.write(divider(char="-", tone=Color.BOX))
+    logger.write(f"{badge(result.status, tone)} {result.message}")
+    logger.write(divider(char="#", tone=Color.TITLE))
+
+
+def render_status_overview(
+    logger: Logger,
+    results: list[StepRunResult],
+    total_steps: int,
+    duration_seconds: float,
+) -> None:
+    counts = {"aplicado": 0, "pendente": 0, "atencao": 0}
+    classified: list[tuple[StepRunResult, str]] = []
+    for item in results:
+        compliance = item.compliance if item.compliance in counts else "atencao"
+        counts[compliance] += 1
+        classified.append((item, compliance))
+
+    logger.write("")
+    logger.write(divider(char="#", tone=Color.TITLE))
+    logger.write(paint("Resumo inteligente do status", Color.TITLE))
+    logger.write(paint(f"Duracao total: {format_elapsed(duration_seconds)}  |  Log: {logger.path}", Color.MUTED))
+    logger.write(divider(char="-", tone=Color.BOX))
+    logger.write(f"{badge('aplicado', Color.SUCCESS)} {counts['aplicado']} etapa(s) aplicadas")
+    logger.write(f"{badge('pendente', Color.WARNING)} {counts['pendente']} etapa(s) pendentes")
+    logger.write(f"{badge('atencao', Color.ERROR)} {counts['atencao']} etapa(s) com atencao")
+    logger.write(paint(f"Executadas: {len(results)}/{total_steps}", Color.ACCENT))
+    logger.write(divider(char="-", tone=Color.BOX))
+    for item, compliance in classified:
+        tone = {"aplicado": Color.SUCCESS, "pendente": Color.WARNING, "atencao": Color.ERROR}[compliance]
+        logger.write(f"{badge(compliance, tone)} [{item.step_id}] {item.title}")
+        logger.write(paint(item.message, Color.MUTED))
+    logger.write(divider(char="#", tone=Color.TITLE))
+
+
+def prompt_return_to_menu(logger: Logger) -> None:
+    try:
+        prompt_user(
+            "Pressione ENTER para voltar ao menu",
+            logger,
+            detail="O sisteminha esta pausado para voce conseguir ler o resumo.",
+            prompt_label="ENTER",
+        )
+    except PromptInterruptedError as exc:
+        logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
 
 
 def render_run_summary(

@@ -12,6 +12,11 @@ class StepResult:
     message: str = ""
     manual_events: int = 0
     hints: list[str] = field(default_factory=list)
+    compliance: str = "desconhecido"
+    summary: str = ""
+    applied_items: list[str] = field(default_factory=list)
+    missing_items: list[str] = field(default_factory=list)
+    attention_items: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +67,24 @@ class Step:
         self.result.status = "manual"
         self.result.message = message
         self.result.manual_events += 1
+
+    def mark_applied(self, summary: str, *, items: list[str] | None = None) -> None:
+        self.result.compliance = "aplicado"
+        self.result.summary = summary
+        if items:
+            self.result.applied_items = items
+
+    def mark_pending(self, summary: str, *, missing: list[str] | None = None) -> None:
+        self.result.compliance = "pendente"
+        self.result.summary = summary
+        if missing:
+            self.result.missing_items = missing
+
+    def mark_attention(self, summary: str, *, attention: list[str] | None = None) -> None:
+        self.result.compliance = "atencao"
+        self.result.summary = summary
+        if attention:
+            self.result.attention_items = attention
 
     def add_hint(self, message: str) -> None:
         self.result.hints.append(message)

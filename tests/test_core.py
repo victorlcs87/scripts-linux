@@ -4,6 +4,7 @@ import pytest
 
 from postformat.core import (
     Logger,
+    PromptInterruptedError,
     PrivilegeEscalationBlockedError,
     Runner,
     backup_path,
@@ -119,3 +120,19 @@ def test_load_env_file_reads_simple_key_value_pairs(tmp_path: Path) -> None:
 
     assert loaded["ID_DO_CLIENTE"] == "abc"
     assert loaded["CHAVE_SECRETA_DO_CLIENTE"] == "xyz"
+
+
+def test_prompt_user_handles_ctrl_c_cleanly(monkeypatch, tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+
+    def raise_interrupt(_prompt: str = "") -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", raise_interrupt)
+
+    with pytest.raises(PromptInterruptedError):
+        prompt_user("Informe algo", logger, prompt_label="Campo")
+
+    log = logger.path.read_text(encoding="utf-8")
+    assert "[skipped]" in log
+    assert "Campo interrompido pelo usuario" in log
