@@ -133,6 +133,7 @@ fish_add_path ~/.local/bin
 - O CLI chama `sudo` apenas nos comandos que precisam.
 - Logs ficam em `./LOGS/`, no diretorio de execucao.
 - Dry-run mostra o que seria feito sem aplicar alteracoes.
+- As etapas verificam o estado atual antes de agir e pulam instalacoes, arquivos, atalhos ou servicos que ja estejam prontos.
 - Arquivos importantes recebem backup antes de alteracoes.
 - Operacoes sensiveis, como `fstab`, exigem confirmacao digitada.
 - Caminhos de usuario usam deteccao por variavel e banco de usuarios, sem hardcode de `/home/victorlcs`.

@@ -145,6 +145,14 @@ def backup_existing(path: Path, runner: Runner, *, sudo: bool = False) -> Path |
 
 
 def write_text(path: Path, content: str, runner: Runner, *, mode: int = 0o644) -> None:
+    if path.exists():
+        try:
+            current = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            current = None
+        if current == content and (path.stat().st_mode & 0o777) == mode:
+            runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {path} ja esta atualizado")
+            return
     if runner.dry_run:
         runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} escreveria {path}")
         return
@@ -154,6 +162,14 @@ def write_text(path: Path, content: str, runner: Runner, *, mode: int = 0o644) -
 
 
 def write_text_sudo(path: Path, content: str, runner: Runner, *, mode: int = 0o644) -> None:
+    if path.exists():
+        try:
+            current = path.read_text(encoding="utf-8")
+        except (PermissionError, UnicodeDecodeError):
+            current = None
+        if current == content and (path.stat().st_mode & 0o777) == mode:
+            runner.logger.write(f"{Color.GREEN}OK:{Color.RESET} {path} ja esta atualizado")
+            return
     if runner.dry_run:
         runner.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} escreveria {path} com sudo")
         return

@@ -20,6 +20,7 @@ from .installers import (
     install_flatpak,
     install_pacman,
     install_system_or_aur,
+    npm_global_installed,
     pacman_exists,
     remove_flatpak,
 )
@@ -39,6 +40,9 @@ class ShellyStep(Step):
 
     def apply(self) -> None:
         header(self, self.title)
+        if self._basic_support_ready():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Flatpak, AppImage/fuse2 e AUR helper parecem prontos. Pulando abertura do Shelly.")
+            return
         self.ctx.logger.write("Habilite Flatpak, AppImage e AUR no Shelly antes de continuar.")
         if command_exists("shelly"):
             self.ctx.runner.run(["shelly"], check=False)
@@ -51,7 +55,15 @@ class ShellyStep(Step):
 
     def status(self) -> None:
         header(self, "Status Shelly")
-        print_lines(self.ctx.logger, [f"shelly: {'OK' if command_exists('shelly') else 'ausente'}", f"cachyos-hello: {'OK' if command_exists('cachyos-hello') else 'ausente'}"])
+        print_lines(self.ctx.logger, [
+            f"shelly: {'OK' if command_exists('shelly') else 'ausente'}",
+            f"cachyos-hello: {'OK' if command_exists('cachyos-hello') else 'ausente'}",
+            f"flatpak: {'OK' if command_exists('flatpak') else 'ausente'}",
+            f"AUR helper: {'OK' if command_exists('paru') or command_exists('yay') else 'ausente'}",
+        ])
+
+    def _basic_support_ready(self) -> bool:
+        return command_exists("flatpak") and (command_exists("paru") or command_exists("yay"))
 
 
 class UpdateSystemStep(Step):
@@ -79,6 +91,9 @@ class LinuxToysStep(Step):
 
     def apply(self) -> None:
         header(self, self.title)
+        if command_exists("linux-toys"):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Linux Toys ja parece instalado")
+            return
         self.ctx.runner.run("curl -fsSL https://linux.toys/install.sh | bash", shell=True)
 
 
@@ -89,7 +104,7 @@ class AppImageSupportStep(Step):
     def apply(self) -> None:
         header(self, self.title)
         install_pacman("fuse2", self.ctx.runner)
-        self.ctx.logger.write("fuse2 instalado para compatibilidade com AppImages.")
+        self.ctx.logger.write("fuse2 pronto para compatibilidade com AppImages.")
 
     def status(self) -> None:
         header(self, self.title)
@@ -134,6 +149,9 @@ class WebAppsStep(Step):
 
     def apply(self) -> None:
         header(self, "WebApps com FirefoxPWA, WebApp Manager ou fallback")
+        if self._all_webapps_present():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} WebApps/atalhos ja encontrados. Pulando criacao.")
+            return
         created = False
         if pacman_exists("firefoxpwa"):
             install_pacman("firefoxpwa", self.ctx.runner)
@@ -148,6 +166,9 @@ class WebAppsStep(Step):
     def _try_firefoxpwa(self) -> bool:
         ok_all = True
         for name, slug, _url, manifest in WEBAPPS:
+            if self._webapp_present(name, slug):
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
+                continue
             profile_id = None
             result = self.ctx.runner.run(
                 ["firefoxpwa", "profile", "create", "--name", slug, "--description", name],
@@ -183,6 +204,9 @@ class WebAppsStep(Step):
     def _create_desktop_fallbacks(self) -> None:
         app_dir = self.ctx.user.home / ".local/share/applications"
         for name, slug, url, _manifest in WEBAPPS:
+            if self._webapp_present(name, slug):
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
+                continue
             entry = DesktopEntry(
                 name=name,
                 comment=f"Fallback WebApp {name}",
@@ -190,6 +214,22 @@ class WebAppsStep(Step):
                 categories=("Network", "WebBrowser"),
             )
             install_desktop_entry(app_dir / f"{slug}.desktop", entry, self.ctx.runner)
+
+    def _all_webapps_present(self) -> bool:
+        return all(self._webapp_present(name, slug) for name, slug, _url, _manifest in WEBAPPS)
+
+    def _webapp_present(self, name: str, slug: str) -> bool:
+        app_dir = self.ctx.user.home / ".local/share/applications"
+        candidates = [
+            app_dir / f"{slug}.desktop",
+            app_dir / f"{name.lower().replace(' ', '-')}.desktop",
+        ]
+        if any(path.exists() for path in candidates):
+            return True
+        if command_exists("firefoxpwa"):
+            result = self.ctx.runner.run(["firefoxpwa", "site", "list"], check=False)
+            return bool(result and name.lower() in result.stdout.lower())
+        return False
 
     def status(self) -> None:
         header(self, "Status WebApps")
@@ -232,7 +272,10 @@ class GitStep(Step):
         install_pacman("git", self.ctx.runner)
         base = Path("/home/repositorios")
         target = base / "scripts-linux"
-        self.ctx.runner.run(["mkdir", "-p", str(base)], sudo=True)
+        if base.exists():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {base} ja existe")
+        else:
+            self.ctx.runner.run(["mkdir", "-p", str(base)], sudo=True)
         self.ctx.runner.run(["chown", f"{self.ctx.user.uid}:{self.ctx.user.gid}", str(base)], sudo=True)
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} pediria a URL do repositorio e faria clone/pull")
@@ -242,6 +285,7 @@ class GitStep(Step):
             self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} URL vazia, pulando clone.")
             return
         if (target / ".git").exists():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} repositorio ja existe em {target}; atualizando")
             self.ctx.runner.run(["git", "-C", str(target), "pull", "--ff-only"], check=False)
         else:
             self.ctx.runner.run(["git", "clone", repo_url, str(target)])
@@ -270,9 +314,7 @@ class RcloneStep(Step):
         if remotes and self.remote not in remotes.stdout:
             self.ctx.logger.write("Remote 'Google Drive:' nao encontrado. Abrindo rclone config.")
             self.ctx.runner.run(["rclone", "config"], check=False)
-        write_text(
-            service_file,
-            """[Unit]
+        service_content = """[Unit]
 Description=Rclone Google Drive mount
 After=network-online.target
 Wants=network-online.target
@@ -286,11 +328,27 @@ RestartSec=10
 
 [Install]
 WantedBy=default.target
-""",
+"""
+        service_was_current = service_file.exists() and service_file.read_text(encoding="utf-8", errors="ignore") == service_content
+        write_text(
+            service_file,
+            service_content,
             self.ctx.runner,
         )
-        self.ctx.runner.run(["systemctl", "--user", "daemon-reload"], check=False)
-        self.ctx.runner.run(["systemctl", "--user", "enable", "--now", "rclone-google-drive.service"], check=False)
+        if not service_was_current or self.ctx.runner.dry_run:
+            self.ctx.runner.run(["systemctl", "--user", "daemon-reload"], check=False)
+        if self._user_service_active("rclone-google-drive.service") and self._user_service_enabled("rclone-google-drive.service"):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} rclone-google-drive.service ja esta habilitado e ativo")
+        else:
+            self.ctx.runner.run(["systemctl", "--user", "enable", "--now", "rclone-google-drive.service"], check=False)
+
+    def _user_service_active(self, name: str) -> bool:
+        result = self.ctx.runner.run(["systemctl", "--user", "is-active", "--quiet", name], check=False)
+        return bool(result and result.returncode == 0)
+
+    def _user_service_enabled(self, name: str) -> bool:
+        result = self.ctx.runner.run(["systemctl", "--user", "is-enabled", "--quiet", name], check=False)
+        return bool(result and result.returncode == 0)
 
     def status(self) -> None:
         header(self, self.title)
@@ -320,12 +378,16 @@ class FstabStep(Step):
             return
         lines = self._build_lines()
         fstab = Path("/etc/fstab")
-        backup_existing(fstab, self.ctx.runner, sudo=True)
         current = fstab.read_text(encoding="utf-8")
         cleaned = self._without_block(current)
         content = cleaned.rstrip() + "\n\n" + "\n".join([self.begin, *lines, self.end]) + "\n"
-        for label in self.labels:
-            self.ctx.runner.run(["mkdir", "-p", self._mountpoint(label)], sudo=True)
+        if current == content:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} /etc/fstab ja contem o bloco esperado")
+            self._ensure_mountpoints()
+            self.ctx.runner.run(["mount", "-a"], sudo=True, check=False)
+            return
+        backup_existing(fstab, self.ctx.runner, sudo=True)
+        self._ensure_mountpoints()
         write_text_sudo(fstab, content, self.ctx.runner)
         self.ctx.runner.run(["systemctl", "daemon-reload"], sudo=True)
         self.ctx.runner.run(["mount", "-a"], sudo=True, check=False)
@@ -360,6 +422,14 @@ class FstabStep(Step):
 
     def _mountpoint(self, label: str) -> str:
         return {"WINDOWS": "/mnt/windows", "DADOS WINDOWS": "/mnt/dados-windows", "JOGOS LINUX": "/mnt/jogos-linux"}[label]
+
+    def _ensure_mountpoints(self) -> None:
+        for label in self.labels:
+            mountpoint = self._mountpoint(label)
+            if Path(mountpoint).exists():
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {mountpoint} ja existe")
+            else:
+                self.ctx.runner.run(["mkdir", "-p", mountpoint], sudo=True)
 
     def _without_block(self, text: str) -> str:
         return re.sub(rf"\n?{re.escape(self.begin)}.*?{re.escape(self.end)}\n?", "\n", text, flags=re.S)
@@ -396,18 +466,23 @@ class GesturesStep(Step):
     def _write_libinput_config(self) -> None:
         helper = self.ctx.user.home / ".local/bin/kde-gnome-like-overview"
         conf = self.ctx.user.home / ".config/libinput-gestures.conf"
-        write_text(
-            helper,
-            """#!/usr/bin/env bash
+        helper_content = """#!/usr/bin/env bash
 qdbus6 org.kde.kglobalaccel /component/kwin org.kde.kglobalaccel.Component.invokeShortcut "Overview" >/dev/null 2>&1 && exit 0
 qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.toggleEffect "overview" >/dev/null 2>&1 && exit 0
 exit 1
-""",
+"""
+        conf_content = f"gesture swipe up 3 {helper}\n"
+        write_text(
+            helper,
+            helper_content,
             self.ctx.runner,
             mode=0o755,
         )
-        backup_existing(conf, self.ctx.runner)
-        write_text(conf, f"gesture swipe up 3 {helper}\n", self.ctx.runner)
+        if conf.exists() and conf.read_text(encoding="utf-8", errors="ignore") == conf_content:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {conf} ja esta atualizado")
+        else:
+            backup_existing(conf, self.ctx.runner)
+            write_text(conf, conf_content, self.ctx.runner)
 
     def status(self) -> None:
         header(self, self.title)
@@ -448,7 +523,10 @@ class AppsStep(Step):
             install_flatpak(app_id, self.ctx.runner)
         header(self, "Codex CLI")
         self.ctx.runner.run(["pacman", "-S", "--needed", "nodejs", "npm"], sudo=True)
-        self.ctx.runner.run(["npm", "install", "-g", "@openai/codex"], sudo=True)
+        if npm_global_installed("@openai/codex"):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} @openai/codex ja instalado globalmente")
+        else:
+            self.ctx.runner.run(["npm", "install", "-g", "@openai/codex"], sudo=True)
 
     def _install_hydra(self) -> None:
         header(self, "Hydra Launcher AppImage")
@@ -460,13 +538,17 @@ class AppsStep(Step):
         if not self.ctx.runner.dry_run:
             appimage_dir.mkdir(parents=True, exist_ok=True)
         copy_asset(icon_source, icon_target, self.ctx.runner)
+        out = appimage_dir / "HydraLauncher-latest.AppImage"
+        desktop_file = self.ctx.user.home / ".local/share/applications/hydra-launcher.desktop"
+        if out.exists() and desktop_file.exists() and icon_target.exists():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Hydra Launcher ja instalado")
+            return
         url_cmd = "curl -fsSL https://api.github.com/repos/hydralauncher/hydra/releases/latest | grep -Eo 'https://[^\\\"]+\\.AppImage' | head -n1"
         result = self.ctx.runner.run(url_cmd, shell=True, check=False)
         url = result.stdout.strip() if result and result.stdout else "HYDRA_APPIMAGE_URL"
         if url == "HYDRA_APPIMAGE_URL" and not self.ctx.runner.dry_run:
             self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Nao encontrei AppImage do Hydra no release latest.")
             return
-        out = appimage_dir / "HydraLauncher-latest.AppImage"
         self.ctx.runner.run(["curl", "-L", url, "-o", str(out)], check=False)
         self.ctx.runner.run(["chmod", "+x", str(out)], check=False)
         entry = DesktopEntry(
@@ -475,7 +557,7 @@ class AppsStep(Step):
             icon=str(icon_target),
             categories=("Game",),
         )
-        install_desktop_entry(self.ctx.user.home / ".local/share/applications/hydra-launcher.desktop", entry, self.ctx.runner)
+        install_desktop_entry(desktop_file, entry, self.ctx.runner)
 
     def status(self) -> None:
         header(self, self.title)
@@ -505,16 +587,33 @@ class NumLockStep(Step):
     def apply(self) -> None:
         header(self, self.title)
         kde_conf = self.ctx.user.home / ".config/kcminputrc"
-        backup_existing(kde_conf, self.ctx.runner)
         if command_exists("kwriteconfig6"):
-            self.ctx.runner.run(["kwriteconfig6", "--file", "kcminputrc", "--group", "Keyboard", "--key", "NumLock", "0"], check=False)
+            if self._kde_numlock_ready(kde_conf):
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do KDE ja esta configurado")
+            else:
+                backup_existing(kde_conf, self.ctx.runner)
+                self.ctx.runner.run(["kwriteconfig6", "--file", "kcminputrc", "--group", "Keyboard", "--key", "NumLock", "0"], check=False)
         else:
             content = self._set_ini_value(kde_conf.read_text(encoding="utf-8") if kde_conf.exists() else "", "Keyboard", "NumLock", "0")
-            write_text(kde_conf, content, self.ctx.runner)
-        backup_existing(self.sddm_file, self.ctx.runner, sudo=True)
+            if kde_conf.exists() and kde_conf.read_text(encoding="utf-8", errors="ignore") == content:
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do KDE ja esta configurado")
+            else:
+                backup_existing(kde_conf, self.ctx.runner)
+                write_text(kde_conf, content, self.ctx.runner)
         self.ctx.runner.run(["mkdir", "-p", str(self.sddm_file.parent)], sudo=True)
-        write_text_sudo(self.sddm_file, "[General]\nNumlock=on\n", self.ctx.runner)
+        sddm_content = "[General]\nNumlock=on\n"
+        if self.sddm_file.exists() and self.sddm_file.read_text(encoding="utf-8", errors="ignore") == sddm_content:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do SDDM ja esta configurado")
+        else:
+            backup_existing(self.sddm_file, self.ctx.runner, sudo=True)
+            write_text_sudo(self.sddm_file, sddm_content, self.ctx.runner)
         self._warn_sddm_conflicts()
+
+    def _kde_numlock_ready(self, kde_conf: Path) -> bool:
+        if not kde_conf.exists():
+            return False
+        text = kde_conf.read_text(encoding="utf-8", errors="ignore")
+        return bool(re.search(r"(?ms)^\[Keyboard\].*^NumLock=0$", text))
 
     def _set_ini_value(self, text: str, section: str, key: str, value: str) -> str:
         lines = text.splitlines()
@@ -582,10 +681,18 @@ class AntigravityStep(Step):
         cache = self.ctx.user.home / ".cache/antigravity-ide"
         tarball = cache / f"Antigravity-IDE-{self.version}.tar.gz"
         install_dir = self.ctx.user.home / "Antigravity IDE"
+        existing_exe = self._find_executable(install_dir) if install_dir.exists() else None
+        if existing_exe and self._desktop_ready(existing_exe) and self._wrapper_ready(existing_exe):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Antigravity IDE ja instalado e integrado")
+            self._path_hint()
+            return
         if not self.ctx.runner.dry_run:
             cache.mkdir(parents=True, exist_ok=True)
         backup_existing(install_dir, self.ctx.runner)
-        self.ctx.runner.run(["curl", "-L", "--fail", "-o", str(tarball), self.url])
+        if tarball.exists() and tarball.stat().st_size > 1024 * 1024:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} pacote Antigravity ja esta em cache: {tarball}")
+        else:
+            self.ctx.runner.run(["curl", "-L", "--fail", "-o", str(tarball), self.url])
         tmp = self.ctx.user.home / ".cache/antigravity-ide/extract"
         if not self.ctx.runner.dry_run:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -635,11 +742,22 @@ class AntigravityStep(Step):
 
     def _write_terminal_wrapper(self, exe: Path) -> None:
         wrapper = self.ctx.user.home / ".local/bin/antigravity-ide"
-        content = f"""#!/usr/bin/env bash
+        content = self._wrapper_content(exe)
+        write_text(wrapper, content, self.ctx.runner, mode=0o755)
+
+    def _wrapper_content(self, exe: Path) -> str:
+        return f"""#!/usr/bin/env bash
 nohup "{exe}" "$@" >/dev/null 2>&1 &
 disown 2>/dev/null || true
 """
-        write_text(wrapper, content, self.ctx.runner, mode=0o755)
+
+    def _desktop_ready(self, exe: Path) -> bool:
+        desktop_file = self.ctx.user.home / ".local/share/applications/antigravity-ide.desktop"
+        return desktop_file.exists() and str(exe) in desktop_file.read_text(encoding="utf-8", errors="ignore")
+
+    def _wrapper_ready(self, exe: Path) -> bool:
+        wrapper = self.ctx.user.home / ".local/bin/antigravity-ide"
+        return wrapper.exists() and wrapper.read_text(encoding="utf-8", errors="ignore") == self._wrapper_content(exe)
 
     def _path_hint(self) -> None:
         local_bin = str(self.ctx.user.home / ".local/bin")

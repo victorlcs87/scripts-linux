@@ -44,6 +44,10 @@ class DesktopEntry:
 
 
 def install_desktop_entry(path: Path, entry: DesktopEntry, runner: Runner) -> None:
-    backup_existing(path, runner)
-    write_text(path, entry.render(), runner, mode=0o644)
+    rendered = entry.render()
+    if path.exists() and path.read_text(encoding="utf-8", errors="ignore") == rendered:
+        runner.logger.write(f"\033[0;32mOK:\033[0m {path} ja esta atualizado")
+    else:
+        backup_existing(path, runner)
+        write_text(path, rendered, runner, mode=0o644)
     runner.run(["update-desktop-database", str(path.parent)], check=False)

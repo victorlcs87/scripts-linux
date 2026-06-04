@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from postformat.core import Logger, Runner, backup_path
+from postformat.core import Logger, Runner, backup_path, write_text
 from postformat.desktop import DesktopEntry
 
 
@@ -34,3 +34,16 @@ def test_desktop_entry_render() -> None:
     assert "Exec=/home/user/AppImages/Hydra.AppImage %U" in rendered
     assert "Icon=/home/user/.local/share/icons/hydra.png" in rendered
     assert "Categories=Game;" in rendered
+
+
+def test_write_text_skips_when_content_is_current(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger, dry_run=False)
+    target = tmp_path / "sample.txt"
+    target.write_text("same\n", encoding="utf-8")
+    before = target.stat().st_mtime_ns
+
+    write_text(target, "same\n", runner)
+
+    assert target.stat().st_mtime_ns == before
+    assert "ja esta atualizado" in logger.path.read_text(encoding="utf-8")
