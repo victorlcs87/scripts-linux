@@ -13,6 +13,7 @@ from .core import (
     confirm_phrase,
     divider,
     ensure_owner,
+    load_env_file,
     paint,
     print_lines,
     prompt_user,
@@ -77,6 +78,7 @@ class ShellyStep(Step):
                 check=False,
                 action="Abrindo Shelly UI",
                 interactive=True,
+                interactive_tty=True,
                 manual_message="Comando interativo: o Shelly UI pode ficar aguardando sua acao. Isso nao e travamento.",
             )
         elif command_exists("shelly"):
@@ -85,6 +87,7 @@ class ShellyStep(Step):
                 check=False,
                 action="Abrindo Shelly",
                 interactive=True,
+                interactive_tty=True,
                 manual_message="Comando interativo: o Shelly pode ficar aguardando sua acao. Isso nao e travamento.",
             )
         elif command_exists("cachyos-hello"):
@@ -157,7 +160,14 @@ class UpdateSystemStep(Step):
     def apply(self) -> None:
         header(self, self.title, "Atualizando a base do sistema e pacotes instalados")
         install_pacman("pacman-contrib", self.ctx.runner)
-        self.ctx.runner.run(["pacman", "-Syu"], sudo=True, action="Atualizando sistema com pacman")
+        self.ctx.runner.run(
+            ["pacman", "-Syu"],
+            sudo=True,
+            action="Atualizando sistema com pacman",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes. Isso nao e travamento.",
+        )
         self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
         self.mark_done("Atualizacao do sistema executada.")
 
@@ -343,8 +353,8 @@ class NvidiaSteamStep(Step):
     def status(self) -> None:
         header(self, self.title, "Coletando diagnostico rapido de GPU, sessao e launchers")
         self.ctx.logger.write(f"XDG_SESSION_TYPE={__import__('os').environ.get('XDG_SESSION_TYPE', '')}")
-        self.ctx.runner.run(["glxinfo", "-B"], check=False)
-        self.ctx.runner.run(["prime-run", "glxinfo", "-B"], check=False)
+        self.ctx.runner.run(["glxinfo", "-B"], check=False, action="Consultando capacidades OpenGL", show_progress=False)
+        self.ctx.runner.run(["prime-run", "glxinfo", "-B"], check=False, action="Consultando OpenGL via GPU dedicada", show_progress=False)
         self.ctx.runner.run(["nvidia-smi"], check=False)
         self.ctx.runner.run(["pacman", "-Q", "steam", "heroic-games-launcher"], check=False)
 
@@ -356,13 +366,12 @@ class GitStep(Step):
     def apply(self) -> None:
         header(self, self.title, "Preparando clone ou atualizacao do repositorio base")
         install_pacman("git", self.ctx.runner)
-        base = Path("/home/repositorios")
+        base = self.ctx.user.home / "repositorios"
         target = base / "scripts-linux"
         if base.exists():
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {base} ja existe")
         else:
-            self.ctx.runner.run(["mkdir", "-p", str(base)], sudo=True, action="Criando diretorio /home/repositorios", show_progress=False)
-        self.ctx.runner.run(["chown", f"{self.ctx.user.uid}:{self.ctx.user.gid}", str(base)], sudo=True, action="Ajustando permissao de /home/repositorios", show_progress=False, quiet_success=True)
+            self.ctx.runner.run(["mkdir", "-p", str(base)], action=f"Criando diretorio {base}", show_progress=False)
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} pediria a URL do repositorio e faria clone/pull")
             self.mark_manual("Dry-run indica solicitacao de URL do repositorio.")
@@ -389,7 +398,7 @@ class GitStep(Step):
     def status(self) -> None:
         header(self, self.title, "Verificando git local e estado do repositorio clonado")
         self.ctx.runner.run(["git", "--version"], check=False)
-        self.ctx.runner.run(["git", "-C", "/home/repositorios/scripts-linux", "status", "--short", "--branch"], check=False)
+        self.ctx.runner.run(["git", "-C", str(self.ctx.user.home / "repositorios/scripts-linux"), "status", "--short", "--branch"], check=False)
 
 
 class RcloneStep(Step):
@@ -397,16 +406,36 @@ class RcloneStep(Step):
     title = "Google Drive / rclone"
     remote = "Google Drive:"
 
+    def _rclone_env(self) -> dict[str, str]:
+        env_file = self.ctx.root / ".env.local"
+        loaded = load_env_file(env_file)
+        env: dict[str, str] = {}
+        client_id = loaded.get("ID_DO_CLIENTE", "").strip()
+        client_secret = loaded.get("CHAVE_SECRETA_DO_CLIENTE", "").strip()
+        if client_id and client_secret:
+            env["RCLONE_CONFIG_GOOGLE_DRIVE_CLIENT_ID"] = client_id
+            env["RCLONE_CONFIG_GOOGLE_DRIVE_CLIENT_SECRET"] = client_secret
+        elif loaded:
+            announce(self.ctx.logger, "warning", ".env.local encontrado, mas faltam ID_DO_CLIENTE ou CHAVE_SECRETA_DO_CLIENTE para o rclone.")
+        return env
+
     def apply(self) -> None:
         header(self, self.title, "Montando sincronizacao automatica do Google Drive")
         install_pacman("rclone", self.ctx.runner)
         mount_dir = self.ctx.user.home / "GoogleDrive"
         service_dir = self.ctx.user.home / ".config/systemd/user"
         service_file = service_dir / "rclone-google-drive.service"
+        rclone_env = self._rclone_env()
         if not self.ctx.runner.dry_run:
             mount_dir.mkdir(parents=True, exist_ok=True)
             service_dir.mkdir(parents=True, exist_ok=True)
-        remotes = self.ctx.runner.run(["rclone", "listremotes"], check=False, action="Verificando remotes do rclone", show_progress=False)
+        remotes = self.ctx.runner.run(
+            ["rclone", "listremotes"],
+            check=False,
+            action="Verificando remotes do rclone",
+            show_progress=False,
+            env_extra=rclone_env,
+        )
         if remotes and self.remote not in remotes.stdout:
             self.ctx.logger.write("Remote 'Google Drive:' nao encontrado. Abrindo rclone config.")
             self.ctx.runner.run(
@@ -414,9 +443,21 @@ class RcloneStep(Step):
                 check=False,
                 action="Abrindo configuracao interativa do rclone",
                 interactive=True,
+                interactive_tty=True,
                 manual_message="Comando interativo: configure o remote Google Drive no rclone. Isso nao e travamento.",
+                env_extra=rclone_env,
             )
-            self.mark_manual("Remote do Google Drive exigiu configuracao manual no rclone.")
+            remotes_after = self.ctx.runner.run(
+                ["rclone", "listremotes"],
+                check=False,
+                action="Revalidando remotes do rclone apos configuracao",
+                show_progress=False,
+                env_extra=rclone_env,
+            )
+            if not remotes_after or self.remote not in remotes_after.stdout:
+                self.mark_manual("Remote do Google Drive ainda nao foi configurado; servico nao sera habilitado.")
+                return
+            self.mark_done("Remote do Google Drive configurado manualmente e pronto para ativacao.")
         service_content = """[Unit]
 Description=Rclone Google Drive mount
 After=network-online.target
@@ -459,8 +500,9 @@ WantedBy=default.target
 
     def status(self) -> None:
         header(self, self.title)
-        self.ctx.runner.run(["rclone", "version"], check=False)
-        self.ctx.runner.run(["rclone", "listremotes"], check=False)
+        rclone_env = self._rclone_env()
+        self.ctx.runner.run(["rclone", "version"], check=False, env_extra=rclone_env)
+        self.ctx.runner.run(["rclone", "listremotes"], check=False, env_extra=rclone_env)
         self.ctx.runner.run(["systemctl", "--user", "status", "rclone-google-drive.service", "--no-pager"], check=False)
 
     def undo(self) -> None:

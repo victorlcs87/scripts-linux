@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 LOGS/
 fstab-backups/
+.env.local

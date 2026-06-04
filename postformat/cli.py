@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .core import (
     Color,
+    CommandInterruptedError,
     Logger,
     PrivilegeEscalationBlockedError,
     Runner,
@@ -88,6 +89,18 @@ def run_all(action: str, logger: Logger) -> None:
         except PrivilegeEscalationBlockedError as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             logger.write(f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente.")
+            results.append(
+                StepRunResult(
+                    step_id=step_cls.id,
+                    title=step_cls.title,
+                    status="blocked",
+                    message=str(exc),
+                    duration_seconds=0.0,
+                )
+            )
+            break
+        except CommandInterruptedError as exc:
+            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             results.append(
                 StepRunResult(
                     step_id=step_cls.id,
@@ -264,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
                 step_menu(step_cls, logger)
             else:
                 run_action(step_cls, action, logger)
-        except PrivilegeEscalationBlockedError as exc:
+        except (PrivilegeEscalationBlockedError, CommandInterruptedError) as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return 1
         return 0

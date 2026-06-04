@@ -31,7 +31,14 @@ def install_pacman(pkg: str, runner: Runner) -> None:
     if pacman_installed(pkg):
         announce(runner.logger, "skipped", f"{pkg} ja instalado")
         return
-    runner.run(["pacman", "-S", "--needed", pkg], sudo=True, action=f"Instalando pacote {pkg}")
+    runner.run(
+        ["pacman", "-S", "--needed", pkg],
+        sudo=True,
+        action=f"Instalando pacote {pkg}",
+        interactive=True,
+        interactive_tty=True,
+        manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes.",
+    )
 
 
 def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) -> bool:
@@ -46,7 +53,13 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
         return True
     helper = aur_helper()
     if aur_pkg and helper:
-        runner.run([helper, "-S", "--needed", aur_pkg], action=f"Instalando pacote AUR {aur_pkg}")
+        runner.run(
+            [helper, "-S", "--needed", aur_pkg],
+            action=f"Instalando pacote AUR {aur_pkg}",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o helper AUR pode pedir confirmacoes.",
+        )
         return True
     runner.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote para {system_pkg}")
     return False

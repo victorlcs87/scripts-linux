@@ -7,6 +7,7 @@ from postformat.core import (
     PrivilegeEscalationBlockedError,
     Runner,
     backup_path,
+    load_env_file,
     progress_bar,
     prompt_user,
     write_text,
@@ -108,3 +109,13 @@ def test_runner_marks_interactive_commands(tmp_path: Path) -> None:
 
     assert "[manual]" in log
     assert "interativo" in log
+
+
+def test_load_env_file_reads_simple_key_value_pairs(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.local"
+    env_file.write_text("ID_DO_CLIENTE = abc\nCHAVE_SECRETA_DO_CLIENTE = xyz\n", encoding="utf-8")
+
+    loaded = load_env_file(env_file)
+
+    assert loaded["ID_DO_CLIENTE"] == "abc"
+    assert loaded["CHAVE_SECRETA_DO_CLIENTE"] == "xyz"

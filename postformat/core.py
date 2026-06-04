@@ -52,6 +52,10 @@ class PrivilegeEscalationBlockedError(RuntimeError):
     pass
 
 
+class CommandInterruptedError(RuntimeError):
+    pass
+
+
 @dataclass
 class StepRunResult:
     step_id: str
@@ -129,6 +133,7 @@ def announce(logger: Logger, kind: str, message: str) -> None:
         "manual": Color.WARNING,
         "blocked": Color.ERROR,
         "summary": Color.TITLE,
+        "warning": Color.WARNING,
         "info": Color.INFO,
     }
     logger.write(f"{badge(kind, tones.get(kind, Color.INFO))} {message}")
@@ -148,6 +153,22 @@ def progress_bar(current: int, total: int, width: int = 24) -> str:
     filled = round(width * ratio)
     bar = "█" * filled + "·" * (width - filled)
     return f"[{bar}] {int(ratio * 100):3d}%"
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key:
+            values[key] = value
+    return values
 
 
 def prompt_user(
@@ -193,13 +214,15 @@ class Runner:
         show_progress: bool = True,
         quiet_success: bool = False,
         interactive: bool = False,
+        interactive_tty: bool = False,
         manual_message: str | None = None,
+        env_extra: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str] | None:
         printable = self.cmd_text(cmd, sudo=sudo)
         action = action or infer_action(cmd, sudo=sudo)
         if self.dry_run:
             announce(self.logger, "action", action)
-            if interactive:
+            if interactive or interactive_tty:
                 announce(self.logger, "manual", manual_message or "Comando interativo: pode aguardar sua entrada e isso nao e travamento.")
             self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
@@ -217,11 +240,37 @@ class Runner:
                 full_cmd = ["sudo", *cmd]
         else:
             full_cmd = cmd
+        env = os.environ.copy()
+        if env_extra:
+            env.update(env_extra)
         announce(self.logger, "action", action)
-        if interactive:
+        if interactive or interactive_tty:
             announce(self.logger, "manual", manual_message or "Comando interativo: a janela ou terminal pode aguardar sua entrada.")
         self.logger.write(f"{paint('$', Color.COMMAND)} {paint(printable, Color.COMMAND)}")
         started = time.monotonic()
+        if interactive_tty:
+            try:
+                result = subprocess.run(
+                    full_cmd,
+                    cwd=str(cwd) if cwd else None,
+                    shell=shell,
+                    env=env,
+                    text=True,
+                    check=False,
+                )
+            except KeyboardInterrupt as exc:
+                elapsed = format_elapsed(time.monotonic() - started)
+                announce(self.logger, "failed", f"{action} interrompido pelo usuario em {elapsed}")
+                raise CommandInterruptedError(f"comando interrompido pelo usuario: {printable}") from exc
+            elapsed = format_elapsed(time.monotonic() - started)
+            if result.returncode == 0:
+                if not quiet_success:
+                    announce(self.logger, "done", f"{action} concluido em {elapsed}")
+            else:
+                announce(self.logger, "failed", f"{action} falhou em {elapsed}")
+            if check and result.returncode != 0:
+                raise RuntimeError(f"comando falhou ({result.returncode}): {printable}")
+            return result
         process = subprocess.Popen(
             full_cmd,
             cwd=str(cwd) if cwd else None,
@@ -229,6 +278,7 @@ class Runner:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=False,
+            env=env,
         )
         assert process.stdout is not None
         os.set_blocking(process.stdout.fileno(), False)
@@ -238,49 +288,62 @@ class Runner:
         last_output = started
         last_heartbeat = started
         spinner_index = 0
-        while True:
-            chunk = self._read_chunk(process)
-            now = time.monotonic()
-            if chunk is not None:
+        try:
+            while True:
+                chunk = self._read_chunk(process)
+                now = time.monotonic()
+                if chunk == b"":
+                    break
+                if chunk is not None:
+                    if decoder is None:
+                        import codecs
+
+                        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+                    text = decoder.decode(chunk)
+                    collected.append(text)
+                    last_output = now
+                    self.logger.clear_transient()
+                    buffer = self._flush_buffer(buffer + text)
+                    continue
+                if process.poll() is not None:
+                    break
+                if show_progress and now - last_output >= 0.8 and now - last_heartbeat >= 0.2:
+                    spinner = SPINNER_FRAMES[spinner_index % len(SPINNER_FRAMES)]
+                    spinner_index += 1
+                    self.logger.transient(
+                        f"{badge('rodando', Color.INFO)} {action} {paint(spinner, Color.INFO)} {paint(format_elapsed(now - started), Color.MUTED)}"
+                    )
+                    last_heartbeat = now
+                time.sleep(0.1)
+            tail = self._drain_remaining(process)
+            if tail:
                 if decoder is None:
                     import codecs
 
                     decoder = codecs.getincrementaldecoder("utf-8")("replace")
-                text = decoder.decode(chunk)
+                text = decoder.decode(tail, final=True)
                 collected.append(text)
-                last_output = now
                 self.logger.clear_transient()
                 buffer = self._flush_buffer(buffer + text)
-                continue
-            if process.poll() is not None:
-                break
-            if show_progress and now - last_output >= 0.8 and now - last_heartbeat >= 0.2:
-                spinner = SPINNER_FRAMES[spinner_index % len(SPINNER_FRAMES)]
-                spinner_index += 1
-                self.logger.transient(
-                    f"{badge('rodando', Color.INFO)} {action} {paint(spinner, Color.INFO)} {paint(format_elapsed(now - started), Color.MUTED)}"
-                )
-                last_heartbeat = now
-            time.sleep(0.1)
-        tail = self._drain_remaining(process)
-        if tail:
-            if decoder is None:
-                import codecs
-
-                decoder = codecs.getincrementaldecoder("utf-8")("replace")
-            text = decoder.decode(tail, final=True)
-            collected.append(text)
+            elif decoder is not None:
+                text = decoder.decode(b"", final=True)
+                if text:
+                    collected.append(text)
+                    buffer = self._flush_buffer(buffer + text)
+            if buffer:
+                self.logger.write(buffer.rstrip("\r\n"))
             self.logger.clear_transient()
-            buffer = self._flush_buffer(buffer + text)
-        elif decoder is not None:
-            text = decoder.decode(b"", final=True)
-            if text:
-                collected.append(text)
-                buffer = self._flush_buffer(buffer + text)
-        if buffer:
-            self.logger.write(buffer.rstrip("\r\n"))
-        self.logger.clear_transient()
-        returncode = process.wait()
+            returncode = process.wait()
+        except KeyboardInterrupt as exc:
+            self.logger.clear_transient()
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            elapsed = format_elapsed(time.monotonic() - started)
+            announce(self.logger, "failed", f"{action} interrompido pelo usuario em {elapsed}")
+            raise CommandInterruptedError(f"comando interrompido pelo usuario: {printable}") from exc
         elapsed = format_elapsed(time.monotonic() - started)
         stdout = "".join(collected)
         if returncode == 0:
