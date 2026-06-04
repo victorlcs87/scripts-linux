@@ -45,6 +45,10 @@ class UserInfo:
     gid: int
 
 
+class PrivilegeEscalationBlockedError(RuntimeError):
+    pass
+
+
 def detect_user() -> UserInfo:
     name = os.environ.get("SUDO_USER") or os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
     entry = pwd.getpwnam(name)
@@ -111,6 +115,11 @@ class Runner:
         if self.dry_run:
             self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
+        if sudo and no_new_privs_enabled():
+            raise PrivilegeEscalationBlockedError(
+                "este ambiente bloqueia sudo porque NoNewPrivs=1. "
+                "Execute o sisteminha em uma sessao normal do seu sistema, fora de contêiner, sandbox ou terminal restrito."
+            )
         full_cmd: Sequence[str] | str
         if sudo:
             if isinstance(cmd, str):
@@ -148,6 +157,17 @@ def quote_arg(value: str) -> str:
 
 def command_exists(command: str) -> bool:
     return shutil.which(command) is not None
+
+
+def no_new_privs_enabled() -> bool:
+    status = Path("/proc/self/status")
+    if not status.exists():
+        return False
+    try:
+        text = status.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return "NoNewPrivs:\t1" in text or "NoNewPrivs: 1" in text
 
 
 def is_root() -> bool:

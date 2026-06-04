@@ -3,7 +3,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .core import Color, Logger, Runner, badge, detect_user, divider, is_root, paint
+from .core import (
+    Color,
+    Logger,
+    PrivilegeEscalationBlockedError,
+    Runner,
+    badge,
+    detect_user,
+    divider,
+    is_root,
+    no_new_privs_enabled,
+    paint,
+)
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
 
@@ -53,6 +64,10 @@ def run_all(action: str, logger: Logger) -> None:
         logger.write(divider())
         try:
             run_action(step_cls, action, logger)
+        except PrivilegeEscalationBlockedError as exc:
+            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
+            logger.write(f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente.")
+            break
         except Exception as exc:
             logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
             if action in {"apply", "dry-run"}:
@@ -168,6 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     if is_root():
         logger.write(f"{badge('erro', Color.ERROR)} nao execute como root. Use usuario normal; sudo sera chamado quando necessario.")
         return 1
+    if no_new_privs_enabled():
+        logger.write(f"{badge('aviso', Color.WARNING)} este terminal bloqueia sudo (NoNewPrivs=1).")
+        logger.write("Status e dry-run continuam funcionando, mas Apply de etapas privilegiadas precisa ser executado em uma sessao normal do sistema.")
     if argv and argv[0] == "step":
         if len(argv) < 2:
             logger.write("Uso: python -m postformat.cli step ID [apply|dry-run|status|undo|menu]")
@@ -177,10 +195,14 @@ def main(argv: list[str] | None = None) -> int:
             logger.write(f"Etapa nao encontrada: {argv[1]}")
             return 1
         action = argv[2] if len(argv) > 2 else "menu"
-        if action == "menu":
-            step_menu(step_cls, logger)
-        else:
-            run_action(step_cls, action, logger)
+        try:
+            if action == "menu":
+                step_menu(step_cls, logger)
+            else:
+                run_action(step_cls, action, logger)
+        except PrivilegeEscalationBlockedError as exc:
+            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
+            return 1
         return 0
     main_menu(logger)
     return 0

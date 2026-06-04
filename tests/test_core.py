@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from postformat.core import Logger, Runner, backup_path, write_text
+import pytest
+
+from postformat.core import Logger, PrivilegeEscalationBlockedError, Runner, backup_path, write_text
 from postformat.desktop import DesktopEntry
 
 
@@ -47,3 +49,12 @@ def test_write_text_skips_when_content_is_current(tmp_path: Path) -> None:
 
     assert target.stat().st_mtime_ns == before
     assert "ja esta atualizado" in logger.path.read_text(encoding="utf-8")
+
+
+def test_sudo_is_blocked_cleanly_when_no_new_privs(monkeypatch, tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger, dry_run=False)
+    monkeypatch.setattr("postformat.core.no_new_privs_enabled", lambda: True)
+
+    with pytest.raises(PrivilegeEscalationBlockedError):
+        runner.run(["true"], sudo=True)
