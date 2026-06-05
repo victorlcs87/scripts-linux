@@ -4,6 +4,9 @@ version = "1.0.0"
 description = "Automacao pos-formatacao para CachyOS/KDE"
 requires-python = ">=3.11"
 readme = "README.md"
+dependencies = [
+    "InquirerPy",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

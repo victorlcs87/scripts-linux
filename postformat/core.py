@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import pwd
-import select
 import shutil
 import subprocess
 import sys
@@ -11,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Iterable, Sequence
 
 
 ANSI_ENABLED = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM", "dumb") != "dumb"
@@ -209,183 +208,6 @@ def prompt_user(
         return answer
     announce(logger, "waiting", "Entrada vazia. Tente novamente.")
     return prompt_user(prompt, logger, detail=detail, prompt_label=prompt_label, allow_empty=allow_empty)
-
-
-def render_menu_options(options: Sequence[MenuOption], selected_index: int) -> list[str]:
-    lines: list[str] = []
-    for index, option in enumerate(options):
-        marker = ">" if index == selected_index else " "
-        display_key = option.display_key or option.key
-        key = paint(f"{display_key}.", Color.CHOICE)
-        label_tone = Color.TITLE if index == selected_index else Color.INFO
-        line = f"{paint(marker, Color.ACCENT)} {key} {paint(option.label, label_tone)}"
-        lines.append(line)
-    return lines
-
-
-def choose_option(
-    prompt: str,
-    logger: Logger,
-    options: Sequence[MenuOption],
-    *,
-    detail: str | None = None,
-    prompt_label: str = "Escolha",
-    initial_index: int = 0,
-    render: Callable[[int], list[str]] | None = None,
-) -> int:
-    if not options:
-        raise ValueError("lista de opcoes nao pode ser vazia")
-    if initial_index < 0 or initial_index >= len(options):
-        initial_index = 0
-    if _supports_arrow_navigation():
-        logger.log_only(divider(char="~", tone=Color.ACCENT))
-        logger.log_only(f"{badge('waiting', Color.WAITING)} {prompt}")
-        if detail:
-            logger.log_only(paint(detail, Color.MUTED))
-        try:
-            selected = _choose_option_tty(
-                options,
-                initial_index=initial_index,
-                render=render,
-            )
-        except PromptInterruptedError as exc:
-            logger.log_only(f"{badge('skipped', Color.WARNING)} {prompt_label} interrompido pelo usuario.")
-            raise PromptInterruptedError(f"entrada interrompida pelo usuario: {prompt}") from exc
-        logger.log_only(f"{badge('choice', Color.CHOICE)} {options[selected].key} - {options[selected].label}")
-        return selected
-    if render is not None:
-        print("\n".join(render(initial_index)))
-    answer = _choose_option_fallback(prompt, logger, options, detail=detail, prompt_label=prompt_label)
-    logger.log_only(f"{badge('choice', Color.CHOICE)} {options[answer].key} - {options[answer].label}")
-    return answer
-
-
-def _supports_arrow_navigation() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty() and os.name == "posix"
-
-
-def _choose_option_fallback(
-    prompt: str,
-    logger: Logger,
-    options: Sequence[MenuOption],
-    *,
-    detail: str | None = None,
-    prompt_label: str,
-) -> int:
-    while True:
-        answer = prompt_user(
-            prompt,
-            logger,
-            detail=detail,
-            prompt_label=prompt_label,
-            allow_empty=False,
-        ).strip()
-        for index, option in enumerate(options):
-            if answer == option.key:
-                return index
-        print(paint("Opcao invalida", Color.ERROR))
-
-
-def _choose_option_tty(
-    options: Sequence[MenuOption],
-    *,
-    initial_index: int = 0,
-    render: Callable[[int], list[str]] | None = None,
-) -> int:
-    import termios
-    import tty
-
-    selected = initial_index
-    digits = ""
-    fd = sys.stdin.fileno()
-    previous = termios.tcgetattr(fd)
-    tty.setraw(fd)
-    lines_rendered = 0
-    try:
-        while True:
-            lines = render(selected) if render is not None else render_menu_options(options, selected)
-            lines_rendered = _redraw_interactive_lines(lines, lines_rendered)
-            key = _read_menu_key()
-            if key == "up":
-                selected = (selected - 1) % len(options)
-                digits = ""
-                continue
-            if key == "down":
-                selected = (selected + 1) % len(options)
-                digits = ""
-                continue
-            if key == "enter":
-                sys.stdout.write(f"\033[{lines_rendered}F")
-                for line in lines:
-                    sys.stdout.write("\r\033[2K" + line + "\n")
-                sys.stdout.flush()
-                return selected
-            if key == "interrupt":
-                raise PromptInterruptedError("entrada interrompida pelo usuario")
-            if key.isdigit():
-                digits += key
-                exact_match = next((index for index, option in enumerate(options) if option.key == digits), None)
-                valid_prefix = any(option.key.startswith(digits) for option in options)
-                has_longer_prefix = any(option.key.startswith(digits) and option.key != digits for option in options)
-                if exact_match is not None:
-                    selected = exact_match
-                    if not has_longer_prefix:
-                        return selected
-                    continue
-                if not valid_prefix:
-                    digits = ""
-            else:
-                digits = ""
-    finally:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
-
-
-def _redraw_interactive_lines(lines: Sequence[str], previous_lines: int) -> int:
-    if previous_lines:
-        sys.stdout.write(f"\033[{previous_lines}F")
-    else:
-        _clear_interactive_screen()
-    for line in lines:
-        sys.stdout.write("\r\033[2K" + line + "\n")
-    sys.stdout.flush()
-    return len(lines)
-
-
-def _clear_interactive_screen() -> None:
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.flush()
-
-
-def _read_menu_key() -> str:
-    first = _read_char()
-    if first in ("\x03", "\x04"):
-        return "interrupt"
-    if first in ("\r", "\n"):
-        return "enter"
-    if first == "\x1b":
-        second = _read_char(timeout=0.05)
-        third = _read_char(timeout=0.05) if second == "[" else None
-        if second == "[" and third == "A":
-            return "up"
-        if second == "[" and third == "B":
-            return "down"
-        return ""
-    if first.isdigit():
-        return first
-    return first
-
-
-def _read_char(timeout: float | None = None) -> str:
-    if timeout is not None:
-        readable, _, _ = select.select([sys.stdin], [], [], timeout)
-        if not readable:
-            return ""
-    char = sys.stdin.read(1)
-    if char == "":
-        raise PromptInterruptedError("entrada interrompida pelo usuario")
-    return char
 
 
 class Runner:

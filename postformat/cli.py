@@ -15,7 +15,6 @@ from .core import (
     Runner,
     StepRunResult,
     badge,
-    choose_option,
     detect_user,
     divider,
     is_root,
@@ -23,12 +22,11 @@ from .core import (
     paint,
     progress_bar,
     prompt_user,
-    render_menu_options,
     format_elapsed,
-    announce,
 )
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
+from .tui import TuiDependencyError, choose_option
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -194,41 +192,23 @@ def run_all(action: str, logger: Logger) -> None:
 
 def choose_step(logger: Logger) -> type[Step] | None:
     options = [MenuOption(str(index), step_cls.title, display_key=f"{index:02d}") for index, step_cls in enumerate(ALL_STEPS, 1)]
+    clear_screen()
     try:
         index = choose_option(
-            "Digite o numero da etapa",
-            logger,
-            options,
+            title="Escolha a etapa que voce quer abrir",
+            logger=logger,
+            prompt="Digite o numero da etapa",
+            options=options,
             detail="O sisteminha esta aguardando sua escolha de etapa.",
             prompt_label="Etapa",
-            render=lambda selected: [divider(char="~", tone=Color.ACCENT), paint("Escolha a etapa que voce quer abrir", Color.TITLE), *render_menu_options(options, selected)],
         )
     except PromptInterruptedError as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
         return None
+    except TuiDependencyError as exc:
+        logger.write(f"{badge('erro', Color.ERROR)} {exc}")
+        return None
     return ALL_STEPS[index]
-
-
-def render_menu(
-    title: str,
-    logger: Logger,
-    items: list[MenuOption],
-    *,
-    footer: str | None = None,
-    selected_index: int = 0,
-) -> str:
-    body = [
-        divider(char="#", tone=Color.TITLE),
-        paint(title, Color.TITLE),
-        paint("Visual impactante ativo  |  estados vivos  |  prompts explicitamente sinalizados", Color.ACCENT),
-        paint(f"Log: {logger.path}", Color.MUTED),
-        divider(char="-", tone=Color.BOX),
-    ]
-    body.extend(render_menu_options(items, selected_index))
-    if footer:
-        body.extend([divider(char="-", tone=Color.BOX), paint(footer, Color.MUTED)])
-    body.append(divider())
-    return "\n".join(body)
 
 
 def step_menu(step_cls: type[Step], logger: Logger) -> None:
@@ -240,23 +220,22 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
         MenuOption("5", "Sair"),
     ]
     while True:
+        clear_screen()
         try:
             option = choose_option(
-                "Escolha uma acao para esta etapa",
-                logger,
-                options,
+                title=f"Etapa {step_cls.id} - {step_cls.title}",
+                logger=logger,
+                prompt="Escolha uma acao para esta etapa",
+                options=options,
+                footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
                 detail="O sisteminha esta aguardando sua escolha.",
                 prompt_label="Escolha",
-                render=lambda selected: render_menu(
-                    f"Etapa {step_cls.id} - {step_cls.title}",
-                    logger,
-                    options,
-                    footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
-                    selected_index=selected,
-                ).splitlines(),
             )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+            return
+        except TuiDependencyError as exc:
+            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return
         if option == 0:
             run_action_safe(step_cls, "apply", logger)
@@ -281,23 +260,22 @@ def main_menu(logger: Logger) -> None:
         MenuOption("7", "Sair"),
     ]
     while True:
+        clear_screen()
         try:
             option = choose_option(
-                "Escolha uma opcao do menu principal",
-                logger,
-                options,
+                title="Sisteminha pos-formatacao CachyOS/KDE",
+                logger=logger,
+                prompt="Escolha uma opcao do menu principal",
+                options=options,
+                footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
                 detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
                 prompt_label="Escolha",
-                render=lambda selected: render_menu(
-                    "Sisteminha pos-formatacao CachyOS/KDE",
-                    logger,
-                    options,
-                    footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
-                    selected_index=selected,
-                ).splitlines(),
             )
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+            return
+        except TuiDependencyError as exc:
+            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return
         if option == 0:
             run_all("apply", logger)
@@ -344,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
                 step_menu(step_cls, logger)
             else:
                 run_action(step_cls, action, logger)
-        except (PrivilegeEscalationBlockedError, CommandInterruptedError, PromptInterruptedError) as exc:
+        except (PrivilegeEscalationBlockedError, CommandInterruptedError, PromptInterruptedError, TuiDependencyError) as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return 1
         return 0

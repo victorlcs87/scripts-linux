@@ -20,10 +20,12 @@ class BootstrapError(RuntimeError):
 @dataclass(frozen=True)
 class BootstrapRequirement:
     module_name: str
-    system_package: str
+    system_package: str | None
+    aur_package: str | None = None
 
 
 REQUIREMENTS = (
+    BootstrapRequirement("InquirerPy", None, "python-inquirerpy"),
     BootstrapRequirement("pytest", "python-pytest"),
 )
 
@@ -59,7 +61,7 @@ def write_bootstrap_state(path: Path) -> None:
     payload = {
         "version": BOOTSTRAP_VERSION,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "requirements": [requirement.system_package for requirement in REQUIREMENTS],
+        "requirements": [requirement.module_name for requirement in REQUIREMENTS],
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -69,24 +71,42 @@ def missing_requirements() -> list[BootstrapRequirement]:
 
 
 def install_missing_requirements(requirements: list[BootstrapRequirement], project_root: Path) -> None:
-    packages = sorted({requirement.system_package for requirement in requirements})
+    if not requirements:
+        return
+    print("Bootstrap inicial do projeto: instalando dependencias internas...")
+    try:
+        _install_with_pacman(requirements, project_root)
+        _install_with_paru(requirements, project_root)
+    except (FileNotFoundError, subprocess.CalledProcessError, BootstrapError) as exc:
+        missing_names = ", ".join(requirement.module_name for requirement in requirements)
+        raise BootstrapError(
+            f"falha ao instalar dependencias internas ({missing_names}). "
+            "Este ambiente segue PEP 668; use pacman/paru para essas dependencias. "
+            "Corrija o problema e execute novamente."
+        ) from exc
+
+
+def _install_with_pacman(requirements: list[BootstrapRequirement], project_root: Path) -> None:
+    packages = sorted({requirement.system_package for requirement in requirements if requirement.system_package})
     if not packages:
         return
     if shutil.which("pacman") is None:
-        missing_names = ", ".join(requirement.module_name for requirement in requirements)
-        raise BootstrapError(
-            f"faltam dependencias Python internas ({missing_names}), mas o bootstrap automatico exige pacman neste projeto."
-        )
+        raise BootstrapError("pacman nao esta disponivel para instalar dependencias do sistema.")
     cmd = ["sudo", "pacman", "-S", "--needed", *packages]
-    print("Bootstrap inicial do projeto: instalando dependencias internas...")
     print("$ " + " ".join(cmd))
-    try:
-        subprocess.run(cmd, cwd=str(project_root), check=True)
-    except FileNotFoundError as exc:
-        raise BootstrapError("nao consegui iniciar o bootstrap automatico: sudo ou pacman ausente.") from exc
-    except subprocess.CalledProcessError as exc:
-        packages_text = ", ".join(packages)
+    subprocess.run(cmd, cwd=str(project_root), check=True)
+
+
+def _install_with_paru(requirements: list[BootstrapRequirement], project_root: Path) -> None:
+    missing_after_pacman = [requirement for requirement in requirements if importlib.util.find_spec(requirement.module_name) is None]
+    aur_packages = sorted({requirement.aur_package for requirement in missing_after_pacman if requirement.aur_package})
+    if not aur_packages:
+        return
+    if shutil.which("paru") is None:
+        missing_names = ", ".join(requirement.module_name for requirement in missing_after_pacman)
         raise BootstrapError(
-            f"falha ao instalar dependencias internas via pacman ({packages_text}). "
-            "Corrija o problema e execute novamente."
-        ) from exc
+            f"faltam dependencias internas ({missing_names}) e elas precisam ser instaladas via AUR/paru neste sistema."
+        )
+    cmd = ["paru", "-S", "--needed", "--noconfirm", *aur_packages]
+    print("$ " + " ".join(cmd))
+    subprocess.run(cmd, cwd=str(project_root), check=True)

@@ -11,7 +11,7 @@ No fish:
 python 00-pos-formatacao-cachyos.py
 ```
 
-Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `pytest`.
+Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `InquirerPy` e `pytest`, usando `pacman` e `paru` quando necessario.
 
 Tambem da para abrir uma etapa especifica por wrapper:
 
@@ -51,6 +51,8 @@ Nos menus interativos, voce pode:
 - usar `↑` e `↓` para navegar
 - pressionar `Enter` para confirmar
 - digitar o numero da opcao como atalho
+
+Os menus interativos usam `InquirerPy`, no mesmo estilo do projeto `servidor-minecraft`.
 
 ## Ordem Das Etapas
 
