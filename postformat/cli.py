@@ -263,7 +263,7 @@ def main_menu(logger: Logger) -> None:
         clear_screen()
         try:
             option = choose_option(
-                title="Sisteminha pos-formatacao CachyOS/KDE",
+                title="Sisteminha pos-formatacao Linux/KDE",
                 logger=logger,
                 prompt="Escolha uma opcao do menu principal",
                 options=options,

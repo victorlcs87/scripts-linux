@@ -30,14 +30,18 @@ from .installers import (
     copy_asset,
     ensure_flatpak,
     flatpak_installed,
+    install_first_available,
     install_flatpak,
     install_pacman,
+    install_system_package,
     install_system_or_aur,
     npm_global_installed,
     pacman_exists,
-    pacman_installed,
     remove_flatpak,
+    system_installed,
+    system_package_exists,
 )
+from .platform import current_distro, pending_updates_command, system_query_command, update_system
 from .steps_base import Step
 
 
@@ -60,27 +64,35 @@ class ProbeResult:
 
 class ShellyStep(Step):
     id = "00"
-    title = "Preparar ecossistema CachyOS"
+    title = "Preparar ecossistema"
 
     def apply(self) -> None:
-        header(self, self.title, "Preparando base de pacotes, Flatpak, AUR e suporte AppImage")
+        distro = current_distro()
+        header(self, self.title, "Preparando base de pacotes, Flatpak e suporte AppImage")
         ready_before = self._basic_support_ready()
-        if not command_exists("shelly"):
+        if distro.is_arch and not command_exists("shelly"):
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Shelly nao encontrado. Vou preparar o suporte pelo sistema mesmo assim.")
-        else:
+        elif distro.is_arch:
             self.ctx.logger.write(f"{badge('info', Color.INFO)} Shelly CLI detectado com suporte a flatpak, appimage e aur.")
+        else:
+            self.ctx.logger.write(f"{badge('info', Color.INFO)} Debian/Ubuntu detectado. Vou usar apt e opcoes do sistema, sem Shelly/AUR.")
         ensure_flatpak(self.ctx.runner)
-        install_pacman("fuse2", self.ctx.runner)
-        self._ensure_aur_helper()
+        self._ensure_appimage_fuse()
+        if distro.is_arch:
+            self._ensure_aur_helper()
         if self._basic_support_ready():
             if ready_before:
-                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Flatpak, flathub, AppImage/fuse2 e AUR helper ja estavam prontos.")
-                self.mark_skipped("Flatpak, flathub, AUR helper e fuse2 ja estavam prontos.")
-                self.mark_applied("Flatpak, flathub, AUR helper e fuse2 estao prontos.")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Flatpak, flathub e suporte AppImage ja estavam prontos.")
+                self.mark_skipped("Flatpak, flathub e suporte AppImage ja estavam prontos.")
+                self.mark_applied("Flatpak, flathub e suporte AppImage estao prontos.")
             else:
                 self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Ecossistema preparado com sucesso.")
                 self.mark_done("Ecossistema base preparado com sucesso.")
                 self.mark_applied("Ecossistema base preparado com sucesso.")
+            return
+        if not distro.is_arch:
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos do ecossistema.")
+            self.mark_pending("Faltam requisitos do ecossistema no Debian/Ubuntu.", missing=self._missing_basic_support())
             return
         self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos. Vou abrir o fallback assistido do Shelly.")
         if self.ctx.runner.dry_run:
@@ -131,43 +143,67 @@ class ShellyStep(Step):
 
     def status(self) -> None:
         header(self, "Status do ecossistema", "Resumo do que ja esta pronto antes das proximas etapas")
+        distro = current_distro()
         flatpak_ready = command_exists("flatpak")
         flathub_ready = self._flathub_ready() if flatpak_ready else False
-        fuse2_ready = pacman_installed("fuse2")
+        fuse2_ready = self._appimage_fuse_ready()
         helper = aur_helper()
-        print_lines(self.ctx.logger, [
-            f"{badge('shelly', Color.INFO)} {'OK' if command_exists('shelly') else 'ausente'}",
-            f"{badge('shelly-ui', Color.INFO)} {'OK' if command_exists('shelly-ui') else 'ausente'}",
-            f"{badge('cachyos-hello', Color.INFO)} {'OK' if command_exists('cachyos-hello') else 'ausente'}",
+        lines = [
+            f"{badge('distro', Color.INFO)} {distro.id or distro.family} ({distro.family})",
             f"{badge('flatpak', Color.SUCCESS if flatpak_ready else Color.WARNING)} {'OK' if flatpak_ready else 'ausente'}",
             f"{badge('flathub', Color.SUCCESS if flathub_ready else Color.WARNING)} {'OK' if flathub_ready else 'ausente'}",
-            f"{badge('fuse2', Color.SUCCESS if fuse2_ready else Color.WARNING)} {'OK' if fuse2_ready else 'ausente'}",
-            f"{badge('aur', Color.SUCCESS if helper else Color.WARNING)} {helper or 'ausente'}",
-        ])
-        if command_exists("shelly") and flatpak_ready:
+            f"{badge('appimage-fuse', Color.SUCCESS if fuse2_ready else Color.WARNING)} {'OK' if fuse2_ready else 'ausente'}",
+        ]
+        if distro.is_arch:
+            lines.extend([
+                f"{badge('shelly', Color.INFO)} {'OK' if command_exists('shelly') else 'ausente'}",
+                f"{badge('shelly-ui', Color.INFO)} {'OK' if command_exists('shelly-ui') else 'ausente'}",
+                f"{badge('cachyos-hello', Color.INFO)} {'OK' if command_exists('cachyos-hello') else 'ausente'}",
+                f"{badge('aur', Color.SUCCESS if helper else Color.WARNING)} {helper or 'ausente'}",
+            ])
+        print_lines(self.ctx.logger, lines)
+        if distro.is_arch and command_exists("shelly") and flatpak_ready:
             self.ctx.runner.run(["shelly", "flatpak", "list-remotes"], check=False, action="Verificando remotes do Shelly", show_progress=False)
-        if flatpak_ready and flathub_ready and fuse2_ready and helper:
-            self.mark_applied("Flatpak, flathub, fuse2 e helper AUR estao aplicados.")
+        if self._basic_support_ready():
+            self.mark_applied("Flatpak, flathub e suporte AppImage estao aplicados.")
         else:
-            missing = []
-            if not flatpak_ready:
-                missing.append("flatpak")
-            if not flathub_ready:
-                missing.append("flathub")
-            if not fuse2_ready:
-                missing.append("fuse2")
-            if not helper:
-                missing.append("helper AUR")
+            missing = self._missing_basic_support()
             self.mark_pending(f"Faltam componentes do ecossistema: {', '.join(missing)}.", missing=missing)
 
     def _basic_support_ready(self) -> bool:
-        return command_exists("flatpak") and self._flathub_ready() and pacman_installed("fuse2") and aur_helper() is not None
+        base_ready = command_exists("flatpak") and self._flathub_ready() and self._appimage_fuse_ready()
+        if current_distro().is_arch:
+            return base_ready and aur_helper() is not None
+        return base_ready
+
+    def _missing_basic_support(self) -> list[str]:
+        missing = []
+        if not command_exists("flatpak"):
+            missing.append("flatpak")
+        if command_exists("flatpak") and not self._flathub_ready():
+            missing.append("flathub")
+        if not self._appimage_fuse_ready():
+            missing.append("suporte AppImage/FUSE")
+        if current_distro().is_arch and not aur_helper():
+            missing.append("helper AUR")
+        return missing
 
     def _flathub_ready(self) -> bool:
         result = self.ctx.runner.run(["flatpak", "remote-list", "--columns=name"], check=False, action="Verificando remotes Flatpak", show_progress=False, quiet_success=True)
         if result and result.stdout:
             return any(line.strip() == "flathub" for line in result.stdout.splitlines())
         return self.ctx.runner.dry_run and command_exists("flatpak")
+
+    def _ensure_appimage_fuse(self) -> None:
+        if current_distro().is_arch:
+            install_first_available(("fuse2",), self.ctx.runner)
+        else:
+            install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
+
+    def _appimage_fuse_ready(self) -> bool:
+        if current_distro().is_arch:
+            return system_installed("fuse2")
+        return any(system_installed(pkg) for pkg in ("libfuse2t64", "libfuse2", "fuse"))
 
     def _ensure_aur_helper(self) -> None:
         if aur_helper():
@@ -191,23 +227,16 @@ class UpdateSystemStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Atualizando a base do sistema e pacotes instalados")
-        install_pacman("pacman-contrib", self.ctx.runner)
-        self.ctx.runner.run(
-            ["pacman", "-Syu"],
-            sudo=True,
-            action="Atualizando sistema com pacman",
-            interactive=True,
-            interactive_tty=True,
-            manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes. Isso nao e travamento.",
-        )
+        update_system(self.ctx.runner)
         self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
         self.mark_done("Atualizacao do sistema executada.")
 
     def status(self) -> None:
         header(self, "Status sistema")
         self.ctx.runner.run(["uname", "-r"], check=False)
+        updates_cmd = pending_updates_command()
         updates = self.ctx.runner.run(
-            "checkupdates; rc=$?; [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 2 ]",
+            updates_cmd,
             shell=True,
             check=False,
             action="Verificando atualizacoes pendentes",
@@ -230,7 +259,7 @@ class LinuxToysStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Instalando utilitarios do Linux Toys")
-        if command_exists("linuxtoys") or pacman_installed("linuxtoys"):
+        if command_exists("linuxtoys") or system_installed("linuxtoys"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Linux Toys ja parece instalado")
             self.mark_skipped("Linux Toys ja parece instalado.")
             return
@@ -243,9 +272,9 @@ class LinuxToysStep(Step):
 
     def status(self) -> None:
         header(self, self.title, "Verificando presenca do Linux Toys")
-        self.ctx.runner.run(["pacman", "-Q", "linuxtoys"], check=False)
+        self.ctx.runner.run(system_query_command("linuxtoys"), check=False)
         self.ctx.runner.run(["linuxtoys", "--help"], check=False)
-        if command_exists("linuxtoys") or pacman_installed("linuxtoys"):
+        if command_exists("linuxtoys") or system_installed("linuxtoys"):
             self.mark_applied("Linux Toys esta instalado.")
         else:
             self.mark_pending("Linux Toys ainda nao esta instalado.", missing=["linuxtoys"])
@@ -257,9 +286,9 @@ class BrowserStep(Step):
 
     def apply(self) -> None:
         header(self, "Firefox sistema + FirefoxPWA + Bitwarden", "Preparando navegador principal e base para PWAs")
-        install_pacman("firefox", self.ctx.runner)
-        if pacman_exists("firefoxpwa"):
-            install_pacman("firefoxpwa", self.ctx.runner)
+        install_system_package("firefox", self.ctx.runner)
+        if system_package_exists("firefoxpwa"):
+            install_system_package("firefoxpwa", self.ctx.runner)
         else:
             install_system_or_aur("firefoxpwa", "firefoxpwa", self.ctx.runner)
         install_flatpak("com.bitwarden.desktop", self.ctx.runner)
@@ -268,13 +297,13 @@ class BrowserStep(Step):
 
     def status(self) -> None:
         header(self, "Status navegador")
-        self.ctx.runner.run(["pacman", "-Q", "firefox", "firefoxpwa"], check=False)
+        self.ctx.runner.run(system_query_command("firefox", "firefoxpwa"), check=False)
         self.ctx.runner.run(["flatpak", "info", "com.bitwarden.desktop"], check=False)
         self.ctx.runner.run(["firefox", "--version"], check=False)
         missing = []
-        if not pacman_installed("firefox"):
+        if not system_installed("firefox"):
             missing.append("firefox")
-        if not (pacman_installed("firefoxpwa") or command_exists("firefoxpwa")):
+        if not (system_installed("firefoxpwa") or command_exists("firefoxpwa")):
             missing.append("firefoxpwa")
         if not flatpak_installed("com.bitwarden.desktop"):
             missing.append("bitwarden")
@@ -284,7 +313,11 @@ class BrowserStep(Step):
             self.mark_applied("Firefox, FirefoxPWA e Bitwarden estao aplicados.")
 
     def undo(self) -> None:
-        self.ctx.logger.write("Sugestao manual para Firefox/FirefoxPWA: sudo pacman -Rns firefox firefoxpwa")
+        distro = current_distro()
+        if distro.is_arch:
+            self.ctx.logger.write("Sugestao manual para Firefox/FirefoxPWA: sudo pacman -Rns firefox firefoxpwa")
+        else:
+            self.ctx.logger.write("Sugestao manual para Firefox/FirefoxPWA: sudo apt-get remove firefox firefoxpwa")
         remove_flatpak("com.bitwarden.desktop", self.ctx.runner)
 
 
@@ -305,8 +338,8 @@ class WebAppsStep(Step):
             self.mark_skipped("WebApps/atalhos ja existentes.")
             return
         created = False
-        if pacman_exists("firefoxpwa"):
-            install_pacman("firefoxpwa", self.ctx.runner)
+        if system_package_exists("firefoxpwa"):
+            install_system_package("firefoxpwa", self.ctx.runner)
         if command_exists("firefoxpwa") or self.ctx.runner.dry_run:
             created = self._try_firefoxpwa()
         if not created:
@@ -453,15 +486,6 @@ class NvidiaSteamStep(Step):
             self.mark_attention(f"Ha {problem_count} item(ns) que exigem revisao na validacao de GPU/jogos.")
 
     def _collect_gpu_results(self) -> list[ProbeResult]:
-        if self.ctx.runner.dry_run:
-            return [
-                ProbeResult("Sessao grafica", "warn", "dry-run: a sessao grafica seria avaliada."),
-                ProbeResult("GPU integrada / OpenGL", "warn", "dry-run: o OpenGL basico seria validado."),
-                ProbeResult("GPU NVIDIA dedicada", "warn", "dry-run: o prime-run seria validado."),
-                ProbeResult("Driver NVIDIA", "warn", "dry-run: o nvidia-smi seria consultado."),
-                ProbeResult("Steam", "warn", "dry-run: a instalacao seria verificada."),
-                ProbeResult("Heroic", "warn", "dry-run: a instalacao seria verificada."),
-            ]
         return [
             self._probe_session_type(),
             self._probe_integrated_gl(),
@@ -527,21 +551,18 @@ class NvidiaSteamStep(Step):
         )
 
     def _probe_launchers(self) -> list[ProbeResult]:
-        result = self._run_probe(["pacman", "-Q", "steam", "heroic-games-launcher"], "Verificando launchers instalados")
-        installed = set()
-        for line in (result.stdout or "").splitlines():
-            if not line or line.startswith("error:"):
-                continue
-            installed.add(line.split()[0])
+        steam_system = any(system_installed(pkg) for pkg in ("steam", "steam-installer", "steam-launcher"))
+        heroic_system = any(system_installed(pkg) for pkg in ("heroic-games-launcher", "heroic-games-launcher-bin"))
+        heroic_flatpak = flatpak_installed("com.heroicgameslauncher.hgl")
         probes: list[ProbeResult] = []
         probes.append(
             ProbeResult(
                 "Steam",
-                "ok" if "steam" in installed else "warn",
-                "instalado." if "steam" in installed else "ausente.",
+                "ok" if steam_system else "warn",
+                "instalado." if steam_system else "ausente.",
             )
         )
-        heroic_installed = "heroic-games-launcher" in installed or "heroic-games-launcher-bin" in installed
+        heroic_installed = heroic_system or heroic_flatpak
         probes.append(
             ProbeResult(
                 "Heroic",
@@ -623,7 +644,7 @@ class GitStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Preparando clone ou atualizacao do repositorio base")
-        install_pacman("git", self.ctx.runner)
+        install_system_package("git", self.ctx.runner)
         base = self.ctx.user.home / "repositorios"
         target = base / "scripts-linux"
         if base.exists():
@@ -689,7 +710,7 @@ class RcloneStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Montando sincronizacao automatica do Google Drive")
-        install_pacman("rclone", self.ctx.runner)
+        install_system_package("rclone", self.ctx.runner)
         mount_dir = self.ctx.user.home / "GoogleDrive"
         service_dir = self.ctx.user.home / ".config/systemd/user"
         service_file = service_dir / "rclone-google-drive.service"
@@ -896,7 +917,7 @@ class GesturesStep(Step):
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
         self.ctx.logger.write("Configuracao principal desta etapa: libinput-gestures com gesto de 3 dedos para Overview.")
         install_system_or_aur("libinput-gestures", "libinput-gestures", self.ctx.runner)
-        install_pacman("xdotool", self.ctx.runner)
+        install_system_package("xdotool", self.ctx.runner)
         if not command_exists("libinput-gestures-setup") and not self.ctx.runner.dry_run:
             self.ctx.logger.write("libinput-gestures-setup nao ficou disponivel apos a instalacao.")
             self.mark_manual("libinput-gestures nao ficou disponivel apos a instalacao.")
@@ -930,8 +951,8 @@ exit 1
     def status(self) -> None:
         header(self, self.title, "Verificando pacote, servico e arquivos de gestos")
         self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
-        self.ctx.logger.write(f"{badge('libinput-gestures', Color.SUCCESS if pacman_installed('libinput-gestures') else Color.WARNING)} {'instalado' if pacman_installed('libinput-gestures') else 'ausente'}")
-        self.ctx.logger.write(f"{badge('xdotool', Color.SUCCESS if pacman_installed('xdotool') else Color.WARNING)} {'instalado' if pacman_installed('xdotool') else 'ausente'}")
+        self.ctx.logger.write(f"{badge('libinput-gestures', Color.SUCCESS if system_installed('libinput-gestures') else Color.WARNING)} {'instalado' if system_installed('libinput-gestures') else 'ausente'}")
+        self.ctx.logger.write(f"{badge('xdotool', Color.SUCCESS if system_installed('xdotool') else Color.WARNING)} {'instalado' if system_installed('xdotool') else 'ausente'}")
         if command_exists("libinput-gestures-setup"):
             self.ctx.runner.run(["libinput-gestures-setup", "status"], check=False)
         else:
@@ -941,7 +962,7 @@ exit 1
             self.ctx.runner.run(["cat", str(config_file)], check=False)
         else:
             self.ctx.logger.write(f"Arquivo de configuracao ausente: {config_file}")
-        package_ready = pacman_installed("libinput-gestures")
+        package_ready = system_installed("libinput-gestures")
         config_ready = config_file.exists()
         if package_ready and config_ready and command_exists("libinput-gestures-setup"):
             self.mark_applied("libinput-gestures e configuracao de gestos estao aplicados.")
@@ -967,7 +988,7 @@ class AppsStep(Step):
     id = "10"
     title = "Apps / jogos / comunicacao / dev"
     apps = {
-        "Steam": {"system_aliases": ("steam",), "flatpak_id": None, "appimage_paths": (), "desktop_paths": (), "kind": "system"},
+        "Steam": {"system_aliases": ("steam", "steam-installer", "steam-launcher"), "flatpak_id": None, "appimage_paths": (), "desktop_paths": (), "kind": "system"},
         "Heroic": {"system_aliases": ("heroic-games-launcher", "heroic-games-launcher-bin"), "flatpak_id": "com.heroicgameslauncher.hgl", "appimage_paths": (), "desktop_paths": (), "kind": "system"},
         "Discord": {"system_aliases": ("discord",), "flatpak_id": "com.discordapp.Discord", "appimage_paths": (), "desktop_paths": (), "kind": "flatpak"},
         "TeamSpeak": {"system_aliases": ("teamspeak", "teamspeak3"), "flatpak_id": "com.teamspeak.TeamSpeak", "appimage_paths": (), "desktop_paths": (), "kind": "flatpak"},
@@ -991,15 +1012,15 @@ class AppsStep(Step):
         if self._detect_install_source("Steam"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Steam ja detectado via {self._detect_install_source('Steam')}")
         else:
-            install_system_or_aur("steam", "steam", self.ctx.runner)
+            self._install_steam()
         if self._detect_install_source("Heroic"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Heroic ja detectado via {self._detect_install_source('Heroic')}")
         else:
-            install_system_or_aur("heroic-games-launcher", "heroic-games-launcher-bin", self.ctx.runner)
+            self._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
         if self._detect_install_source("ZapZap"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} ZapZap ja detectado via {self._detect_install_source('ZapZap')}")
         else:
-            install_system_or_aur("zapzap", "zapzap", self.ctx.runner)
+            self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
         self._install_hydra()
         for name, definition in self.apps.items():
             if definition["kind"] != "flatpak":
@@ -1014,12 +1035,30 @@ class AppsStep(Step):
         if self._detect_install_source("Codex CLI"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}")
         else:
-            self.ctx.runner.run(["pacman", "-S", "--needed", "nodejs", "npm"], sudo=True, action="Instalando Node.js e npm para o Codex CLI")
+            install_system_package("nodejs", self.ctx.runner)
+            install_system_package("npm", self.ctx.runner)
             if npm_global_installed("@openai/codex"):
                 self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} @openai/codex ja instalado globalmente")
             else:
                 self.ctx.runner.run(["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente")
         self.mark_done("Apps principais, Hydra e Codex CLI processados.")
+
+    def _install_steam(self) -> None:
+        distro = current_distro()
+        if install_system_or_aur("steam", "steam", self.ctx.runner):
+            return
+        if distro.is_debian:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} Steam nao apareceu nos repositorios apt atuais. "
+                "Habilite multiverse/non-free/non-free-firmware conforme sua distro e rode esta etapa novamente."
+            )
+            self.mark_manual("Steam depende de repositorios adicionais no Debian/Ubuntu.")
+
+    def _install_system_or_flatpak(self, system_pkg: str, aur_pkg: str | None, flatpak_id: str) -> None:
+        if install_system_or_aur(system_pkg, aur_pkg, self.ctx.runner):
+            return
+        if current_distro().is_debian:
+            install_flatpak(flatpak_id, self.ctx.runner)
 
     def _install_hydra(self) -> None:
         header(self, "Hydra Launcher AppImage", "Baixando AppImage e criando integracao desktop")
@@ -1028,8 +1067,11 @@ class AppsStep(Step):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Hydra Launcher ja detectado via {source}")
             self.add_hint("Hydra Launcher ja estava instalado.")
             return
-        install_pacman("curl", self.ctx.runner)
-        install_pacman("fuse2", self.ctx.runner)
+        install_system_package("curl", self.ctx.runner)
+        if current_distro().is_arch:
+            install_first_available(("fuse2",), self.ctx.runner)
+        else:
+            install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
         appimage_dir = self.ctx.user.home / "AppImages"
         icon_source = self.ctx.root / "assets/hydra.png"
         icon_target = self.ctx.user.home / ".local/share/icons/hydra-launcher.png"
@@ -1084,7 +1126,7 @@ class AppsStep(Step):
     def _detect_install_source(self, app_name: str) -> str | None:
         definition = self.apps[app_name]
         for alias in definition["system_aliases"]:
-            if pacman_installed(alias):
+            if system_installed(alias):
                 return f"sistema ({alias})"
         flatpak_id = definition["flatpak_id"]
         if flatpak_id and flatpak_installed(str(flatpak_id)):
@@ -1213,7 +1255,7 @@ class AntigravityStep(Step):
     def apply(self) -> None:
         header(self, self.title, "Baixando IDE, integrando desktop e comando de terminal")
         for pkg in ("curl", "tar", "desktop-file-utils", "findutils", "coreutils"):
-            install_pacman(pkg, self.ctx.runner)
+            install_system_package(pkg, self.ctx.runner)
         cache = self.ctx.user.home / ".cache/antigravity-ide"
         tarball = cache / f"Antigravity-IDE-{self.version}.tar.gz"
         install_dir = self.ctx.user.home / "Antigravity IDE"

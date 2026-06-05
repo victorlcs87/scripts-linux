@@ -1,6 +1,6 @@
-# scripts-linux - sisteminha pos-formatacao CachyOS/KDE
+# scripts-linux - sisteminha pos-formatacao Linux/KDE
 
-Automacao modular em Python para reconstruir o ambiente apos formatar o CachyOS/KDE.
+Automacao modular em Python para reconstruir o ambiente apos formatar Arch/CachyOS ou Debian/Ubuntu com KDE.
 O projeto substitui os antigos scripts shell grandes por um CLI Python com etapas reutilizaveis, logs, dry-run, status, undo e uma interface colorida para terminal.
 
 ## Uso Rapido
@@ -11,7 +11,7 @@ No fish:
 python 00-pos-formatacao-cachyos.py
 ```
 
-Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `InquirerPy` e `pytest`, usando `pacman` e `paru` quando necessario.
+Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `InquirerPy` e `pytest`. Em Arch/CachyOS usa `pacman` e, se disponivel, `paru`/`yay`; em Debian/Ubuntu usa `apt` e fallback via `pip --user` quando necessario.
 
 Tambem da para abrir uma etapa especifica por wrapper:
 
@@ -58,8 +58,8 @@ Os menus interativos usam `InquirerPy`, no mesmo estilo do projeto `servidor-min
 
 | ID | Etapa | O que faz |
 | --- | --- | --- |
-| `00` | Preparar ecossistema | Verifica Shelly, instala/configura Flatpak + flathub, garante helper AUR e instala `fuse2`. |
-| `01` | Atualizar sistema | Instala `pacman-contrib` e roda `sudo pacman -Syu`. |
+| `00` | Preparar ecossistema | Detecta a distro, instala/configura Flatpak + flathub e prepara suporte AppImage/FUSE. Em Arch/CachyOS tambem tenta helper AUR/Shelly. |
+| `01` | Atualizar sistema | Atualiza com `pacman -Syu` em Arch/CachyOS ou `apt-get update && apt-get upgrade` em Debian/Ubuntu. |
 | `02` | Linux Toys | Instala Linux Toys via script oficial. |
 | `03` | Navegador | Instala Firefox do sistema, FirefoxPWA e Bitwarden Flatpak. |
 | `04` | WebApps | Tenta FirefoxPWA, depois WebApp Manager, depois fallback `.desktop`. |
@@ -72,12 +72,12 @@ Os menus interativos usam `InquirerPy`, no mesmo estilo do projeto `servidor-min
 | `11` | Num Lock | Configura Num Lock no KDE e na tela de login SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, cria atalho e comando `antigravity-ide`. |
 
-## Etapa 00 E Shelly
+## Etapa 00, Distro E Shelly
 
 A etapa `00` nao depende mais da ideia de "abrir o Shelly e ligar toggles" para prosseguir.
-Ela prepara o sistema por linha de comando e usa o Shelly apenas como fallback assistido se faltar algo.
+Ela detecta a familia do sistema por `/etc/os-release`, prepara o sistema por linha de comando e usa o Shelly apenas como fallback assistido em Arch/CachyOS se faltar algo.
 
-Hoje o projeto trata como verificado que o `shelly` atual expoe CLI para:
+Em Arch/CachyOS, o projeto trata como verificado que o `shelly` atual expoe CLI para:
 
 - `shelly flatpak`
 - `shelly appimage`
@@ -88,9 +88,10 @@ Na pratica, a etapa `00` faz isto:
 
 - garante `flatpak`
 - garante o remote `flathub`
-- tenta garantir um helper AUR como `paru` ou `yay`
-- instala `fuse2` para compatibilidade com AppImages
-- usa `shelly-ui` ou `shelly` apenas se ainda faltar algo
+- em Arch/CachyOS, tenta garantir um helper AUR como `paru` ou `yay`
+- em Arch/CachyOS, instala `fuse2` para compatibilidade com AppImages
+- em Debian/Ubuntu, instala a primeira opcao disponivel entre `libfuse2t64`, `libfuse2` e `fuse`
+- usa `shelly-ui` ou `shelly` apenas em Arch/CachyOS se ainda faltar algo
 
 ## Comportamento Por Etapa
 
@@ -112,19 +113,25 @@ https://addons.mozilla.org/firefox/addon/pwas-for-firefox/
 
 A etapa `10` usa:
 
-- Steam e Heroic com preferencia por pacote do sistema/AUR.
+- Steam com preferencia por pacote do sistema; em Debian/Ubuntu pode exigir habilitar `multiverse`, `non-free` ou repositorios equivalentes.
+- Heroic com preferencia por pacote do sistema/AUR em Arch/CachyOS e fallback Flatpak em Debian/Ubuntu.
 - Discord, TeamSpeak, ONLYOFFICE, Chrome, Minecraft Bedrock Launcher e Bitwarden via Flatpak.
-- ZapZap com preferencia por pacote nativo/AUR.
+- ZapZap com preferencia por pacote nativo/AUR em Arch/CachyOS e fallback Flatpak em Debian/Ubuntu.
 - Hydra via AppImage, com icone em `assets/hydra.png`.
 - Codex CLI com:
 
 ```fish
+# Arch/CachyOS:
 sudo pacman -S --needed nodejs npm
+
+# Debian/Ubuntu:
+sudo apt-get install -y nodejs npm
+
 sudo npm install -g @openai/codex
 ```
 
-O suporte a AppImage fica centralizado na etapa `00`, que instala `fuse2` e prepara o ambiente.
-A etapa do Hydra tambem revalida `fuse2` antes de baixar o AppImage.
+O suporte a AppImage fica centralizado na etapa `00`, que instala o pacote FUSE adequado para a familia detectada.
+A etapa do Hydra tambem revalida esse suporte antes de baixar o AppImage.
 
 ### Num Lock
 
@@ -184,6 +191,7 @@ fish_add_path ~/.local/bin
 │   ├── core.py
 │   ├── desktop.py
 │   ├── installers.py
+│   ├── platform.py
 │   ├── steps.py
 │   └── steps_base.py
 ├── scripts/

@@ -4,14 +4,22 @@ import shutil
 from pathlib import Path
 
 from .core import Color, Runner, announce, command_exists
+from .platform import (
+    aur_helper,
+    install_first_available,
+    install_system_or_aur,
+    install_system_package,
+    system_installed,
+    system_package_exists,
+)
 
 
 def pacman_installed(pkg: str) -> bool:
-    return shutil.which("pacman") is not None and _quiet(["pacman", "-Q", pkg])
+    return system_installed(pkg)
 
 
 def pacman_exists(pkg: str) -> bool:
-    return shutil.which("pacman") is not None and _quiet(["pacman", "-Si", pkg])
+    return system_package_exists(pkg)
 
 
 def _quiet(cmd: list[str]) -> bool:
@@ -20,54 +28,13 @@ def _quiet(cmd: list[str]) -> bool:
     return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode == 0
 
 
-def aur_helper() -> str | None:
-    for candidate in ("paru", "yay"):
-        if command_exists(candidate):
-            return candidate
-    return None
-
-
 def install_pacman(pkg: str, runner: Runner) -> None:
-    if pacman_installed(pkg):
-        announce(runner.logger, "skipped", f"{pkg} ja instalado")
-        return
-    runner.run(
-        ["pacman", "-S", "--needed", pkg],
-        sudo=True,
-        action=f"Instalando pacote {pkg}",
-        interactive=True,
-        interactive_tty=True,
-        manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes.",
-    )
-
-
-def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) -> bool:
-    if pacman_installed(system_pkg):
-        announce(runner.logger, "skipped", f"{system_pkg} ja instalado")
-        return True
-    if aur_pkg and pacman_installed(aur_pkg):
-        announce(runner.logger, "skipped", f"{aur_pkg} ja instalado")
-        return True
-    if pacman_exists(system_pkg):
-        install_pacman(system_pkg, runner)
-        return True
-    helper = aur_helper()
-    if aur_pkg and helper:
-        runner.run(
-            [helper, "-S", "--needed", aur_pkg],
-            action=f"Instalando pacote AUR {aur_pkg}",
-            interactive=True,
-            interactive_tty=True,
-            manual_message="Comando interativo: o helper AUR pode pedir confirmacoes.",
-        )
-        return True
-    runner.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote para {system_pkg}")
-    return False
+    install_system_package(pkg, runner)
 
 
 def ensure_flatpak(runner: Runner) -> None:
     if not command_exists("flatpak"):
-        install_pacman("flatpak", runner)
+        install_system_package("flatpak", runner)
     runner.run(
         ["flatpak", "remote-add", "--if-not-exists", "flathub", "https://flathub.org/repo/flathub.flatpakrepo"],
         check=False,
@@ -108,3 +75,22 @@ def npm_global_installed(pkg: str) -> bool:
     if shutil.which("npm") is None:
         return False
     return _quiet(["npm", "list", "-g", pkg, "--depth=0"])
+
+
+__all__ = [
+    "aur_helper",
+    "copy_asset",
+    "ensure_flatpak",
+    "flatpak_installed",
+    "install_first_available",
+    "install_flatpak",
+    "install_pacman",
+    "install_system_or_aur",
+    "install_system_package",
+    "npm_global_installed",
+    "pacman_exists",
+    "pacman_installed",
+    "remove_flatpak",
+    "system_installed",
+    "system_package_exists",
+]

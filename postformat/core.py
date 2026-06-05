@@ -420,6 +420,9 @@ def infer_action(cmd: Sequence[str] | str, *, sudo: bool = False) -> str:
     binary = Path(cmd[0]).name
     verb_map = {
         "pacman": "Executando pacman",
+        "apt-get": "Executando apt",
+        "apt": "Executando apt",
+        "dpkg-query": "Consultando pacotes",
         "flatpak": "Executando flatpak",
         "npm": "Executando npm",
         "curl": "Baixando recurso",

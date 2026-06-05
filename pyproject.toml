@@ -1,7 +1,7 @@
 [project]
 name = "scripts-linux-postformat"
 version = "1.0.0"
-description = "Automacao pos-formatacao para CachyOS/KDE"
+description = "Automacao pos-formatacao para Linux/KDE"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
