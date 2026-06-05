@@ -1,6 +1,8 @@
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep
@@ -361,6 +363,110 @@ def test_apps_detect_install_source_for_hydra_appimage(tmp_path: Path, monkeypat
     assert source.startswith("appimage")
 
 
+def test_apps_detect_install_source_for_hydra_canonical_desktop(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    desktop = ctx.user.home / ".local/share/applications/hydralauncher.desktop"
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text("[Desktop Entry]\nName=Hydra Launcher\n", encoding="utf-8")
+
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.npm_global_installed", lambda pkg: False)
+
+    source = step._detect_install_source("Hydra Launcher")
+
+    assert source == f"desktop ({desktop})"
+
+
+def test_install_hydra_reconciles_desktop_when_appimage_exists(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    hydra = ctx.user.home / "AppImages/HydraLauncher-latest.AppImage"
+    hydra.parent.mkdir(parents=True, exist_ok=True)
+    hydra.write_text("bin", encoding="utf-8")
+    copied_icons: list[Path] = []
+    installed_desktops: list[tuple[Path, str]] = []
+
+    monkeypatch.setattr("postformat.steps.copy_asset", lambda _source, target, _runner: copied_icons.append(target))
+    monkeypatch.setattr(
+        "postformat.steps.install_desktop_entry",
+        lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
+    )
+    monkeypatch.setattr("postformat.steps.install_system_package", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar pacotes"))
+    monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar fuse"))
+
+    step._install_hydra()
+
+    assert copied_icons == [ctx.user.home / ".local/share/icons/hydra-launcher.png"]
+    assert installed_desktops
+    desktop_path, rendered = installed_desktops[0]
+    assert desktop_path == ctx.user.home / ".local/share/applications/hydralauncher.desktop"
+    assert f"Exec={hydra} %U" in rendered
+    assert "StartupWMClass=hydralauncher" in rendered
+
+
+def test_gestures_config_includes_up_and_down_swipes(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+    helper = ctx.user.home / ".local/bin/kde-gnome-like-overview"
+
+    rendered = step._libinput_config_content(helper)
+
+    assert f"gesture swipe up 3 {helper}" in rendered
+    assert f"gesture swipe down 3 {helper}" in rendered
+
+
+def test_gestures_adds_user_to_input_group_when_missing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+    calls: list[tuple[list[str] | str, bool]] = []
+
+    monkeypatch.setattr(step, "_user_in_group", lambda group: False)
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, bool(kwargs.get("sudo"))))
+        return CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(ctx.runner, "run", fake_run)
+
+    ready = step._ensure_input_group()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert ready is True
+    assert calls == [(["gpasswd", "-a", "tester", "input"], True)]
+    assert "logout/login" in log
+
+
+def test_gestures_skips_input_group_when_user_is_already_member(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+    calls: list[list[str] | str] = []
+
+    monkeypatch.setattr(step, "_user_in_group", lambda group: True)
+    monkeypatch.setattr(ctx.runner, "run", lambda cmd, **_kwargs: calls.append(cmd))
+
+    ready = step._ensure_input_group()
+
+    assert ready is True
+    assert calls == []
+
+
+def test_gestures_reports_manual_command_when_input_group_add_fails(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+
+    monkeypatch.setattr(step, "_user_in_group", lambda group: False)
+    monkeypatch.setattr(ctx.runner, "run", lambda cmd, **_kwargs: CompletedProcess(cmd, 1, stdout=""))
+
+    ready = step._ensure_input_group()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert ready is False
+    assert "sudo gpasswd -a tester input" in log
+
+
 def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
@@ -374,6 +480,24 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
 
     assert "libinput-gestures" in log
     assert "ausente" in log
+
+
+def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libinput-gestures")
+    monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "libinput-gestures-setup")
+    monkeypatch.setattr(step, "_user_in_group", lambda group: False)
+    monkeypatch.setattr(step, "_libinput_gestures_running", lambda: False)
+    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+
+    step.status()
+
+    assert step.result.compliance == "atencao"
+    assert "grupo input" in step.result.attention_items
+    assert "servico libinput-gestures" in step.result.attention_items
+    assert "gestos up/down" in step.result.attention_items
 
 
 def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None:

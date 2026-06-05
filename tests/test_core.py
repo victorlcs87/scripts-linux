@@ -38,6 +38,7 @@ def test_desktop_entry_render() -> None:
         exec_line="/home/user/AppImages/Hydra.AppImage %U",
         icon="/home/user/.local/share/icons/hydra.png",
         categories=("Game",),
+        startup_wm_class="hydralauncher",
     )
 
     rendered = entry.render()
@@ -45,6 +46,7 @@ def test_desktop_entry_render() -> None:
     assert "Name=Hydra Launcher" in rendered
     assert "Exec=/home/user/AppImages/Hydra.AppImage %U" in rendered
     assert "Icon=/home/user/.local/share/icons/hydra.png" in rendered
+    assert "StartupWMClass=hydralauncher" in rendered
     assert "Categories=Game;" in rendered
 
 

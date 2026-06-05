@@ -1,29 +1,50 @@
-# scripts-linux - sisteminha pos-formatacao Linux/KDE
+# scripts-linux-postformat
 
-Automacao modular em Python para reconstruir o ambiente apos formatar Arch/CachyOS ou Debian/Ubuntu com KDE.
-O projeto substitui os antigos scripts shell grandes por um CLI Python com etapas reutilizaveis, logs, dry-run, status, undo e uma interface colorida para terminal.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![KDE](https://img.shields.io/badge/Desktop-KDE-1D99F3?logo=kde&logoColor=white)](https://kde.org/)
+[![Tests](https://img.shields.io/badge/tests-pytest-0A7F3F)](https://docs.pytest.org/)
+
+Automacao pos-formatacao para reconstruir um ambiente Linux/KDE com consistencia, logs e etapas auditaveis.
+O projeto substitui scripts shell longos por um CLI Python modular, com `apply`, `dry-run`, `status` e `undo` por etapa.
+
+## Destaques
+
+- Suporte a Arch/CachyOS e Debian/Ubuntu.
+- Preparacao de Flatpak, Flathub, AppImage/FUSE e helper AUR quando aplicavel.
+- Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, NVIDIA/jogos, gestos KDE e Num Lock.
+- Integracao desktop para AppImages, incluindo Hydra Launcher com `StartupWMClass` correto no KDE Wayland.
+- Gestos KDE com `libinput-gestures` para abrir o Overview com swipe de 3 dedos para cima ou para baixo.
+- Execucao segura com dry-run, backups, confirmacoes para operacoes sensiveis e logs locais.
+
+## Requisitos
+
+- Python 3.11 ou superior.
+- Sessao Linux de usuario normal, sem executar o projeto como root.
+- `sudo` configurado para comandos que precisam de privilegio.
+- KDE recomendado, principalmente para as etapas de gestos, Num Lock e atalhos desktop.
+
+O bootstrap instala dependencias Python internas quando necessario, incluindo `InquirerPy` e `pytest`.
 
 ## Uso Rapido
 
-No fish:
+Executar o fluxo interativo principal:
 
 ```fish
 python 00-pos-formatacao-cachyos.py
 ```
 
-Na primeira execucao pelo script principal, o projeto pode instalar automaticamente as dependencias Python internas necessarias, incluindo `InquirerPy` e `pytest`. Em Arch/CachyOS usa `pacman` e, se disponivel, `paru`/`yay`; em Debian/Ubuntu usa `apt` e fallback via `pip --user` quando necessario.
-
-Tambem da para abrir uma etapa especifica por wrapper:
+Executar uma etapa por wrapper:
 
 ```fish
 bash scripts/10-instalar-apps-jogos-comunicacao-dev.sh
 ```
 
-Ou chamar o modulo Python diretamente:
+Executar pelo modulo Python:
 
 ```fish
 python -m postformat step 10 dry-run
 python -m postformat step 11 status
+python -m postformat step 09 apply
 ```
 
 ## Menus
@@ -38,7 +59,7 @@ O menu principal oferece:
 - `Undo por etapa`
 - `Sair`
 
-Cada wrapper numerado abre um menu proprio com:
+Cada wrapper numerado abre um menu da propria etapa com:
 
 - `Apply`
 - `Dry-run`
@@ -46,144 +67,97 @@ Cada wrapper numerado abre um menu proprio com:
 - `Undo`
 - `Sair`
 
-Nos menus interativos, voce pode:
+Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digite o numero da opcao.
 
-- usar `↑` e `↓` para navegar
-- pressionar `Enter` para confirmar
-- digitar o numero da opcao como atalho
+## Etapas
 
-Os menus interativos usam `InquirerPy`, no mesmo estilo do projeto `servidor-minecraft`.
-
-## Ordem Das Etapas
-
-| ID | Etapa | O que faz |
+| ID | Etapa | Objetivo |
 | --- | --- | --- |
-| `00` | Preparar ecossistema | Detecta a distro, instala/configura Flatpak + flathub e prepara suporte AppImage/FUSE. Em Arch/CachyOS tambem tenta helper AUR/Shelly. |
-| `01` | Atualizar sistema | Atualiza com `pacman -Syu` em Arch/CachyOS ou `apt-get update && apt-get upgrade` em Debian/Ubuntu. |
-| `02` | Linux Toys | Instala Linux Toys via script oficial. |
-| `03` | Navegador | Instala Firefox do sistema, FirefoxPWA e Bitwarden Flatpak. |
-| `04` | WebApps | Tenta FirefoxPWA, depois WebApp Manager, depois fallback `.desktop`. |
-| `05` | NVIDIA / jogos | Faz um diagnostico amigavel da sessao grafica, GPUs, Steam e Heroic. |
-| `06` | Git / GitHub | Instala Git e clona/puxa `scripts-linux` em `/home/repositorios`. |
+| `00` | Preparar ecossistema | Detecta a distro, prepara Flatpak/Flathub, suporte AppImage/FUSE e helper AUR quando aplicavel. |
+| `01` | Atualizar sistema | Atualiza pacotes via `pacman` ou `apt`. |
+| `02` | Linux Toys | Instala Linux Toys pelo script oficial. |
+| `03` | Navegador | Instala Firefox, FirefoxPWA e Bitwarden. |
+| `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
+| `05` | NVIDIA / jogos | Diagnostica sessao grafica, GPUs, Steam e Heroic. |
+| `06` | Git / GitHub | Instala Git e clona/atualiza o repositorio base. |
 | `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
-| `08` | fstab | Configura montagens por label para Windows, dados Windows e jogos Linux. |
-| `09` | Gestos KDE | Instala e configura gestos com `libinput-gestures`; nao altera splash do KDE. |
-| `10` | Apps | Detecta apps ja instalados por sistema, Flatpak ou AppImage antes de instalar Steam/Heroic, demais Flatpaks, Hydra e Codex CLI. |
-| `11` | Num Lock | Configura Num Lock no KDE e na tela de login SDDM. |
-| `12` | Antigravity IDE | Instala Antigravity, cria atalho e comando `antigravity-ide`. |
+| `08` | fstab | Configura montagens por label com backup e confirmacao. |
+| `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos para cima e para baixo. |
+| `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage e Codex CLI. |
+| `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
+| `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
 
-## Etapa 00, Distro E Shelly
+## Detalhes Importantes
 
-A etapa `00` nao depende mais da ideia de "abrir o Shelly e ligar toggles" para prosseguir.
-Ela detecta a familia do sistema por `/etc/os-release`, prepara o sistema por linha de comando e usa o Shelly apenas como fallback assistido em Arch/CachyOS se faltar algo.
+### Gestos KDE
 
-Em Arch/CachyOS, o projeto trata como verificado que o `shelly` atual expoe CLI para:
-
-- `shelly flatpak`
-- `shelly appimage`
-- `shelly aur`
-
-O fluxo nao depende de um comando documentado para "ativar" a interface grafica do Shelly.
-Na pratica, a etapa `00` faz isto:
-
-- garante `flatpak`
-- garante o remote `flathub`
-- em Arch/CachyOS, tenta garantir um helper AUR como `paru` ou `yay`
-- em Arch/CachyOS, instala `fuse2` para compatibilidade com AppImages
-- em Debian/Ubuntu, instala a primeira opcao disponivel entre `libfuse2t64`, `libfuse2` e `fuse`
-- usa `shelly-ui` ou `shelly` apenas em Arch/CachyOS se ainda faltar algo
-
-## Comportamento Por Etapa
-
-### WebApps
-
-A etapa `04` tenta criar ChatGPT e GSV Calendar nesta ordem:
-
-1. `firefoxpwa`, usando perfis e manifests quando possivel.
-2. `webapp-manager`, abrindo a ferramenta para criacao assistida.
-3. Fallback `.desktop` com Firefox, marcado como fallback e nao como PWA real.
-
-O FirefoxPWA pode exigir a extensao do Firefox:
+A etapa `09` usa `libinput-gestures` e cria:
 
 ```text
-https://addons.mozilla.org/firefox/addon/pwas-for-firefox/
+~/.config/libinput-gestures.conf
+~/.local/bin/kde-gnome-like-overview
 ```
 
-### Apps E AppImages
-
-A etapa `10` usa:
-
-- Steam com preferencia por pacote do sistema; em Debian/Ubuntu pode exigir habilitar `multiverse`, `non-free` ou repositorios equivalentes.
-- Heroic com preferencia por pacote do sistema/AUR em Arch/CachyOS e fallback Flatpak em Debian/Ubuntu.
-- Discord, TeamSpeak, ONLYOFFICE, Chrome, Minecraft Bedrock Launcher e Bitwarden via Flatpak.
-- ZapZap com preferencia por pacote nativo/AUR em Arch/CachyOS e fallback Flatpak em Debian/Ubuntu.
-- Hydra via AppImage, com icone em `assets/hydra.png`.
-- Codex CLI com:
+O usuario precisa pertencer ao grupo `input` para que o servico consiga ler o touchpad:
 
 ```fish
-# Arch/CachyOS:
-sudo pacman -S --needed nodejs npm
-
-# Debian/Ubuntu:
-sudo apt-get install -y nodejs npm
-
-sudo npm install -g @openai/codex
+sudo gpasswd -a $USER input
 ```
 
-O suporte a AppImage fica centralizado na etapa `00`, que instala o pacote FUSE adequado para a familia detectada.
-A etapa do Hydra tambem revalida esse suporte antes de baixar o AppImage.
+Depois de alterar o grupo, faca logout/login ou reinicie.
 
-### Num Lock
+### Hydra AppImage
 
-A etapa `11` configura:
-
-- Sessao KDE: `~/.config/kcminputrc` com `NumLock=0`.
-- Login SDDM: `/etc/sddm.conf.d/10-numlock.conf` com `Numlock=on`.
-
-O `status` tambem mostra possiveis arquivos conflitantes em `/etc/sddm.conf.d/`.
-
-### Antigravity IDE
-
-A etapa `12` instala em:
+A etapa `10` instala o Hydra como AppImage em:
 
 ```text
-~/Antigravity IDE
+~/AppImages/HydraLauncher-latest.AppImage
 ```
 
-E cria:
+E cria o atalho canonico:
 
 ```text
-~/.local/share/applications/antigravity-ide.desktop
-~/.local/bin/antigravity-ide
+~/.local/share/applications/hydralauncher.desktop
 ```
 
-O comando `antigravity-ide` usa `nohup` em background, para o terminal nao ficar preso.
+O atalho usa `StartupWMClass=hydralauncher`, necessario para agrupamento correto no KDE Wayland.
 
-Se `~/.local/bin` nao estiver no PATH do fish:
+### AppImages E FUSE
 
-```fish
-fish_add_path ~/.local/bin
-```
+A etapa `00` centraliza o suporte AppImage:
 
-## Garantias E Seguranca
+- Arch/CachyOS: `fuse2`.
+- Debian/Ubuntu: primeira opcao disponivel entre `libfuse2t64`, `libfuse2` e `fuse`.
 
-- Nao execute o sistema como root.
-- O CLI chama `sudo` apenas nos comandos que precisam.
-- Logs ficam em `./LOGS/`, no diretorio de execucao.
-- Dry-run mostra o que seria feito sem aplicar alteracoes.
-- As etapas verificam o estado atual antes de agir e pulam instalacoes, arquivos, atalhos ou servicos que ja estejam prontos.
-- Arquivos importantes recebem backup antes de alteracoes.
+## Seguranca E Confiabilidade
+
+- Nao execute como root.
+- `sudo` e usado apenas nos comandos que precisam de privilegio.
+- `dry-run` mostra a intencao antes de aplicar mudancas.
+- Arquivos importantes recebem backup antes de alteracao.
 - Operacoes sensiveis, como `fstab`, exigem confirmacao digitada.
-- Caminhos de usuario usam deteccao por variavel e banco de usuarios, sem hardcode de `/home/victorlcs`.
-- Comandos exibidos sao compativeis com fish; quando necessario, a propria etapa mostra o comando fish adequado.
-- O CLI ativa um tema colorido no terminal quando ANSI estiver disponivel. Para desativar, use `NO_COLOR=1`.
+- Logs ficam em `./LOGS/` e nao devem ser versionados.
+- Caminhos usam o usuario detectado em runtime, sem hardcode de home.
 
-## Estrutura Do Projeto
+## Desenvolvimento
+
+Validar sintaxe:
+
+```fish
+python -m py_compile 00-pos-formatacao-cachyos.py postformat/*.py
+```
+
+Rodar testes:
+
+```fish
+python -m pytest
+```
+
+## Estrutura
 
 ```text
 .
 ├── 00-pos-formatacao-cachyos.py
-├── pyproject.toml
 ├── assets/
 │   └── hydra.png
 ├── postformat/
@@ -196,30 +170,15 @@ fish_add_path ~/.local/bin
 │   └── steps_base.py
 ├── scripts/
 │   ├── 00-preparar-ecossistema-cachyos.sh
-│   ├── 01-atualizar-sistema-cachyos.sh
-│   ├── 02-instalar-linux-toys.sh
 │   ├── ...
 │   └── 12-instalar-antigravity-ide.sh
-└── tests/
+├── tests/
+└── pyproject.toml
 ```
 
-## Desenvolvimento
+## Arquivos Ignorados
 
-Validar sintaxe Python:
-
-```fish
-python -m py_compile 00-pos-formatacao-cachyos.py postformat/*.py
-```
-
-Rodar testes:
-
-```fish
-python -m pytest
-```
-
-## Git E Arquivos Ignorados
-
-O repositorio ignora arquivos gerados localmente:
+O repositorio ignora artefatos locais:
 
 - `LOGS/`
 - `fstab-backups/`
@@ -228,4 +187,4 @@ O repositorio ignora arquivos gerados localmente:
 - `*.pyc`
 - `*.log`
 
-Esses arquivos podem existir no disco local, mas nao devem voltar para o GitHub.
+Esses arquivos podem existir no ambiente local, mas nao devem ser enviados ao GitHub.

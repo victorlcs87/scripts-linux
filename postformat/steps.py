@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import grp
 import os
 import re
 import shutil
@@ -915,9 +916,9 @@ class GesturesStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
-        self.ctx.logger.write("Configuracao principal desta etapa: libinput-gestures com gesto de 3 dedos para Overview.")
+        self.ctx.logger.write("Configuracao principal desta etapa: libinput-gestures com gestos de 3 dedos para Overview.")
         install_system_or_aur("libinput-gestures", "libinput-gestures", self.ctx.runner)
-        install_system_package("xdotool", self.ctx.runner)
+        input_group_ready = self._ensure_input_group()
         if not command_exists("libinput-gestures-setup") and not self.ctx.runner.dry_run:
             self.ctx.logger.write("libinput-gestures-setup nao ficou disponivel apos a instalacao.")
             self.mark_manual("libinput-gestures nao ficou disponivel apos a instalacao.")
@@ -925,7 +926,39 @@ class GesturesStep(Step):
         self._write_libinput_config()
         self.ctx.runner.run(["libinput-gestures-setup", "autostart"], check=False, action="Ativando autostart do libinput-gestures", show_progress=False)
         self.ctx.runner.run(["libinput-gestures-setup", "restart"], check=False, action="Reiniciando libinput-gestures", show_progress=False)
+        if not input_group_ready:
+            self.mark_manual(f"Execute 'sudo gpasswd -a {self.ctx.user.name} input' e faca logout/login ou reinicie.")
+            return
         self.mark_done("Gestos configurados com libinput-gestures.")
+
+    def _ensure_input_group(self) -> bool:
+        if self._user_in_group("input"):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} usuario {self.ctx.user.name} ja esta no grupo input")
+            return True
+        result = self.ctx.runner.run(
+            ["gpasswd", "-a", self.ctx.user.name, "input"],
+            sudo=True,
+            check=False,
+            action=f"Adicionando {self.ctx.user.name} ao grupo input",
+            show_progress=False,
+        )
+        if result and result.returncode != 0:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui adicionar {self.ctx.user.name} ao grupo input automaticamente."
+            )
+            self.ctx.logger.write(f"Execute manualmente: sudo gpasswd -a {self.ctx.user.name} input")
+            return False
+        self.ctx.logger.write(
+            f"{Color.YELLOW}AVISO:{Color.RESET} faca logout/login ou reinicie para o grupo input valer nesta sessao."
+        )
+        return True
+
+    def _user_in_group(self, group_name: str) -> bool:
+        try:
+            group = grp.getgrnam(group_name)
+        except KeyError:
+            return False
+        return self.ctx.user.name in group.gr_mem or self.ctx.user.gid == group.gr_gid
 
     def _write_libinput_config(self) -> None:
         helper = self.ctx.user.home / ".local/bin/kde-gnome-like-overview"
@@ -935,7 +968,7 @@ qdbus6 org.kde.kglobalaccel /component/kwin org.kde.kglobalaccel.Component.invok
 qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.toggleEffect "overview" >/dev/null 2>&1 && exit 0
 exit 1
 """
-        conf_content = f"gesture swipe up 3 {helper}\n"
+        conf_content = self._libinput_config_content(helper)
         write_text(
             helper,
             helper_content,
@@ -948,26 +981,54 @@ exit 1
             backup_existing(conf, self.ctx.runner)
             write_text(conf, conf_content, self.ctx.runner)
 
+    def _libinput_config_content(self, helper: Path) -> str:
+        return f"gesture swipe up 3 {helper}\ngesture swipe down 3 {helper}\n"
+
+    def _libinput_config_ready(self, config_file: Path) -> bool:
+        if not config_file.exists():
+            return False
+        helper = self.ctx.user.home / ".local/bin/kde-gnome-like-overview"
+        return config_file.read_text(encoding="utf-8", errors="ignore") == self._libinput_config_content(helper)
+
+    def _libinput_gestures_running(self) -> bool:
+        if not command_exists("libinput-gestures-setup"):
+            return False
+        result = self.ctx.runner.run(["libinput-gestures-setup", "status"], check=False)
+        output = result.stdout if result and result.stdout else ""
+        return "is currently running" in output
+
     def status(self) -> None:
         header(self, self.title, "Verificando pacote, servico e arquivos de gestos")
         self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
-        self.ctx.logger.write(f"{badge('libinput-gestures', Color.SUCCESS if system_installed('libinput-gestures') else Color.WARNING)} {'instalado' if system_installed('libinput-gestures') else 'ausente'}")
-        self.ctx.logger.write(f"{badge('xdotool', Color.SUCCESS if system_installed('xdotool') else Color.WARNING)} {'instalado' if system_installed('xdotool') else 'ausente'}")
-        if command_exists("libinput-gestures-setup"):
-            self.ctx.runner.run(["libinput-gestures-setup", "status"], check=False)
-        else:
+        package_ready = system_installed("libinput-gestures")
+        group_ready = self._user_in_group("input")
+        service_ready = self._libinput_gestures_running()
+        self.ctx.logger.write(f"{badge('libinput-gestures', Color.SUCCESS if package_ready else Color.WARNING)} {'instalado' if package_ready else 'ausente'}")
+        self.ctx.logger.write(f"{badge('grupo-input', Color.SUCCESS if group_ready else Color.WARNING)} {'ok' if group_ready else 'usuario fora do grupo input'}")
+        self.ctx.logger.write(f"{badge('servico', Color.SUCCESS if service_ready else Color.WARNING)} {'rodando' if service_ready else 'parado'}")
+        if not command_exists("libinput-gestures-setup"):
             self.ctx.logger.write("libinput-gestures-setup indisponivel.")
         config_file = self.ctx.user.home / ".config/libinput-gestures.conf"
         if config_file.exists():
             self.ctx.runner.run(["cat", str(config_file)], check=False)
         else:
             self.ctx.logger.write(f"Arquivo de configuracao ausente: {config_file}")
-        package_ready = system_installed("libinput-gestures")
         config_ready = config_file.exists()
-        if package_ready and config_ready and command_exists("libinput-gestures-setup"):
-            self.mark_applied("libinput-gestures e configuracao de gestos estao aplicados.")
+        expected_config_ready = self._libinput_config_ready(config_file)
+        helper_ready = (self.ctx.user.home / ".local/bin/kde-gnome-like-overview").exists()
+        if package_ready and group_ready and service_ready and expected_config_ready and helper_ready:
+            self.mark_applied("libinput-gestures, grupo input, servico e gestos up/down estao aplicados.")
         elif package_ready or config_ready:
-            self.mark_attention("Gestos estao parcialmente configurados; revise pacote, comando ou arquivo.")
+            attention = []
+            if not group_ready:
+                attention.append("grupo input")
+            if not service_ready:
+                attention.append("servico libinput-gestures")
+            if not expected_config_ready:
+                attention.append("gestos up/down")
+            if not helper_ready:
+                attention.append("helper overview")
+            self.mark_attention("Gestos estao parcialmente configurados; revise grupo, servico ou arquivo.", attention=attention)
         else:
             self.mark_pending("libinput-gestures ainda nao esta configurado.", missing=["libinput-gestures", "arquivo de gestos"])
 
@@ -987,6 +1048,10 @@ exit 1
 class AppsStep(Step):
     id = "10"
     title = "Apps / jogos / comunicacao / dev"
+    hydra_appimage_path = Path("AppImages/HydraLauncher-latest.AppImage")
+    hydra_desktop_path = Path(".local/share/applications/hydralauncher.desktop")
+    hydra_legacy_desktop_path = Path(".local/share/applications/hydra-launcher.desktop")
+    hydra_wm_class = "hydralauncher"
     apps = {
         "Steam": {"system_aliases": ("steam", "steam-installer", "steam-launcher"), "flatpak_id": None, "appimage_paths": (), "desktop_paths": (), "kind": "system"},
         "Heroic": {"system_aliases": ("heroic-games-launcher", "heroic-games-launcher-bin"), "flatpak_id": "com.heroicgameslauncher.hgl", "appimage_paths": (), "desktop_paths": (), "kind": "system"},
@@ -1001,8 +1066,8 @@ class AppsStep(Step):
         "Hydra Launcher": {
             "system_aliases": (),
             "flatpak_id": None,
-            "appimage_paths": (Path("AppImages/HydraLauncher-latest.AppImage"),),
-            "desktop_paths": (Path(".local/share/applications/hydra-launcher.desktop"),),
+            "appimage_paths": (hydra_appimage_path,),
+            "desktop_paths": (hydra_desktop_path, hydra_legacy_desktop_path),
             "kind": "appimage",
         },
     }
@@ -1062,9 +1127,15 @@ class AppsStep(Step):
 
     def _install_hydra(self) -> None:
         header(self, "Hydra Launcher AppImage", "Baixando AppImage e criando integracao desktop")
-        source = self._detect_install_source("Hydra Launcher")
-        if source:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Hydra Launcher ja detectado via {source}")
+        appimage_dir = self.ctx.user.home / "AppImages"
+        out = self.ctx.user.home / self.hydra_appimage_path
+        icon_source = self.ctx.root / "assets/hydra.png"
+        icon_target = self.ctx.user.home / ".local/share/icons/hydra-launcher.png"
+        desktop_file = self.ctx.user.home / self.hydra_desktop_path
+
+        if out.exists():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Hydra Launcher ja detectado via appimage ({out})")
+            self._reconcile_hydra_desktop(out, icon_source, icon_target, desktop_file)
             self.add_hint("Hydra Launcher ja estava instalado.")
             return
         install_system_package("curl", self.ctx.runner)
@@ -1072,14 +1143,8 @@ class AppsStep(Step):
             install_first_available(("fuse2",), self.ctx.runner)
         else:
             install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
-        appimage_dir = self.ctx.user.home / "AppImages"
-        icon_source = self.ctx.root / "assets/hydra.png"
-        icon_target = self.ctx.user.home / ".local/share/icons/hydra-launcher.png"
         if not self.ctx.runner.dry_run:
             appimage_dir.mkdir(parents=True, exist_ok=True)
-        copy_asset(icon_source, icon_target, self.ctx.runner)
-        out = appimage_dir / "HydraLauncher-latest.AppImage"
-        desktop_file = self.ctx.user.home / ".local/share/applications/hydra-launcher.desktop"
         url_cmd = "curl -fsSL https://api.github.com/repos/hydralauncher/hydra/releases/latest | grep -Eo 'https://[^\\\"]+\\.AppImage' | head -n1"
         result = self.ctx.runner.run(url_cmd, shell=True, check=False, action="Consultando release mais recente do Hydra", show_progress=False)
         url = result.stdout.strip() if result and result.stdout else "HYDRA_APPIMAGE_URL"
@@ -1088,13 +1153,39 @@ class AppsStep(Step):
             return
         self.ctx.runner.run(["curl", "-L", url, "-o", str(out)], check=False, action="Baixando Hydra Launcher AppImage")
         self.ctx.runner.run(["chmod", "+x", str(out)], check=False, action="Tornando Hydra Launcher executavel", show_progress=False)
+        self._reconcile_hydra_desktop(out, icon_source, icon_target, desktop_file)
+
+    def _reconcile_hydra_desktop(self, appimage: Path, icon_source: Path, icon_target: Path, desktop_file: Path) -> None:
+        copy_asset(icon_source, icon_target, self.ctx.runner)
         entry = DesktopEntry(
             name="Hydra Launcher",
-            exec_line=f"{out} %U",
+            exec_line=f"{appimage} %U",
             icon=str(icon_target),
             categories=("Game",),
+            startup_wm_class=self.hydra_wm_class,
         )
         install_desktop_entry(desktop_file, entry, self.ctx.runner)
+        self._remove_hydra_legacy_desktop(appimage)
+
+    def _remove_hydra_legacy_desktop(self, appimage: Path) -> None:
+        legacy_file = self.ctx.user.home / self.hydra_legacy_desktop_path
+        canonical_file = self.ctx.user.home / self.hydra_desktop_path
+        if not legacy_file.exists() or legacy_file == canonical_file:
+            return
+        legacy_text = legacy_file.read_text(encoding="utf-8", errors="ignore")
+        managed_legacy = str(appimage) in legacy_text and (
+            "Name=Hydra Launcher" in legacy_text or "hydra-launcher" in legacy_text or self.hydra_wm_class in legacy_text
+        )
+        if not managed_legacy:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} {legacy_file} parece customizado; preservando para revisao manual."
+            )
+            return
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria atalho legado {legacy_file}")
+            return
+        legacy_file.unlink()
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Atalho legado removido: {legacy_file}")
 
     def status(self) -> None:
         header(self, self.title, "Verificando origem detectada de cada app")
@@ -1115,6 +1206,7 @@ class AppsStep(Step):
         self.ctx.logger.write("Nao vou remover pacotes automaticamente. Removendo apenas Hydra AppImage/atalho/icone criados pela etapa.")
         for path in (
             self.ctx.user.home / "AppImages/HydraLauncher-latest.AppImage",
+            self.ctx.user.home / ".local/share/applications/hydralauncher.desktop",
             self.ctx.user.home / ".local/share/applications/hydra-launcher.desktop",
             self.ctx.user.home / ".local/share/icons/hydra-launcher.png",
         ):
