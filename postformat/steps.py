@@ -1483,6 +1483,316 @@ disown 2>/dev/null || true
                 path.unlink(missing_ok=True)
 
 
+class SunshineStep(Step):
+    id = "13"
+    title = "Sunshine / Moonlight"
+    udev_rule_file = Path("/etc/udev/rules.d/85-sunshine-input.rules")
+    udev_rule_content = 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\n'
+    ufw_rules = (
+        (("47984:47990/tcp", "Sunshine Moonlight TCP"), "47984:47990/tcp"),
+        (("48010/tcp", "Sunshine Moonlight RTSP"), "48010/tcp"),
+        (("47998:48000/udp", "Sunshine Moonlight UDP"), "47998:48000/udp"),
+    )
+
+    @property
+    def autostart_file(self) -> Path:
+        return self.ctx.user.home / ".config/autostart/sunshine.desktop"
+
+    @property
+    def fallback_desktop_file(self) -> Path:
+        return self.ctx.user.home / ".local/share/applications/sunshine.desktop"
+
+    @property
+    def sunshine_log_file(self) -> Path:
+        return self.ctx.user.home / ".local/share/sunshine.log"
+
+    @property
+    def user_service_file(self) -> Path:
+        return self.ctx.user.home / ".config/systemd/user/sunshine.service"
+
+    def apply(self) -> None:
+        header(self, self.title, "Instalando Sunshine e integrando com KDE/Moonlight")
+        install_system_package("sunshine", self.ctx.runner)
+        input_group_ready = self._ensure_input_group()
+        self._write_udev_rule()
+        self._write_autostart()
+        self._ensure_menu_launcher()
+        self._configure_ufw()
+        self._start_sunshine()
+        if not input_group_ready:
+            self.mark_manual(f"Execute logout/login ou reinicie para o grupo input valer para {self.ctx.user.name}.")
+            return
+        self.mark_done("Sunshine instalado/configurado com autostart, UFW e integracao KDE.")
+
+    def _ensure_input_group(self) -> bool:
+        if self._user_in_group("input"):
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} usuario {self.ctx.user.name} ja esta no grupo input")
+            return True
+        result = self.ctx.runner.run(
+            ["gpasswd", "-a", self.ctx.user.name, "input"],
+            sudo=True,
+            check=False,
+            action=f"Adicionando {self.ctx.user.name} ao grupo input",
+            show_progress=False,
+        )
+        if result and result.returncode != 0:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui adicionar {self.ctx.user.name} ao grupo input automaticamente.")
+            self.ctx.logger.write(f"Execute manualmente: sudo gpasswd -a {self.ctx.user.name} input")
+            return False
+        self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} faca logout/login ou reinicie para o grupo input valer nesta sessao.")
+        return True
+
+    def _user_in_group(self, group_name: str) -> bool:
+        try:
+            group = grp.getgrnam(group_name)
+        except KeyError:
+            return False
+        return self.ctx.user.name in group.gr_mem or self.ctx.user.gid == group.gr_gid
+
+    def _write_udev_rule(self) -> None:
+        if self._udev_rule_ready():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} regra udev do Sunshine ja esta configurada: {self.udev_rule_file}")
+        else:
+            backup_existing(self.udev_rule_file, self.ctx.runner, sudo=True)
+            write_text_sudo(self.udev_rule_file, self.udev_rule_content, self.ctx.runner)
+        self.ctx.runner.run(["udevadm", "control", "--reload-rules"], sudo=True, check=False, action="Recarregando regras udev", show_progress=False)
+        self.ctx.runner.run(["udevadm", "trigger"], sudo=True, check=False, action="Aplicando regras udev", show_progress=False)
+
+    def _udev_rule_ready(self) -> bool:
+        return self.udev_rule_file.exists() and self.udev_rule_file.read_text(encoding="utf-8", errors="ignore") == self.udev_rule_content
+
+    def _autostart_content(self) -> str:
+        return "\n".join(
+            [
+                "[Desktop Entry]",
+                "Type=Application",
+                "Name=Sunshine",
+                "Comment=Iniciar Sunshine no login do KDE Plasma",
+                f'Exec=sh -c "/usr/bin/sunshine > {self.sunshine_log_file} 2>&1"',
+                "Terminal=false",
+                "X-KDE-autostart-after=panel",
+                "X-GNOME-Autostart-enabled=true",
+                "",
+            ]
+        )
+
+    def _write_autostart(self) -> None:
+        write_text(self.autostart_file, self._autostart_content(), self.ctx.runner, mode=0o644)
+        if self.user_service_file.exists():
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} existe sunshine.service de usuario; revise se houver Sunshine duplicado: {self.user_service_file}")
+
+    def _ensure_menu_launcher(self) -> None:
+        existing = self._find_existing_launcher()
+        if existing and existing != self.fallback_desktop_file:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} lancador Sunshine ja fornecido pelo sistema: {existing}")
+            return
+        entry = DesktopEntry(
+            name="Sunshine",
+            comment="Game streaming host for Moonlight",
+            exec_line="/usr/bin/sunshine",
+            categories=("Game", "Network"),
+            terminal=False,
+        )
+        install_desktop_entry(self.fallback_desktop_file, entry, self.ctx.runner)
+
+    def _find_existing_launcher(self) -> Path | None:
+        fallback_match = None
+        search_dirs = (
+            self.ctx.user.home / ".local/share/applications",
+            Path("/usr/local/share/applications"),
+            Path("/usr/share/applications"),
+        )
+        for directory in search_dirs:
+            if not directory.exists():
+                continue
+            for desktop_file in sorted(directory.glob("*.desktop")):
+                if self._desktop_launches_sunshine(desktop_file):
+                    if desktop_file == self.fallback_desktop_file:
+                        fallback_match = desktop_file
+                    else:
+                        return desktop_file
+        return fallback_match
+
+    def _desktop_launches_sunshine(self, desktop_file: Path) -> bool:
+        try:
+            text = desktop_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        exec_lines = [line.strip() for line in text.splitlines() if line.strip().startswith("Exec=")]
+        return any("/usr/bin/sunshine" in line or re.search(r"(^|[ ='\"])sunshine([ '\"]|$)", line) for line in exec_lines)
+
+    def _ufw_active(self) -> bool:
+        if not command_exists("ufw"):
+            return False
+        result = self.ctx.runner.run(["ufw", "status"], sudo=True, check=False, action="Verificando UFW", show_progress=False, quiet_success=True)
+        if self.ctx.runner.dry_run:
+            return True
+        return bool(result and result.stdout and re.search(r"Status:\s+active", result.stdout, re.IGNORECASE))
+
+    def _configure_ufw(self) -> None:
+        if not command_exists("ufw"):
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} UFW nao instalado. Pulando regras de firewall.")
+            return
+        if not self._ufw_active():
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} UFW existe, mas nao esta ativo. Pulando regras de firewall.")
+            return
+        for (port, comment), _delete_spec in self.ufw_rules:
+            self.ctx.runner.run(
+                ["ufw", "allow", port, "comment", comment],
+                sudo=True,
+                check=False,
+                action=f"Liberando UFW {port} para Sunshine",
+                show_progress=False,
+            )
+        self.ctx.runner.run(["ufw", "reload"], sudo=True, check=False, action="Recarregando UFW", show_progress=False)
+
+    def _sunshine_running(self) -> bool:
+        result = self.ctx.runner.run(["pgrep", "-u", self.ctx.user.name, "-x", "sunshine"], check=False, action="Verificando processo Sunshine", show_progress=False, quiet_success=True)
+        return bool(result and result.returncode == 0)
+
+    def _start_sunshine(self) -> None:
+        if not command_exists("sunshine") and not Path("/usr/bin/sunshine").exists() and not self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} binario sunshine nao encontrado para iniciar agora.")
+            return
+        if self._sunshine_running():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Sunshine ja esta rodando")
+            return
+        self.ctx.runner.run(
+            f"nohup /usr/bin/sunshine > {self.sunshine_log_file} 2>&1 &",
+            shell=True,
+            check=False,
+            action="Iniciando Sunshine em segundo plano",
+            show_progress=False,
+        )
+
+    def status(self) -> None:
+        header(self, self.title, "Verificando Sunshine, KDE, UFW e portas")
+        package_ready = system_installed("sunshine")
+        binary_ready = command_exists("sunshine") or Path("/usr/bin/sunshine").exists()
+        process_ready = self._sunshine_running()
+        group_ready = self._user_in_group("input")
+        udev_ready = self._udev_rule_ready()
+        autostart_ready = self.autostart_file.exists() and self.autostart_file.read_text(encoding="utf-8", errors="ignore") == self._autostart_content()
+        launcher = self._find_existing_launcher()
+        launcher_ready = launcher is not None
+        service_conflict = self.user_service_file.exists()
+        ufw_ready = self._ufw_rules_ready()
+
+        print_lines(
+            self.ctx.logger,
+            [
+                f"{badge('pacote', Color.SUCCESS if package_ready else Color.WARNING)} {'instalado' if package_ready else 'ausente'}",
+                f"{badge('binario', Color.SUCCESS if binary_ready else Color.WARNING)} {'OK' if binary_ready else 'ausente'}",
+                f"{badge('processo', Color.SUCCESS if process_ready else Color.WARNING)} {'rodando' if process_ready else 'parado'}",
+                f"{badge('grupo-input', Color.SUCCESS if group_ready else Color.WARNING)} {'OK' if group_ready else 'usuario fora do grupo input'}",
+                f"{badge('udev', Color.SUCCESS if udev_ready else Color.WARNING)} {'OK' if udev_ready else 'regra ausente/diferente'} - {self.udev_rule_file}",
+                f"{badge('autostart', Color.SUCCESS if autostart_ready else Color.WARNING)} {'OK' if autostart_ready else 'ausente/diferente'} - {self.autostart_file}",
+                f"{badge('launcher', Color.SUCCESS if launcher_ready else Color.WARNING)} {launcher or 'ausente'}",
+                f"{badge('ufw', Color.SUCCESS if ufw_ready else Color.WARNING)} {'regras OK ou UFW inativo/ausente' if ufw_ready else 'UFW ativo sem todas as regras'}",
+                f"{badge('web', Color.INFO)} https://localhost:47990",
+            ],
+        )
+        if service_conflict:
+            self.ctx.logger.write(f"{badge('atencao', Color.WARNING)} sunshine.service de usuario existe: {self.user_service_file}")
+        self._print_ufw_status()
+        self._print_listening_ports()
+
+        required_ready = package_ready and binary_ready and group_ready and udev_ready and autostart_ready and launcher_ready and ufw_ready
+        if required_ready and not service_conflict:
+            self.mark_applied("Sunshine, permissoes, autostart, launcher e UFW estao aplicados.")
+        elif required_ready and service_conflict:
+            self.mark_attention("Sunshine esta configurado, mas existe sunshine.service de usuario que pode duplicar o autostart.", attention=["sunshine.service de usuario"])
+        else:
+            missing = []
+            if not package_ready:
+                missing.append("pacote sunshine")
+            if not group_ready:
+                missing.append("grupo input")
+            if not udev_ready:
+                missing.append("regra udev")
+            if not autostart_ready:
+                missing.append("autostart KDE")
+            if not launcher_ready:
+                missing.append("launcher desktop")
+            if not ufw_ready:
+                missing.append("regras UFW")
+            self.mark_pending(f"Sunshine ainda nao esta completo: {', '.join(missing)}.", missing=missing)
+
+    def _ufw_rules_ready(self) -> bool:
+        if not command_exists("ufw"):
+            return True
+        result = self.ctx.runner.run(["ufw", "status"], sudo=True, check=False, action="Verificando regras UFW do Sunshine", show_progress=False, quiet_success=True)
+        output = result.stdout if result and result.stdout else ""
+        if not re.search(r"Status:\s+active", output, re.IGNORECASE):
+            return True
+        return all(spec in output for _rule, spec in self.ufw_rules)
+
+    def _print_ufw_status(self) -> None:
+        if command_exists("ufw"):
+            self.ctx.runner.run(["ufw", "status", "verbose"], sudo=True, check=False, action="Status detalhado do UFW", show_progress=False)
+        else:
+            self.ctx.logger.write("UFW nao instalado.")
+
+    def _print_listening_ports(self) -> None:
+        if command_exists("ss"):
+            self.ctx.runner.run(
+                "ss -lntup 2>/dev/null | grep -E '47984|47989|47990|48010|47998|47999|48000' || true",
+                shell=True,
+                check=False,
+                action="Verificando portas Sunshine em escuta",
+                show_progress=False,
+            )
+        else:
+            self.ctx.logger.write("Comando ss nao encontrado.")
+
+    def undo(self) -> None:
+        self.ctx.logger.write("Undo remove autostart, fallback desktop, regra udev gerenciada e regras UFW. Pacote e configuracao interna do Sunshine sao preservados.")
+        self.ctx.runner.run(["pkill", "-u", self.ctx.user.name, "-x", "sunshine"], check=False, action="Parando processo Sunshine", show_progress=False)
+        self._remove_user_file(self.autostart_file)
+        self._remove_fallback_desktop_if_managed()
+        self._remove_udev_rule_if_managed()
+        self._remove_ufw_rules()
+
+    def _remove_user_file(self, path: Path) -> None:
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+        else:
+            path.unlink(missing_ok=True)
+
+    def _remove_fallback_desktop_if_managed(self) -> None:
+        if not self.fallback_desktop_file.exists():
+            if self.ctx.runner.dry_run:
+                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria fallback desktop se existisse: {self.fallback_desktop_file}")
+            return
+        if self._desktop_launches_sunshine(self.fallback_desktop_file):
+            self._remove_user_file(self.fallback_desktop_file)
+        else:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} fallback desktop parece customizado; preservando: {self.fallback_desktop_file}")
+
+    def _remove_udev_rule_if_managed(self) -> None:
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {self.udev_rule_file} se contiver a regra gerenciada")
+            return
+        if not self.udev_rule_file.exists():
+            return
+        if self.udev_rule_file.read_text(encoding="utf-8", errors="ignore") == self.udev_rule_content:
+            self.ctx.runner.run(["rm", "-f", str(self.udev_rule_file)], sudo=True, check=False, action="Removendo regra udev do Sunshine", show_progress=False)
+            self.ctx.runner.run(["udevadm", "control", "--reload-rules"], sudo=True, check=False, action="Recarregando regras udev", show_progress=False)
+        else:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} regra udev parece customizada; preservando: {self.udev_rule_file}")
+
+    def _remove_ufw_rules(self) -> None:
+        if not command_exists("ufw"):
+            self.ctx.logger.write("UFW nao instalado; nada para remover.")
+            return
+        if not self._ufw_active():
+            self.ctx.logger.write("UFW inativo; regras nao serao removidas.")
+            return
+        for _rule, delete_spec in self.ufw_rules:
+            self.ctx.runner.run(["ufw", "delete", "allow", delete_spec], sudo=True, check=False, action=f"Removendo regra UFW {delete_spec}", show_progress=False)
+        self.ctx.runner.run(["ufw", "reload"], sudo=True, check=False, action="Recarregando UFW", show_progress=False)
+
+
 ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
     UpdateSystemStep,
@@ -1497,4 +1807,5 @@ ALL_STEPS: tuple[type[Step], ...] = (
     AppsStep,
     NumLockStep,
     AntigravityStep,
+    SunshineStep,
 )

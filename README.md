@@ -11,7 +11,7 @@ O projeto substitui scripts shell longos por um CLI Python modular, com `apply`,
 
 - Suporte a Arch/CachyOS e Debian/Ubuntu.
 - Preparacao de Flatpak, Flathub, AppImage/FUSE e helper AUR quando aplicavel.
-- Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, NVIDIA/jogos, gestos KDE e Num Lock.
+- Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, NVIDIA/jogos, Sunshine/Moonlight, gestos KDE e Num Lock.
 - Integracao desktop para AppImages, incluindo Hydra Launcher com `StartupWMClass` correto no KDE Wayland.
 - Gestos KDE com `libinput-gestures` para abrir o Overview com swipe de 3 dedos para cima ou para baixo.
 - Execucao segura com dry-run, backups, confirmacoes para operacoes sensiveis e logs locais.
@@ -44,7 +44,7 @@ Executar pelo modulo Python:
 ```fish
 python -m postformat step 10 dry-run
 python -m postformat step 11 status
-python -m postformat step 09 apply
+python -m postformat step 13 apply
 ```
 
 ## Menus
@@ -86,6 +86,7 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 | `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
+| `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
 
 ## Detalhes Importantes
 
@@ -129,6 +130,43 @@ A etapa `00` centraliza o suporte AppImage:
 - Arch/CachyOS: `fuse2`.
 - Debian/Ubuntu: primeira opcao disponivel entre `libfuse2t64`, `libfuse2` e `fuse`.
 
+### Sunshine / Moonlight
+
+A etapa `13` instala e configura o Sunshine para streaming local com Moonlight:
+
+```fish
+bash scripts/13-instalar-configurar-sunshine-cachyos.sh
+python -m postformat step 13 status
+```
+
+Ela cria o autostart KDE em:
+
+```text
+~/.config/autostart/sunshine.desktop
+```
+
+O lancador no menu de aplicativos so e criado como fallback em:
+
+```text
+~/.local/share/applications/sunshine.desktop
+```
+
+Se o pacote do Sunshine ja fornecer um `.desktop`, o sistema preserva o lancador existente. A interface local fica em:
+
+```text
+https://localhost:47990
+```
+
+Quando o UFW estiver instalado e ativo, a etapa libera as portas do Sunshine/Moonlight:
+
+```text
+TCP 47984:47990
+TCP 48010
+UDP 47998:48000
+```
+
+O usuario precisa pertencer ao grupo `input`; se a etapa adicionar o grupo agora, faca logout/login ou reinicie antes de validar controles, mouse e gamepad.
+
 ## Seguranca E Confiabilidade
 
 - Nao execute como root.
@@ -171,7 +209,7 @@ python -m pytest
 ├── scripts/
 │   ├── 00-preparar-ecossistema-cachyos.sh
 │   ├── ...
-│   └── 12-instalar-antigravity-ide.sh
+│   └── 13-instalar-configurar-sunshine-cachyos.sh
 ├── tests/
 └── pyproject.toml
 ```

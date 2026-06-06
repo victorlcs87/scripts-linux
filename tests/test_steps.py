@@ -5,7 +5,7 @@ import pytest
 
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
-from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep
+from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
 from postformat.steps_base import StepContext
 
 
@@ -39,6 +39,118 @@ def test_all_steps_use_sequential_ids() -> None:
 
     assert ids == [f"{index:02d}" for index in range(len(ALL_STEPS))]
     assert all("." not in step_id for step_id in ids)
+
+
+def test_sunshine_dry_run_mentions_udev_autostart_ufw_and_desktop(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = SunshineStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.install_system_package", lambda pkg, runner: runner.logger.write(f"instalaria {pkg}"))
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "update-desktop-database"})
+    monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
+    monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "instalaria sunshine" in log
+    assert "85-sunshine-input.rules" in log
+    assert "autostart/sunshine.desktop" in log
+    assert ".local/share/applications/sunshine.desktop" in log
+    assert "ufw allow 47984:47990/tcp" in log
+    assert not step.autostart_file.exists()
+
+
+def test_sunshine_uses_existing_desktop_launcher_when_package_provides_one(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = SunshineStep(ctx)
+    launcher_dir = ctx.user.home / ".local/share/applications"
+    launcher_dir.mkdir(parents=True)
+    package_launcher = launcher_dir / "org.lizardbyte.sunshine.desktop"
+    package_launcher.write_text("[Desktop Entry]\nName=Sunshine\nExec=/usr/bin/sunshine\n", encoding="utf-8")
+
+    step._ensure_menu_launcher()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "lancador Sunshine ja fornecido" in log
+    assert not step.fallback_desktop_file.exists()
+
+
+def test_sunshine_fallback_desktop_content(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False
+    step = SunshineStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: False)
+    monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
+
+    step._ensure_menu_launcher()
+    text = step.fallback_desktop_file.read_text(encoding="utf-8")
+
+    assert "Name=Sunshine" in text
+    assert "Exec=/usr/bin/sunshine" in text
+    assert "Categories=Game;Network;" in text
+
+
+def test_sunshine_status_applied_when_everything_is_ready(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = SunshineStep(ctx)
+    launcher = ctx.user.home / ".local/share/applications/org.lizardbyte.sunshine.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("[Desktop Entry]\nName=Sunshine\nExec=/usr/bin/sunshine\n", encoding="utf-8")
+    step.autostart_file.parent.mkdir(parents=True)
+    step.autostart_file.write_text(step._autostart_content(), encoding="utf-8")
+
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr(step, "_sunshine_running", lambda: True)
+    monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
+    monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
+    monkeypatch.setattr(step, "_ufw_rules_ready", lambda: True)
+
+    step.status()
+
+    assert step.result.compliance == "aplicado"
+
+
+def test_sunshine_status_attention_when_user_service_exists(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = SunshineStep(ctx)
+    launcher = ctx.user.home / ".local/share/applications/org.lizardbyte.sunshine.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("[Desktop Entry]\nName=Sunshine\nExec=/usr/bin/sunshine\n", encoding="utf-8")
+    step.autostart_file.parent.mkdir(parents=True)
+    step.autostart_file.write_text(step._autostart_content(), encoding="utf-8")
+    step.user_service_file.parent.mkdir(parents=True)
+    step.user_service_file.write_text("[Service]\nExecStart=/usr/bin/sunshine\n", encoding="utf-8")
+
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr(step, "_sunshine_running", lambda: True)
+    monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
+    monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
+    monkeypatch.setattr(step, "_ufw_rules_ready", lambda: True)
+
+    step.status()
+
+    assert step.result.compliance == "atencao"
+    assert "sunshine.service" in step.result.summary
+
+
+def test_sunshine_undo_dry_run_mentions_managed_removals(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = SunshineStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name == "ufw")
+
+    step.undo()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "pkill -u tester -x sunshine" in log
+    assert "autostart/sunshine.desktop" in log
+    assert ".local/share/applications/sunshine.desktop" in log
+    assert "85-sunshine-input.rules" in log
+    assert "ufw delete allow 47984:47990/tcp" in log
 
 
 def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path, monkeypatch) -> None:
