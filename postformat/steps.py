@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -759,6 +760,37 @@ class RcloneStep(Step):
                 self.mark_pending("Remote do Google Drive ainda nao foi configurado.", missing=["remote Google Drive"])
                 return
             self.mark_done("Remote do Google Drive configurado manualmente e pronto para ativacao.")
+        token_test = self.ctx.runner.run(
+            ["rclone", "lsd", self.remote, "--max-depth", "0"],
+            check=False,
+            action="Validando token do Google Drive",
+            show_progress=False,
+            env_extra=rclone_env,
+        )
+        if token_test and token_test.returncode != 0:
+            self.ctx.logger.write(
+                f"{Color.WARNING}Token do Google Drive invalido ou expirado. Abrindo reconexao...{Color.RESET}"
+            )
+            self.ctx.runner.run(
+                ["rclone", "config", "reconnect", self.remote],
+                check=False,
+                action="Reconectando conta do Google Drive",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Autorize novamente o acesso ao Google Drive no navegador que sera aberto.",
+                env_extra=rclone_env,
+            )
+            recheck = self.ctx.runner.run(
+                ["rclone", "lsd", self.remote, "--max-depth", "0"],
+                check=False,
+                action="Revalidando token apos reconexao",
+                show_progress=False,
+                env_extra=rclone_env,
+            )
+            if recheck and recheck.returncode != 0:
+                self.mark_manual("Token ainda invalido apos reconexao. Verifique as permissoes OAuth.")
+                self.mark_pending("Token do Google Drive invalido.", missing=["token valido"])
+                return
         service_content = """[Unit]
 Description=Rclone Google Drive mount
 After=network-online.target
@@ -784,14 +816,24 @@ WantedBy=default.target
             self.ctx.runner.run(["systemctl", "--user", "daemon-reload"], check=False, action="Recarregando servicos do usuario", show_progress=False)
         if self._user_service_active("rclone-google-drive.service") and self._user_service_enabled("rclone-google-drive.service"):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} rclone-google-drive.service ja esta habilitado e ativo")
-            if self.result.status != "manual":
-                self.mark_skipped("Servico rclone-google-drive ja estava habilitado e ativo.")
-                self.mark_applied("Remote e servico do Google Drive estao aplicados.")
         else:
             self.ctx.runner.run(["systemctl", "--user", "enable", "--now", "rclone-google-drive.service"], check=False, action="Habilitando montagem automatica do Google Drive")
-            if self.result.status != "manual":
-                self.mark_done("Montagem automatica do Google Drive configurada.")
-                self.mark_applied("Montagem automatica do Google Drive configurada.")
+        self.ctx.runner.run(
+            ["loginctl", "enable-linger", self.ctx.user.name],
+            check=False,
+            action="Habilitando persistencia de sessao para servicos ao boot",
+        )
+        if not self.ctx.runner.dry_run:
+            time.sleep(3)
+            if not mount_dir.is_mount():
+                self.ctx.logger.write(
+                    f"{Color.WARNING}Aviso: {mount_dir} ainda nao esta montado. "
+                    f"Verifique com: systemctl --user status rclone-google-drive.service{Color.RESET}"
+                )
+                self.add_hint("Se a montagem nao aparecer, rode: rclone config reconnect 'Google Drive:'")
+        if self.result.status != "manual":
+            self.mark_done("Montagem automatica do Google Drive configurada.")
+            self.mark_applied("Montagem automatica do Google Drive configurada e persistente no boot.")
 
     def _user_service_active(self, name: str) -> bool:
         result = self.ctx.runner.run(["systemctl", "--user", "is-active", "--quiet", name], check=False)
@@ -813,10 +855,20 @@ WantedBy=default.target
             remote_ready = True
         service_active = self._user_service_active("rclone-google-drive.service")
         service_enabled = self._user_service_enabled("rclone-google-drive.service")
-        if remote_ready and service_active and service_enabled:
-            self.mark_applied("Remote e servico do Google Drive estao aplicados.")
+        linger_path = Path(f"/var/lib/systemd/linger/{self.ctx.user.name}")
+        linger_enabled = linger_path.exists()
+        mount_point = self.ctx.user.home / "GoogleDrive"
+        mount_active = mount_point.is_mount()
+        if not linger_enabled:
+            self.ctx.logger.write(f"{Color.WARNING}Aviso: linger nao habilitado — servico nao inicia no boot sem sessao ativa.{Color.RESET}")
+        if not mount_active:
+            self.ctx.logger.write(f"{Color.WARNING}Aviso: {mount_point} NAO esta montado.{Color.RESET}")
+        if remote_ready and service_active and service_enabled and mount_active and linger_enabled:
+            self.mark_applied("Remote, servico e montagem do Google Drive estao ativos e persistentes no boot.")
+        elif remote_ready and service_active and service_enabled and mount_active:
+            self.mark_attention("Montagem ativa, mas linger desabilitado — nao persiste no boot.", attention=["linger desabilitado"])
         elif remote_ready:
-            self.mark_attention("Remote existe, mas o servico do Google Drive precisa de atencao.")
+            self.mark_attention("Remote existe, mas o servico ou a montagem precisam de atencao.")
         else:
             self.mark_pending("Remote do Google Drive ainda nao esta configurado.", missing=["remote Google Drive"])
 
