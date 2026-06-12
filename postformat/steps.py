@@ -795,23 +795,37 @@ class RcloneStep(Step):
 Description=Rclone Google Drive mount
 After=network-online.target
 Wants=network-online.target
+OnFailure=rclone-google-drive-notify.service
+StartLimitBurst=3
+StartLimitIntervalSec=120
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/rclone mount 'Google Drive:' %h/GoogleDrive --vfs-cache-mode writes --dir-cache-time 72h --poll-interval 15s
 ExecStop=/usr/bin/fusermount3 -u %h/GoogleDrive
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 
 [Install]
 WantedBy=default.target
 """
-        service_was_current = service_file.exists() and service_file.read_text(encoding="utf-8", errors="ignore") == service_content
-        write_text(
-            service_file,
-            service_content,
-            self.ctx.runner,
+        notify_service_file = service_dir / "rclone-google-drive-notify.service"
+        notify_service_content = """\
+[Unit]
+Description=Notificacao de falha na montagem do Google Drive
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao montado" "Token pode ter expirado. Para corrigir, execute:\\npython -m postformat step 07 apply"
+"""
+        service_was_current = (
+            service_file.exists()
+            and service_file.read_text(encoding="utf-8", errors="ignore") == service_content
+            and notify_service_file.exists()
+            and notify_service_file.read_text(encoding="utf-8", errors="ignore") == notify_service_content
         )
+        write_text(service_file, service_content, self.ctx.runner)
+        write_text(notify_service_file, notify_service_content, self.ctx.runner)
         if not service_was_current or self.ctx.runner.dry_run:
             self.ctx.runner.run(["systemctl", "--user", "daemon-reload"], check=False, action="Recarregando servicos do usuario", show_progress=False)
         if self._user_service_active("rclone-google-drive.service") and self._user_service_enabled("rclone-google-drive.service"):
@@ -873,12 +887,16 @@ WantedBy=default.target
             self.mark_pending("Remote do Google Drive ainda nao esta configurado.", missing=["remote Google Drive"])
 
     def undo(self) -> None:
-        service_file = self.ctx.user.home / ".config/systemd/user/rclone-google-drive.service"
+        service_dir = self.ctx.user.home / ".config/systemd/user"
+        service_file = service_dir / "rclone-google-drive.service"
+        notify_service_file = service_dir / "rclone-google-drive-notify.service"
         self.ctx.runner.run(["systemctl", "--user", "disable", "--now", "rclone-google-drive.service"], check=False)
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {service_file}")
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {notify_service_file}")
         else:
             service_file.unlink(missing_ok=True)
+            notify_service_file.unlink(missing_ok=True)
 
 
 class FstabStep(Step):
