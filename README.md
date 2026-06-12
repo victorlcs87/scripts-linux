@@ -81,8 +81,8 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 | `05` | NVIDIA / jogos | Diagnostica sessao grafica, GPUs, Steam e Heroic. |
 | `06` | Git / GitHub | Instala Git e clona/atualiza o repositorio base. |
 | `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
-| `08` | fstab | Configura montagens por label com backup e confirmacao. |
-| `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos para cima e para baixo. |
+| `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
+| `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |
 | `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
@@ -92,7 +92,9 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 
 ### Gestos KDE
 
-A etapa `09` usa `libinput-gestures` e cria:
+A etapa `09` so se aplica a maquinas com touchpad (notebooks). Em desktops sem touchpad ela e pulada automaticamente, sem instalar nada.
+
+Quando aplicavel, usa `libinput-gestures` e cria:
 
 ```text
 ~/.config/libinput-gestures.conf

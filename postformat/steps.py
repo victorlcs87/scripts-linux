@@ -505,21 +505,31 @@ class NvidiaSteamStep(Step):
 
     def _probe_integrated_gl(self) -> ProbeResult:
         if not command_exists("glxinfo"):
-            return ProbeResult("GPU integrada / OpenGL", "problem", "glxinfo nao esta instalado.", "Instale mesa-utils para validar o OpenGL.")
+            return ProbeResult("OpenGL (GPU primaria)", "problem", "glxinfo nao esta instalado.", "Instale mesa-utils para validar o OpenGL.")
         result = self._run_probe(["glxinfo", "-B"], "Consultando capacidades OpenGL")
         output = self._combined_output(result).lower()
         if result.returncode == 0 and "direct rendering: yes" in output and ("opengl renderer string:" in output or "vendor:" in output):
             summary = self._extract_renderer_summary(result.stdout) or "OpenGL respondeu corretamente."
-            return ProbeResult("GPU integrada / OpenGL", "ok", summary)
+            return ProbeResult("OpenGL (GPU primaria)", "ok", summary)
         return ProbeResult(
-            "GPU integrada / OpenGL",
+            "OpenGL (GPU primaria)",
             "problem",
             "OpenGL basico nao respondeu como esperado.",
             self._truncate_probe_output(result),
         )
 
+    def _gpu_count(self) -> int:
+        if not command_exists("lspci"):
+            return 0
+        result = self._run_probe(["lspci"], "Listando dispositivos PCI")
+        if result.returncode != 0:
+            return 0
+        return sum(1 for line in result.stdout.splitlines() if re.search(r"vga|3d controller", line, re.IGNORECASE))
+
     def _probe_prime_gl(self) -> ProbeResult:
         if not command_exists("prime-run"):
+            if self._gpu_count() == 1:
+                return ProbeResult("GPU NVIDIA dedicada", "ok", "nao aplicavel: maquina com GPU unica (prime-run e para notebooks hibridos).")
             return ProbeResult("GPU NVIDIA dedicada", "warn", "prime-run nao esta disponivel no sistema.")
         if not command_exists("glxinfo"):
             return ProbeResult("GPU NVIDIA dedicada", "problem", "glxinfo nao esta instalado para testar o prime-run.")
@@ -822,7 +832,7 @@ WantedBy=default.target
 class FstabStep(Step):
     id = "08"
     title = "Montagem de discos / fstab"
-    labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX")
+    labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX", "BACKUP")
     begin = "# BEGIN pos-formatacao-cachyos"
     end = "# END pos-formatacao-cachyos"
 
@@ -850,11 +860,15 @@ class FstabStep(Step):
 
     def _build_lines(self) -> list[str]:
         lines = []
+        self._found_labels: list[str] = []
         for label in self.labels:
             device = self._blkid_label(label)
             if not device:
+                if self.ctx.runner.dry_run:
+                    self._found_labels.append(label)
                 self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Label nao encontrado: {label}")
                 continue
+            self._found_labels.append(label)
             uuid = self._blkid_value(device, "UUID")
             fs = self._blkid_value(device, "TYPE")
             if not uuid or not fs:
@@ -877,10 +891,15 @@ class FstabStep(Step):
         return result.stdout.strip() if result and result.stdout else ""
 
     def _mountpoint(self, label: str) -> str:
-        return {"WINDOWS": "/mnt/windows", "DADOS WINDOWS": "/mnt/dados-windows", "JOGOS LINUX": "/mnt/jogos-linux"}[label]
+        return {
+            "WINDOWS": "/mnt/windows",
+            "DADOS WINDOWS": "/mnt/dados-windows",
+            "JOGOS LINUX": "/mnt/jogos-linux",
+            "BACKUP": "/mnt/backup",
+        }[label]
 
     def _ensure_mountpoints(self) -> None:
-        for label in self.labels:
+        for label in getattr(self, "_found_labels", self.labels):
             mountpoint = self._mountpoint(label)
             if Path(mountpoint).exists():
                 self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {mountpoint} ja existe")
@@ -893,7 +912,7 @@ class FstabStep(Step):
     def status(self) -> None:
         header(self, self.title)
         self.ctx.runner.run(["lsblk", "-f"], check=False)
-        self.ctx.runner.run(["grep", "-n", "pos-formatacao-cachyos\\|/mnt/windows\\|/mnt/dados-windows\\|/mnt/jogos-linux", "/etc/fstab"], check=False)
+        self.ctx.runner.run(["grep", "-n", "pos-formatacao-cachyos\\|/mnt/windows\\|/mnt/dados-windows\\|/mnt/jogos-linux\\|/mnt/backup", "/etc/fstab"], check=False)
         fstab = Path("/etc/fstab")
         text = fstab.read_text(encoding="utf-8", errors="ignore")
         if self.begin in text and self.end in text:
@@ -916,6 +935,11 @@ class GesturesStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
+        if not self._has_touchpad():
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nenhum touchpad detectado nesta maquina; gestos nao se aplicam a desktops.")
+            self.mark_skipped("Maquina sem touchpad; gestos nao se aplicam.")
+            self.mark_applied("Nao aplicavel: maquina sem touchpad.")
+            return
         self.ctx.logger.write("Configuracao principal desta etapa: libinput-gestures com gestos de 3 dedos para Overview.")
         install_system_or_aur("libinput-gestures", "libinput-gestures", self.ctx.runner)
         input_group_ready = self._ensure_input_group()
@@ -930,6 +954,14 @@ class GesturesStep(Step):
             self.mark_manual(f"Execute 'sudo gpasswd -a {self.ctx.user.name} input' e faca logout/login ou reinicie.")
             return
         self.mark_done("Gestos configurados com libinput-gestures.")
+
+    def _has_touchpad(self) -> bool:
+        devices = Path("/proc/bus/input/devices")
+        try:
+            text = devices.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return True
+        return "touchpad" in text.lower()
 
     def _ensure_input_group(self) -> bool:
         if self._user_in_group("input"):
@@ -1000,6 +1032,10 @@ exit 1
     def status(self) -> None:
         header(self, self.title, "Verificando pacote, servico e arquivos de gestos")
         self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
+        if not self._has_touchpad():
+            self.ctx.logger.write(f"{badge('touchpad', Color.WARNING)} nenhum touchpad detectado; gestos nao se aplicam a esta maquina.")
+            self.mark_applied("Nao aplicavel: maquina sem touchpad.")
+            return
         package_ready = system_installed("libinput-gestures")
         group_ready = self._user_in_group("input")
         service_ready = self._libinput_gestures_running()

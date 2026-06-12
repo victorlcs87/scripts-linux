@@ -5,7 +5,7 @@ import pytest
 
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
-from postformat.steps import ALL_STEPS, AppsStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
+from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
 from postformat.steps_base import StepContext
 
 
@@ -318,7 +318,7 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
     log = ctx.logger.path.read_text(encoding="utf-8")
 
     assert "Sessao grafica: wayland detectado." in log
-    assert "GPU integrada / OpenGL: renderer detectado: Mesa Intel(R) Graphics." in log
+    assert "OpenGL (GPU primaria): renderer detectado: Mesa Intel(R) Graphics." in log
     assert "GPU NVIDIA dedicada: renderer detectado: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2." in log
     assert "Driver NVIDIA: nvidia-smi respondeu corretamente" in log
     assert "Tudo certo com sessao grafica, GPUs e launchers avaliados." in log
@@ -411,7 +411,7 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
 
-    assert "GPU integrada / OpenGL: OpenGL basico nao respondeu como esperado." in log
+    assert "OpenGL (GPU primaria): OpenGL basico nao respondeu como esperado." in log
     assert "Detalhes: direct rendering: No OpenGL renderer string: Mesa Intel(R) Graphics" in log
 
 
@@ -583,6 +583,7 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
+    monkeypatch.setattr(step, "_has_touchpad", lambda: True)
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
     monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
     monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
@@ -598,6 +599,7 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
+    monkeypatch.setattr(step, "_has_touchpad", lambda: True)
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libinput-gestures")
     monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "libinput-gestures-setup")
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
@@ -610,6 +612,92 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     assert "grupo input" in step.result.attention_items
     assert "servico libinput-gestures" in step.result.attention_items
     assert "gestos up/down" in step.result.attention_items
+
+
+def test_fstab_includes_backup_label_and_mountpoint(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = FstabStep(ctx)
+
+    assert "BACKUP" in step.labels
+    assert step._mountpoint("BACKUP") == "/mnt/backup"
+    assert step._mountpoint("WINDOWS") == "/mnt/windows"
+
+
+def test_fstab_build_lines_skips_missing_labels(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = FstabStep(ctx)
+    devices = {"WINDOWS": "/dev/nvme1n1p3", "BACKUP": "/dev/sda1"}
+    values = {
+        ("/dev/nvme1n1p3", "UUID"): "1111-AAAA",
+        ("/dev/nvme1n1p3", "TYPE"): "ntfs",
+        ("/dev/sda1", "UUID"): "2222-BBBB",
+        ("/dev/sda1", "TYPE"): "ntfs",
+    }
+
+    monkeypatch.setattr(step, "_blkid_label", lambda label: devices.get(label, ""))
+    monkeypatch.setattr(step, "_blkid_value", lambda device, key: values[(device, key)])
+
+    lines = step._build_lines()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert any("UUID=1111-AAAA /mnt/windows ntfs" in line for line in lines)
+    assert any("UUID=2222-BBBB /mnt/backup ntfs" in line for line in lines)
+    assert len(lines) == 2
+    assert "Label nao encontrado: DADOS WINDOWS" in log
+    assert "Label nao encontrado: JOGOS LINUX" in log
+
+
+def test_gestures_apply_skips_machine_without_touchpad(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+
+    monkeypatch.setattr(step, "_has_touchpad", lambda: False)
+    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"))
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert step.result.status == "skipped"
+    assert step.result.compliance == "aplicado"
+    assert "nenhum touchpad detectado" in log
+
+
+def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = GesturesStep(ctx)
+
+    monkeypatch.setattr(step, "_has_touchpad", lambda: False)
+    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+
+    step.status()
+
+    assert step.result.compliance == "aplicado"
+    assert "sem touchpad" in step.result.summary
+
+
+def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = NvidiaSteamStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr(step, "_gpu_count", lambda: 1)
+
+    probe = step._probe_prime_gl()
+
+    assert probe.status == "ok"
+    assert "nao aplicavel" in probe.summary
+
+
+def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = NvidiaSteamStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr(step, "_gpu_count", lambda: 2)
+
+    probe = step._probe_prime_gl()
+
+    assert probe.status == "warn"
 
 
 def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None:
