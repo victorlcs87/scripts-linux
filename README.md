@@ -87,6 +87,7 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
+| `14` | Inventario de Hardware | Coleta CPU, RAM, GPUs, discos, PCI/USB e dmidecode/inxi e salva um relatorio estavel para suporte e para outras etapas consultarem. |
 
 ## Detalhes Importantes
 
@@ -168,6 +169,16 @@ UDP 47998:48000
 ```
 
 O usuario precisa pertencer ao grupo `input`; se a etapa adicionar o grupo agora, faca logout/login ou reinicie antes de validar controles, mouse e gamepad.
+
+### Inventario de Hardware
+
+A etapa `14` coleta um retrato do hardware (CPU, RAM, GPUs, discos, PCI/USB e, quando disponiveis, `dmidecode` e `inxi`) e grava num caminho estavel:
+
+```text
+~/.cache/scripts-linux/hardware/hardware-info.txt
+```
+
+Esse mesmo modulo (`postformat/hardware.py`) e a fonte unica de deteccao de hardware do sistema: a etapa de gestos (`09`) e a validacao de GPU (`05`) consultam-no para decidir touchpad e GPUs. O `dry-run` apenas lista o que seria coletado, e o `undo` remove o relatorio salvo.
 
 ## Seguranca E Confiabilidade
 

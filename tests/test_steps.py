@@ -5,7 +5,8 @@ import pytest
 
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
-from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
+from postformat import hardware
+from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, HardwareStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
 from postformat.steps_base import StepContext
 
 
@@ -583,7 +584,7 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr(step, "_has_touchpad", lambda: True)
+    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
     monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
     monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
@@ -599,7 +600,7 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr(step, "_has_touchpad", lambda: True)
+    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libinput-gestures")
     monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "libinput-gestures-setup")
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
@@ -651,7 +652,7 @@ def test_gestures_apply_skips_machine_without_touchpad(tmp_path: Path, monkeypat
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr(step, "_has_touchpad", lambda: False)
+    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
     monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"))
 
     step.apply()
@@ -666,7 +667,7 @@ def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr(step, "_has_touchpad", lambda: False)
+    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
     monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
@@ -752,3 +753,63 @@ def test_run_all_clears_screen_before_first_step(tmp_path: Path, monkeypatch) ->
 
     assert call_order[0] == "clear"
     assert "run" in call_order
+
+
+def test_hardware_list_gpus_parses_lspci_lines() -> None:
+    lspci = (
+        "00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+        "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n"
+        "00:1f.3 Audio device: Intel Cannon Lake PCH cAVS\n"
+    )
+
+    gpus = hardware.list_gpus(lspci)
+
+    assert gpus == ["Intel UHD Graphics 630", "NVIDIA Corporation GA107M [GeForce RTX 3050]"]
+
+
+def test_hardware_nvidia_gpu_name_extracts_from_smi() -> None:
+    smi = "| 0  NVIDIA GeForce RTX 3050  Off | 00000000:01:00.0 |\n"
+
+    assert hardware.nvidia_gpu_name(smi) == "0 NVIDIA GeForce RTX 3050 Off | 00000000:01:00.0"
+    assert hardware.nvidia_gpu_name("nada aqui") is None
+
+
+def test_hardware_has_touchpad_reads_input_devices(monkeypatch) -> None:
+    monkeypatch.setattr(hardware.Path, "read_text", lambda self, **_kw: "N: Name=\"SynPS/2 Synaptics TouchPad\"")
+    assert hardware.has_touchpad() is True
+
+
+def test_hardware_step_dry_run_does_not_write_report(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = HardwareStep(ctx)
+
+    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.hardware.command_exists", lambda name: True)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "Inventario de Hardware" in log
+    assert not step.report_file.exists()
+    assert step.result.status == "done"
+
+
+def test_hardware_step_status_pending_without_report(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = HardwareStep(ctx)
+
+    step.status()
+
+    assert step.result.compliance == "pendente"
+
+
+def test_hardware_step_status_applied_with_existing_report(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = HardwareStep(ctx)
+    destino = step.report_file
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text("RELATORIO DE HARDWARE\n", encoding="utf-8")
+
+    step.status()
+
+    assert step.result.compliance == "aplicado"

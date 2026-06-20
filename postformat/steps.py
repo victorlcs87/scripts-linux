@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .core import (
@@ -26,6 +27,7 @@ from .core import (
     write_text,
     write_text_sudo,
 )
+from . import hardware
 from .desktop import DesktopEntry, install_desktop_entry
 from .installers import (
     aur_helper,
@@ -525,7 +527,7 @@ class NvidiaSteamStep(Step):
         result = self._run_probe(["lspci"], "Listando dispositivos PCI")
         if result.returncode != 0:
             return 0
-        return sum(1 for line in result.stdout.splitlines() if re.search(r"vga|3d controller", line, re.IGNORECASE))
+        return len(hardware.list_gpus(result.stdout))
 
     def _probe_prime_gl(self) -> ProbeResult:
         if not command_exists("prime-run"):
@@ -552,7 +554,7 @@ class NvidiaSteamStep(Step):
         result = self._run_probe(["nvidia-smi"], "Verificando driver NVIDIA")
         output = self._combined_output(result).lower()
         if result.returncode == 0 and "nvidia-smi" in output and "gpu" in output:
-            gpu_name = self._extract_nvidia_gpu_name(result.stdout)
+            gpu_name = hardware.nvidia_gpu_name(result.stdout)
             summary = f"nvidia-smi respondeu corretamente ({gpu_name})." if gpu_name else "nvidia-smi respondeu corretamente."
             return ProbeResult("Driver NVIDIA", "ok", summary)
         return ProbeResult(
@@ -628,13 +630,6 @@ class NvidiaSteamStep(Step):
             if line.lower().startswith("opengl renderer string:"):
                 value = line.split(":", 1)[1].strip()
                 return f"renderer detectado: {value}."
-        return ""
-
-    def _extract_nvidia_gpu_name(self, output: str) -> str:
-        for raw_line in output.splitlines():
-            if "NVIDIA GeForce" in raw_line or "NVIDIA " in raw_line:
-                cleaned = " ".join(raw_line.strip("| ").split())
-                return cleaned
         return ""
 
     def _combined_output(self, result: subprocess.CompletedProcess[str]) -> str:
@@ -1005,7 +1000,7 @@ class GesturesStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
-        if not self._has_touchpad():
+        if not hardware.has_touchpad():
             self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nenhum touchpad detectado nesta maquina; gestos nao se aplicam a desktops.")
             self.mark_skipped("Maquina sem touchpad; gestos nao se aplicam.")
             self.mark_applied("Nao aplicavel: maquina sem touchpad.")
@@ -1024,14 +1019,6 @@ class GesturesStep(Step):
             self.mark_manual(f"Execute 'sudo gpasswd -a {self.ctx.user.name} input' e faca logout/login ou reinicie.")
             return
         self.mark_done("Gestos configurados com libinput-gestures.")
-
-    def _has_touchpad(self) -> bool:
-        devices = Path("/proc/bus/input/devices")
-        try:
-            text = devices.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            return True
-        return "touchpad" in text.lower()
 
     def _ensure_input_group(self) -> bool:
         if self._user_in_group("input"):
@@ -1102,7 +1089,7 @@ exit 1
     def status(self) -> None:
         header(self, self.title, "Verificando pacote, servico e arquivos de gestos")
         self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
-        if not self._has_touchpad():
+        if not hardware.has_touchpad():
             self.ctx.logger.write(f"{badge('touchpad', Color.WARNING)} nenhum touchpad detectado; gestos nao se aplicam a esta maquina.")
             self.mark_applied("Nao aplicavel: maquina sem touchpad.")
             return
@@ -1899,6 +1886,64 @@ class SunshineStep(Step):
         self.ctx.runner.run(["ufw", "reload"], sudo=True, check=False, action="Recarregando UFW", show_progress=False)
 
 
+class HardwareStep(Step):
+    id = "14"
+    title = "Inventario de Hardware"
+
+    @property
+    def report_file(self) -> Path:
+        return hardware.report_path(self.ctx.user)
+
+    def apply(self) -> None:
+        header(self, self.title, "Coletando informacoes de hardware e salvando relatorio")
+        self._ensure_tools()
+        destino = hardware.collect_report(self.ctx)
+        if self.ctx.runner.dry_run:
+            self.mark_done("Coleta simulada (dry-run); nenhum relatorio gravado.")
+            return
+        facts = hardware.read_facts()
+        self.ctx.logger.write("")
+        for line in hardware.facts_summary(facts):
+            self.ctx.logger.write(f"{Color.GREEN}-{Color.RESET} {line}")
+        self.ctx.logger.write("")
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} relatorio salvo em {destino}")
+        self.add_hint(f"Compartilhe o arquivo quando precisar de suporte: {destino}")
+        self.mark_done(f"Inventario coletado e salvo em {destino}.")
+        self.mark_applied("Inventario de hardware coletado.", items=hardware.facts_summary(facts))
+
+    def _ensure_tools(self) -> None:
+        # Ferramentas opcionais que enriquecem o relatorio; nao travam se faltarem.
+        if not command_exists("dmidecode"):
+            install_system_package("dmidecode", self.ctx.runner)
+        if not command_exists("inxi"):
+            install_system_or_aur("inxi", "inxi", self.ctx.runner)
+
+    def status(self) -> None:
+        header(self, self.title, "Verificando ultimo inventario de hardware coletado")
+        destino = self.report_file
+        if not destino.exists():
+            self.ctx.logger.write(f"Nenhum inventario coletado ainda em {destino}")
+            self.mark_pending("Nenhum inventario de hardware foi coletado ainda.", missing=[str(destino)])
+            return
+        mtime = datetime.fromtimestamp(destino.stat().st_mtime)
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} relatorio em {destino}")
+        self.ctx.logger.write(f"Ultima coleta: {mtime:%Y-%m-%d %H:%M:%S}")
+        facts = hardware.read_facts()
+        for line in hardware.facts_summary(facts):
+            self.ctx.logger.write(f"  - {line}")
+        self.mark_applied(f"Inventario disponivel (coletado em {mtime:%Y-%m-%d %H:%M}).")
+
+    def undo(self) -> None:
+        destino = self.report_file
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {destino}")
+            return
+        if destino.exists():
+            self.ctx.runner.run(["rm", "-f", str(destino)], check=False, action="Removendo inventario de hardware", show_progress=False)
+        else:
+            self.ctx.logger.write(f"Nada para remover; {destino} nao existe.")
+
+
 ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
     UpdateSystemStep,
@@ -1914,4 +1959,5 @@ ALL_STEPS: tuple[type[Step], ...] = (
     NumLockStep,
     AntigravityStep,
     SunshineStep,
+    HardwareStep,
 )
