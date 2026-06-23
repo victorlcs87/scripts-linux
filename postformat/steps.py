@@ -2027,9 +2027,13 @@ class UpdateAppImagesStep(Step):
 
         # Comparar com versao instalada
         installed_tag = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
-        if installed_tag and installed_tag == latest_tag:
+        import os as _os
+        app_ok = appimage_path.exists() and _os.access(str(appimage_path), _os.X_OK)
+        if installed_tag and installed_tag == latest_tag and app_ok:
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja esta na versao mais recente ({latest_tag}).")
             return "current"
+        if installed_tag and installed_tag == latest_tag and not app_ok:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} {name} marcado como {latest_tag} mas arquivo ausente ou nao-executavel. Forcando re-download.")
 
         if installed_tag:
             self.ctx.logger.write(f"Atualizando {name}: {installed_tag} → {latest_tag}")
@@ -2048,12 +2052,18 @@ class UpdateAppImagesStep(Step):
             if was_running:
                 self._relaunch(appimage_path, name)
             return "current"
-        self.ctx.runner.run(
+        chmod_result = self.ctx.runner.run(
             ["chmod", "+x", str(appimage_path)],
             check=False,
             action=f"Tornando {name} executavel",
             show_progress=False,
         )
+        chmod_ok = chmod_result is None or chmod_result.returncode == 0
+        if not chmod_ok:
+            self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} Falha ao tornar {name} executavel. Versao nao registrada.")
+            if was_running:
+                self._relaunch(appimage_path, name)
+            return "current"
         if not self.ctx.runner.dry_run:
             version_file.write_text(latest_tag + "\n", encoding="utf-8")
         else:
