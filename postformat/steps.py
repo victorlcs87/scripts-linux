@@ -2036,11 +2036,18 @@ class UpdateAppImagesStep(Step):
         else:
             self.ctx.logger.write(f"Baixando {name} versao {latest_tag} (sem versao registrada localmente)")
 
-        self.ctx.runner.run(
+        was_running = self._kill_if_running(appimage_path, name)
+
+        dl = self.ctx.runner.run(
             ["curl", "-L", url, "-o", str(appimage_path)],
             check=False,
             action=f"Baixando {name} {latest_tag}",
         )
+        if dl is not None and dl.returncode != 0:
+            self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} Falha ao baixar {name} (codigo {dl.returncode}). Versao nao registrada.")
+            if was_running:
+                self._relaunch(appimage_path, name)
+            return "current"
         self.ctx.runner.run(
             ["chmod", "+x", str(appimage_path)],
             check=False,
@@ -2052,7 +2059,48 @@ class UpdateAppImagesStep(Step):
         else:
             self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} gravaria versao {latest_tag} em {version_file}")
         self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} atualizado para {latest_tag}.")
+        if was_running:
+            self._relaunch(appimage_path, name)
         return "updated"
+
+    def _kill_if_running(self, appimage_path: Path, name: str) -> bool:
+        """Encerra o processo do AppImage se estiver rodando. Retorna True se estava rodando."""
+        result = subprocess.run(
+            ["pgrep", "-f", str(appimage_path)],
+            capture_output=True,
+            text=True,
+        )
+        pids = result.stdout.strip().split() if result.stdout.strip() else []
+        if not pids:
+            return False
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} encerraria {name} (PIDs: {', '.join(pids)}) antes de atualizar")
+            return True
+        self.ctx.logger.write(f"Encerrando {name} (PIDs: {', '.join(pids)}) para atualizar...")
+        subprocess.run(["kill", "-TERM"] + pids, capture_output=True)
+        time.sleep(2)
+        # Garante encerramento caso SIGTERM nao tenha sido suficiente
+        still = subprocess.run(["pgrep", "-f", str(appimage_path)], capture_output=True, text=True)
+        if still.stdout.strip():
+            subprocess.run(["kill", "-KILL"] + still.stdout.strip().split(), capture_output=True)
+            time.sleep(1)
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} encerrado.")
+        return True
+
+    def _relaunch(self, appimage_path: Path, name: str) -> None:
+        """Relanca o AppImage em segundo plano apos a atualizacao."""
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} relancaria {name} em segundo plano")
+            return
+        self.ctx.logger.write(f"Relancando {name}...")
+        subprocess.Popen(
+            [str(appimage_path)],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} relancado em segundo plano.")
 
     def status(self) -> None:
         header(self, self.title, "Versoes instaladas de AppImages")
