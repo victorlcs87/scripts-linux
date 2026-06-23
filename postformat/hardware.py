@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
+import socket
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .core import UserInfo, command_exists, write_text
+from .core import Color, UserInfo, badge, command_exists, write_text
 from .platform import current_distro
 from .steps_base import StepContext
 
@@ -26,8 +28,14 @@ class HardwareFacts:
     gpus: list[str] = field(default_factory=list)
     has_nvidia: bool = False
     nvidia_gpu_name: str | None = None
+    nvidia_driver_version: str = ""
     has_touchpad: bool = False
     is_laptop: bool = False
+    hostname: str = ""
+    os_pretty: str = ""
+    kernel: str = ""
+    disks: list[str] = field(default_factory=list)
+    desktop: str = ""
 
 
 def _capture(cmd: list[str]) -> str:
@@ -72,14 +80,29 @@ def list_gpus(output: str | None = None) -> list[str]:
 
 
 def nvidia_gpu_name(output: str | None = None) -> str | None:
-    """Extrai o nome da GPU NVIDIA da saida do `nvidia-smi` (ou None)."""
-    text = output if output is not None else _capture(["nvidia-smi"])
+    """Extrai o nome da GPU NVIDIA (ou None se ausente)."""
+    if output is None:
+        out = _capture(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+        if out.strip():
+            return out.strip().splitlines()[0].strip()
+    text = output or ""
     for raw_line in text.splitlines():
-        if "NVIDIA GeForce" in raw_line or "NVIDIA " in raw_line:
+        if re.search(r"GeForce|Quadro|Tesla|RTX|GTX|MX\d", raw_line):
             cleaned = " ".join(raw_line.strip("| ").split())
             if cleaned:
                 return cleaned
     return None
+
+
+def _nvidia_driver_version() -> str:
+    try:
+        v = Path("/sys/module/nvidia/version").read_text(encoding="utf-8").strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    out = _capture(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"])
+    return out.strip().splitlines()[0].strip() if out.strip() else ""
 
 
 def _cpu_model() -> str:
@@ -106,6 +129,42 @@ def _ram_total() -> str:
     return f"{gib:.1f} GiB"
 
 
+def _hostname() -> str:
+    try:
+        return Path("/etc/hostname").read_text(encoding="utf-8").strip()
+    except OSError:
+        return socket.gethostname()
+
+
+def _os_pretty() -> str:
+    try:
+        text = Path("/etc/os-release").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if line.startswith("PRETTY_NAME="):
+            return line.split("=", 1)[1].strip().strip('"')
+    return ""
+
+
+def _kernel_version() -> str:
+    return _capture(["uname", "-r"]).strip()
+
+
+def _list_disks() -> list[str]:
+    out = _capture(["lsblk", "-d", "-o", "NAME,SIZE", "--noheadings"])
+    disks = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not re.match(r"^(loop|zram)", parts[0]):
+            disks.append(f"{parts[0]}  {parts[1]}")
+    return disks
+
+
+def _desktop_env() -> str:
+    return os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION", "")
+
+
 def read_facts() -> HardwareFacts:
     """Fonte unica de fatos de hardware para qualquer etapa que precise."""
     gpus = list_gpus()
@@ -117,8 +176,14 @@ def read_facts() -> HardwareFacts:
         gpus=gpus,
         has_nvidia=has_nvidia,
         nvidia_gpu_name=nvidia_name,
+        nvidia_driver_version=_nvidia_driver_version() if has_nvidia else "",
         has_touchpad=has_touchpad(),
         is_laptop=is_laptop(),
+        hostname=_hostname(),
+        os_pretty=_os_pretty(),
+        kernel=_kernel_version(),
+        disks=_list_disks(),
+        desktop=_desktop_env(),
     )
 
 
@@ -133,6 +198,48 @@ def facts_summary(facts: HardwareFacts) -> list[str]:
         f"Tipo: {'notebook' if facts.is_laptop else 'desktop'}",
     ]
     return lines
+
+
+def render_summary(facts: HardwareFacts) -> list[str]:
+    """Painel visual estilo fastfetch com os dados coletados."""
+    rows: list[tuple[str, str, str]] = [
+        ("host",   facts.hostname  or "desconhecido", Color.INFO),
+        ("os",     facts.os_pretty or "desconhecido", Color.INFO),
+        ("kernel", facts.kernel    or "desconhecido", Color.INFO),
+        ("tipo",   "Notebook" if facts.is_laptop else "Desktop", Color.ACCENT),
+        ("cpu",    facts.cpu_model or "desconhecida",  Color.ACCENT),
+        ("ram",    facts.ram_total or "desconhecida",  Color.ACCENT),
+    ]
+    for gpu in (facts.gpus or []):
+        is_nvidia = "nvidia" in gpu.lower()
+        display = (facts.nvidia_gpu_name or gpu) if is_nvidia else gpu
+        tone = Color.WARNING if is_nvidia else Color.SUCCESS
+        rows.append(("gpu", display, tone))
+        if is_nvidia and facts.nvidia_driver_version:
+            rows.append(("driver", facts.nvidia_driver_version, Color.WARNING))
+    for disk in (facts.disks or []):
+        rows.append(("disco", disk, Color.MUTED))
+    if facts.desktop:
+        rows.append(("de", facts.desktop, Color.MUTED))
+
+    W = 55  # largura interna visivel (sem os │)
+    title = "  Resumo de Hardware"
+    sep = f"{Color.BOX}├{'─' * W}┤{Color.RESET}"
+
+    out: list[str] = []
+    out.append(f"{Color.BOX}╭{'─' * W}╮{Color.RESET}")
+    out.append(f"{Color.BOX}│{Color.BOLD}{Color.TITLE}{title}{' ' * (W - len(title))}│{Color.RESET}")
+    out.append(sep)
+    for label, value, tone in rows:
+        lbl_plain = f"[{label}]"
+        lbl_colored = badge(label, tone)
+        prefix_visible = 2 + len(lbl_plain) + 2   # "  [label]  "
+        max_val = W - prefix_visible - 1
+        val = value[:max_val] if len(value) > max_val else value
+        padding = W - prefix_visible - len(val)
+        out.append(f"{Color.BOX}│{Color.RESET}  {lbl_colored}  {val}{' ' * padding}{Color.BOX}│{Color.RESET}")
+    out.append(f"{Color.BOX}╰{'─' * W}╯{Color.RESET}")
+    return out
 
 
 def _missing_tool_hint(tool: str) -> str:

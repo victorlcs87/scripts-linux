@@ -1903,8 +1903,8 @@ class HardwareStep(Step):
             return
         facts = hardware.read_facts()
         self.ctx.logger.write("")
-        for line in hardware.facts_summary(facts):
-            self.ctx.logger.write(f"{Color.GREEN}-{Color.RESET} {line}")
+        for line in hardware.render_summary(facts):
+            self.ctx.logger.write(line)
         self.ctx.logger.write("")
         self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} relatorio salvo em {destino}")
         self.add_hint(f"Compartilhe o arquivo quando precisar de suporte: {destino}")
