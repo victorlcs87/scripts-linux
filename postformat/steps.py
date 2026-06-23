@@ -1944,6 +1944,137 @@ class HardwareStep(Step):
             self.ctx.logger.write(f"Nada para remover; {destino} nao existe.")
 
 
+class UpdateAppImagesStep(Step):
+    id = "15"
+    title = "Atualizar AppImages"
+
+    # Cada entrada: nome exibivel, caminho relativo ao home, função que retorna (url_download, tag_versao)
+    _APPIMAGES: list[dict] = [
+        {
+            "name": "Hydra Launcher",
+            "path": Path("AppImages/HydraLauncher-latest.AppImage"),
+            "github_repo": "hydralauncher/hydra",
+            "asset_pattern": r"\.AppImage$",
+        },
+    ]
+
+    def apply(self) -> None:
+        header(self, self.title, "Verificando e atualizando AppImages instalados")
+        updated = []
+        skipped = []
+        missing = []
+        for app in self._APPIMAGES:
+            appimage_path = self.ctx.user.home / app["path"]
+            if not appimage_path.exists():
+                self.ctx.logger.write(f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado, pulando.")
+                missing.append(app["name"])
+                continue
+            result = self._update_one(app, appimage_path)
+            if result == "updated":
+                updated.append(app["name"])
+            elif result == "current":
+                skipped.append(app["name"])
+        if not updated and not skipped and missing:
+            self.mark_skipped("Nenhum AppImage instalado para atualizar.")
+            return
+        parts = []
+        if updated:
+            parts.append(f"atualizados: {', '.join(updated)}")
+        if skipped:
+            parts.append(f"ja atualizados: {', '.join(skipped)}")
+        self.mark_done("; ".join(parts) if parts else "Nenhuma atualizacao necessaria.")
+
+    def _update_one(self, app: dict, appimage_path: Path) -> str:
+        name = app["name"]
+        repo = app["github_repo"]
+        pattern = app["asset_pattern"]
+        version_file = appimage_path.with_suffix(".version")
+
+        self.ctx.logger.write(f"\n{badge(name.lower().replace(' ', '-'), Color.INFO)} {name}")
+
+        # Consultar release mais recente no GitHub (execucao real mesmo em dry-run: e apenas leitura)
+        self.ctx.logger.write(f"Consultando release mais recente de {name}...")
+        try:
+            api_proc = subprocess.run(
+                ["curl", "-fsSL", f"https://api.github.com/repos/{repo}/releases/latest"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            api_stdout = api_proc.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            api_stdout = ""
+        if not api_stdout.strip():
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Nao foi possivel consultar releases de {name}.")
+            return "current"
+
+        import json as _json
+        try:
+            release = _json.loads(api_stdout)
+        except _json.JSONDecodeError:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Resposta invalida da API do GitHub para {name}.")
+            return "current"
+
+        latest_tag: str = release.get("tag_name", "")
+        assets = release.get("assets", [])
+        url = next(
+            (a["browser_download_url"] for a in assets if re.search(pattern, a["name"])),
+            "",
+        )
+        if not url:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Nenhum asset AppImage encontrado no release {latest_tag} de {name}.")
+            return "current"
+
+        # Comparar com versao instalada
+        installed_tag = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
+        if installed_tag and installed_tag == latest_tag:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja esta na versao mais recente ({latest_tag}).")
+            return "current"
+
+        if installed_tag:
+            self.ctx.logger.write(f"Atualizando {name}: {installed_tag} → {latest_tag}")
+        else:
+            self.ctx.logger.write(f"Baixando {name} versao {latest_tag} (sem versao registrada localmente)")
+
+        self.ctx.runner.run(
+            ["curl", "-L", url, "-o", str(appimage_path)],
+            check=False,
+            action=f"Baixando {name} {latest_tag}",
+        )
+        self.ctx.runner.run(
+            ["chmod", "+x", str(appimage_path)],
+            check=False,
+            action=f"Tornando {name} executavel",
+            show_progress=False,
+        )
+        if not self.ctx.runner.dry_run:
+            version_file.write_text(latest_tag + "\n", encoding="utf-8")
+        else:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} gravaria versao {latest_tag} em {version_file}")
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} atualizado para {latest_tag}.")
+        return "updated"
+
+    def status(self) -> None:
+        header(self, self.title, "Versoes instaladas de AppImages")
+        any_installed = False
+        for app in self._APPIMAGES:
+            appimage_path = self.ctx.user.home / app["path"]
+            version_file = appimage_path.with_suffix(".version")
+            if not appimage_path.exists():
+                self.ctx.logger.write(f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado")
+                continue
+            any_installed = True
+            version = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "versao desconhecida"
+            self.ctx.logger.write(f"{badge(app['name'].lower().replace(' ', '-'), Color.SUCCESS)} {app['name']}: {version} ({appimage_path})")
+        if any_installed:
+            self.mark_applied("AppImages instalados detectados.")
+        else:
+            self.mark_pending("Nenhum AppImage instalado.")
+
+    def undo(self) -> None:
+        self.ctx.logger.write("Nao ha undo para atualizacoes de AppImage. Os arquivos .version podem ser removidos manualmente se necessario.")
+
+
 ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
     UpdateSystemStep,
@@ -1960,4 +2091,5 @@ ALL_STEPS: tuple[type[Step], ...] = (
     AntigravityStep,
     SunshineStep,
     HardwareStep,
+    UpdateAppImagesStep,
 )
