@@ -1992,6 +1992,15 @@ class UpdateAppImagesStep(Step):
             "path": Path("AppImages/HydraLauncher-latest.AppImage"),
             "github_repo": "hydralauncher/hydra",
             "asset_pattern": r"\.AppImage$",
+            "desktop_path": Path(".local/share/applications/hydralauncher.desktop"),
+            "alt_desktop_paths": (
+                Path(".local/share/applications/hydra-launcher.desktop"),
+                Path(".local/share/applications/Hydra Launcher.desktop"),
+            ),
+            "icon_asset": "assets/hydra.png",
+            "icon_target": Path(".local/share/icons/hydra-launcher.png"),
+            "wm_class": "hydralauncher",
+            "categories": ("Game",),
         },
     ]
 
@@ -2001,8 +2010,8 @@ class UpdateAppImagesStep(Step):
         skipped = []
         missing = []
         for app in self._APPIMAGES:
-            appimage_path = self.ctx.user.home / app["path"]
-            if not appimage_path.exists():
+            appimage_path = self._resolve_and_migrate(app)
+            if appimage_path is None:
                 self.ctx.logger.write(f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado, pulando.")
                 missing.append(app["name"])
                 continue
@@ -2020,6 +2029,75 @@ class UpdateAppImagesStep(Step):
         if skipped:
             parts.append(f"ja atualizados: {', '.join(skipped)}")
         self.mark_done("; ".join(parts) if parts else "Nenhuma atualizacao necessaria.")
+
+    def _resolve_and_migrate(self, app: dict) -> Path | None:
+        """Resolve o caminho do AppImage. Se houver instalacao em local nao-canonico,
+        migra para o caminho/atalho padrao. Retorna o caminho canonico ou None."""
+        canonical = self.ctx.user.home / app["path"]
+        if canonical.exists():
+            return canonical
+
+        discovered = self._discover_appimage(app)
+        if discovered is None:
+            return None
+
+        name = app["name"]
+        self.ctx.logger.write(
+            f"{badge(name.lower().replace(' ', '-'), Color.INFO)} {name}: instalacao detectada em {discovered}; migrando para {canonical}."
+        )
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} criaria {canonical.parent} e moveria {discovered} para {canonical}")
+        else:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+        self.ctx.runner.run(["mv", str(discovered), str(canonical)], check=False, action=f"Movendo {name} para o caminho padrao", show_progress=False)
+
+        # Reconcilia o atalho canonico apontando para o caminho padrao.
+        icon_source = self.ctx.root / app["icon_asset"]
+        icon_target = self.ctx.user.home / app["icon_target"]
+        desktop_file = self.ctx.user.home / app["desktop_path"]
+        copy_asset(icon_source, icon_target, self.ctx.runner)
+        entry = DesktopEntry(
+            name=name,
+            exec_line=f"{canonical} %U",
+            icon=str(icon_target),
+            categories=tuple(app["categories"]),
+            startup_wm_class=app["wm_class"],
+        )
+        install_desktop_entry(desktop_file, entry, self.ctx.runner)
+
+        # Remove atalhos nao-canonicos.
+        for relative_path in app["alt_desktop_paths"]:
+            alt = self.ctx.user.home / relative_path
+            if alt == desktop_file or not alt.exists():
+                continue
+            if self.ctx.runner.dry_run:
+                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria atalho nao-canonico {alt}")
+            else:
+                alt.unlink(missing_ok=True)
+                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Atalho nao-canonico removido: {alt}")
+
+        # Em dry-run o arquivo nao foi realmente movido; retorna o canonico mesmo assim
+        # para que o restante do fluxo simule a atualizacao.
+        return canonical
+
+    def _discover_appimage(self, app: dict) -> Path | None:
+        """Procura um AppImage existente referenciado pelos atalhos .desktop conhecidos."""
+        candidates = [app["desktop_path"], *app["alt_desktop_paths"]]
+        for relative_path in candidates:
+            desktop_file = self.ctx.user.home / relative_path
+            if not desktop_file.exists():
+                continue
+            text = desktop_file.read_text(encoding="utf-8", errors="ignore")
+            for line in text.splitlines():
+                if not line.startswith("Exec="):
+                    continue
+                exec_value = line[len("Exec="):].strip()
+                # Remove placeholders de campo do .desktop (%U, %f, ...).
+                exec_value = re.sub(r"\s+%[a-zA-Z]", "", exec_value).strip()
+                target = Path(exec_value)
+                if target.suffix == ".AppImage" and target.exists():
+                    return target
+        return None
 
     def _update_one(self, app: dict, appimage_path: Path) -> str:
         name = app["name"]

@@ -6,7 +6,7 @@ import pytest
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from postformat import hardware
-from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, HardwareStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep
+from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, HardwareStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep, UpdateAppImagesStep
 from postformat.steps_base import StepContext
 
 
@@ -563,6 +563,60 @@ def test_install_hydra_reconciles_desktop_when_appimage_exists(tmp_path: Path, m
     assert desktop_path == ctx.user.home / ".local/share/applications/hydralauncher.desktop"
     assert f"Exec={hydra} %U" in rendered
     assert "StartupWMClass=hydralauncher" in rendered
+
+
+def test_update_appimages_migrates_manual_install(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.runner = Runner(ctx.logger, dry_run=False)
+    step = UpdateAppImagesStep(ctx)
+    app = step._APPIMAGES[0]
+
+    manual_appimage = ctx.user.home / "Downloads/hydralauncher-3.9.7.AppImage"
+    manual_appimage.parent.mkdir(parents=True, exist_ok=True)
+    manual_appimage.write_text("bin", encoding="utf-8")
+    manual_desktop = ctx.user.home / app["alt_desktop_paths"][1]
+    manual_desktop.parent.mkdir(parents=True, exist_ok=True)
+    manual_desktop.write_text(
+        f"[Desktop Entry]\nName=Hydra Launcher\nExec={manual_appimage} %U\n",
+        encoding="utf-8",
+    )
+
+    installed_desktops: list[tuple[Path, str]] = []
+    monkeypatch.setattr("postformat.steps.copy_asset", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "postformat.steps.install_desktop_entry",
+        lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
+    )
+
+    resolved = step._resolve_and_migrate(app)
+
+    canonical = ctx.user.home / app["path"]
+    assert resolved == canonical
+    assert canonical.exists()
+    assert not manual_appimage.exists()
+    assert not manual_desktop.exists()
+    assert installed_desktops
+    desktop_path, rendered = installed_desktops[0]
+    assert desktop_path == ctx.user.home / app["desktop_path"]
+    assert f"Exec={canonical} %U" in rendered
+
+
+def test_update_appimages_returns_none_when_not_installed(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = UpdateAppImagesStep(ctx)
+
+    assert step._resolve_and_migrate(step._APPIMAGES[0]) is None
+
+
+def test_update_appimages_keeps_canonical_install(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = UpdateAppImagesStep(ctx)
+    app = step._APPIMAGES[0]
+    canonical = ctx.user.home / app["path"]
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    canonical.write_text("bin", encoding="utf-8")
+
+    assert step._resolve_and_migrate(app) == canonical
 
 
 def test_gestures_config_includes_up_and_down_swipes(tmp_path: Path) -> None:
