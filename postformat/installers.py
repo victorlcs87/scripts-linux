@@ -6,6 +6,7 @@ from pathlib import Path
 from .core import Color, Runner, announce, command_exists
 from .platform import (
     aur_helper,
+    ensure_rpmfusion,
     install_first_available,
     install_system_or_aur,
     install_system_package,
@@ -81,6 +82,7 @@ __all__ = [
     "aur_helper",
     "copy_asset",
     "ensure_flatpak",
+    "ensure_rpmfusion",
     "flatpak_installed",
     "install_first_available",
     "install_flatpak",

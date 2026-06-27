@@ -68,6 +68,38 @@ def test_install_with_aur_uses_aur_package_when_module_is_missing(tmp_path: Path
     assert "python-inquirerpy" in commands[0]
 
 
+def test_install_with_system_package_uses_dnf_on_fedora(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "detect_distro",
+        lambda: type("Distro", (), {"is_arch": False, "is_fedora": True, "family": "fedora", "immutable": False})(),
+    )
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **_kwargs: commands.append(cmd))
+
+    bootstrap._install_with_system_package([bootstrap.REQUIREMENTS[1]], tmp_path)
+
+    assert commands[-1][:4] == ["sudo", "dnf", "install", "-y"]
+    assert "python3-pytest" in commands[-1]
+
+
+def test_install_with_system_package_skips_native_on_immutable(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "detect_distro",
+        lambda: type("Distro", (), {"is_arch": False, "is_fedora": True, "family": "fedora", "immutable": True})(),
+    )
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **_kwargs: commands.append(cmd))
+
+    bootstrap._install_with_system_package(list(bootstrap.REQUIREMENTS), tmp_path)
+
+    assert commands == []
+
+
 def test_install_with_pip_bootstraps_ensurepip_when_pip_is_missing(tmp_path: Path, monkeypatch) -> None:
     commands: list[list[str]] = []
 

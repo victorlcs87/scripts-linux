@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Post-format automation for Linux/KDE (Arch/CachyOS and Debian/Ubuntu): a modular Python CLI that replaces long shell scripts with numbered, auditable steps, each supporting `apply`, `dry-run`, `status`, and `undo`. All user-facing strings and log output are in Brazilian Portuguese (without accents) — keep new output consistent with that.
+Post-format automation for Linux/KDE (Arch/CachyOS/SteamOS, Debian/Ubuntu and Fedora/Bazzite): a modular Python CLI that replaces long shell scripts with numbered, auditable steps, each supporting `apply`, `dry-run`, `status`, and `undo`. All user-facing strings and log output are in Brazilian Portuguese (without accents) — keep new output consistent with that. Immutable systems (Bazzite/SteamOS) are detected via a `Distro.immutable` flag: native package installs are skipped (degraded) in favor of Flatpak, while `/etc` edits (fstab, sddm, udev) still apply.
 
 ## Commands
 
@@ -31,7 +31,7 @@ Execution flows: entry point (`00-pos-formatacao-cachyos.py` or `python -m postf
 - **`postformat/steps.py`** (~1800 lines) — all 14 step classes (`00` ecosystem prep … `13` Sunshine), registered in the `ALL_STEPS` tuple at the bottom. Step IDs match the `scripts/NN-*.sh` wrapper names and the README table.
 - **`postformat/steps_base.py`** — the `Step` base class and `StepContext`/`StepResult`. A step implements `apply()`, optionally `status()`/`undo()`; `dry_run()` is generic — it re-runs `apply()` with a dry-run `Runner`. Steps report outcomes via `mark_done/skipped/manual` (execution status) and `mark_applied/pending/attention` (compliance), plus `add_hint()`.
 - **`postformat/core.py`** — `Runner` (the only sanctioned way to execute commands: handles dry-run echo, sudo, streaming output with spinner, NoNewPrivs detection, KeyboardInterrupt), `Logger` (console + `./LOGS/*.log`, ANSI stripped in files), ANSI `Color` palette, `write_text`/`write_text_sudo`/`backup_existing` helpers, `detect_user()` (resolves real user even under `SUDO_USER` — never hardcode home paths).
-- **`postformat/platform.py`** — distro abstraction. `detect_distro()` maps `/etc/os-release` to family `arch` or `debian`; everything package-related (`install_system_package`, `install_system_or_aur`, `update_system`, query commands) branches on that family. New package operations must support both families or raise `UnsupportedDistroError`.
+- **`postformat/platform.py`** — distro abstraction. `detect_distro()` maps `/etc/os-release` to family `arch`, `debian` or `fedora`, plus an orthogonal `immutable` flag (detected via `/run/ostree-booted` or `steamos-readonly`). Everything package-related (`install_system_package`, `install_system_or_aur`, `update_system`, `ensure_rpmfusion`, query commands) branches on that family. On immutable systems native installs are no-ops (warn + skip) so callers fall back to Flatpak. New package operations must support all three families or raise `UnsupportedDistroError`.
 - **`postformat/cli.py`** — menus (full apply/dry-run/status, per-step actions), progress bars, summary rendering. `run_action()` is the single dispatch point for step actions.
 - **`postformat/tui.py`** — InquirerPy menu wrapper with a numbered-input fallback; **`installers.py`** — higher-level install helpers (Flatpak, AppImage); **`desktop.py`** — `.desktop` entry rendering (note `StartupWMClass` matters for KDE Wayland window grouping).
 

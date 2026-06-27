@@ -160,7 +160,7 @@ def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path
 
     monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"flatpak", "shelly"})
     monkeypatch.setattr("postformat.steps.aur_helper", lambda: "paru")
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "id": "cachyos", "family": "arch"})())
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": False, "id": "cachyos", "family": "arch"})())
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "fuse2")
     monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: None)
 
@@ -185,7 +185,7 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
     ctx = make_ctx(tmp_path)
     step = ShellyStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "id": "ubuntu", "family": "debian"})())
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "is_fedora": False, "immutable": False, "id": "ubuntu", "family": "debian"})())
     monkeypatch.setattr("postformat.steps.command_exists", lambda name: name == "flatpak")
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libfuse2")
     monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: None)
@@ -210,7 +210,7 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "id": "cachyos", "family": "arch"})())
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": False, "id": "cachyos", "family": "arch"})())
     monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
     monkeypatch.setattr("postformat.steps.system_package_exists", lambda pkg: pkg in {"steam", "heroic-games-launcher", "zapzap", "fuse2"})
     monkeypatch.setattr("postformat.steps.aur_helper", lambda: None)
@@ -230,7 +230,7 @@ def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is
     step = AppsStep(ctx)
     installed_flatpaks: list[str] = []
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "id": "ubuntu", "family": "debian"})())
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "is_fedora": False, "immutable": False, "id": "ubuntu", "family": "debian"})())
     monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: False)
     monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
 
@@ -238,6 +238,51 @@ def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is
     step._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
 
     assert installed_flatpaks == ["com.heroicgameslauncher.hgl", "com.rtosta.zapzap"]
+
+
+def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    installed_flatpaks: list[str] = []
+
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": True, "id": "steamos", "family": "arch"})())
+    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
+
+    step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
+
+    assert installed_flatpaks == ["com.heroicgameslauncher.hgl"]
+
+
+def test_install_steam_enables_rpmfusion_on_mutable_fedora(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    rpmfusion_called: list[bool] = []
+
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": False, "is_fedora": True, "immutable": False, "id": "fedora", "family": "fedora"})())
+    monkeypatch.setattr("postformat.steps.ensure_rpmfusion", lambda _runner: rpmfusion_called.append(True))
+    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
+
+    step._install_steam()
+
+    assert rpmfusion_called == [True]
+
+
+def test_install_steam_skips_when_preinstalled_on_immutable(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    flatpaks: list[str] = []
+
+    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": True, "id": "steamos", "family": "arch"})())
+    monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "steam")
+    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: flatpaks.append(app_id))
+
+    step._install_steam()
+
+    assert flatpaks == []
 
 
 def test_render_run_summary_aggregates_counts(tmp_path: Path) -> None:

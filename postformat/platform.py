@@ -17,6 +17,7 @@ class Distro:
     id: str
     id_like: tuple[str, ...]
     family: str
+    immutable: bool = False
 
     @property
     def is_arch(self) -> bool:
@@ -25,6 +26,10 @@ class Distro:
     @property
     def is_debian(self) -> bool:
         return self.family == "debian"
+
+    @property
+    def is_fedora(self) -> bool:
+        return self.family == "fedora"
 
 
 def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
@@ -40,17 +45,43 @@ def read_os_release(path: Path = Path("/etc/os-release")) -> dict[str, str]:
     return values
 
 
+def _detect_immutable(distro_id: str) -> bool:
+    # Fedora Atomic / Bazzite e qualquer base ostree expoem este marcador em runtime.
+    if Path("/run/ostree-booted").exists():
+        return True
+    # SteamOS usa root read-only controlado por steamos-readonly.
+    if distro_id == "steamos" or shutil.which("steamos-readonly") is not None:
+        status = subprocess.run(
+            ["steamos-readonly", "status"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if status.returncode == 0 and "enabled" in status.stdout.lower():
+            return True
+        # Sem conseguir checar o status, tratamos SteamOS como imutavel por seguranca.
+        return distro_id == "steamos"
+    return False
+
+
 def detect_distro(path: Path = Path("/etc/os-release")) -> Distro:
     values = read_os_release(path)
     distro_id = values.get("ID", "").strip().lower()
     id_like = tuple(item.strip().lower() for item in values.get("ID_LIKE", "").split() if item.strip())
     candidates = {distro_id, *id_like}
-    if {"arch", "cachyos", "manjaro"} & candidates:
-        return Distro(id=distro_id, id_like=id_like, family="arch")
+    immutable = _detect_immutable(distro_id)
+    if {"arch", "cachyos", "manjaro", "steamos"} & candidates:
+        return Distro(id=distro_id, id_like=id_like, family="arch", immutable=immutable)
+    if {"fedora", "rhel", "centos", "rocky", "almalinux", "bazzite", "nobara"} & candidates:
+        return Distro(id=distro_id, id_like=id_like, family="fedora", immutable=immutable)
     if {"debian", "ubuntu", "linuxmint", "pop"} & candidates:
-        return Distro(id=distro_id, id_like=id_like, family="debian")
+        return Distro(id=distro_id, id_like=id_like, family="debian", immutable=immutable)
     pretty = values.get("PRETTY_NAME") or distro_id or "desconhecida"
-    raise UnsupportedDistroError(f"distribuicao nao suportada: {pretty}. Suportadas: Arch/CachyOS e Debian/Ubuntu.")
+    raise UnsupportedDistroError(
+        f"distribuicao nao suportada: {pretty}. "
+        "Suportadas: Arch/CachyOS/SteamOS, Debian/Ubuntu e Fedora/Bazzite."
+    )
 
 
 def current_distro() -> Distro:
@@ -65,6 +96,8 @@ def system_installed(pkg: str) -> bool:
     distro = current_distro()
     if distro.is_arch:
         return shutil.which("pacman") is not None and _quiet(["pacman", "-Q", pkg])
+    if distro.is_fedora:
+        return shutil.which("rpm") is not None and _quiet(["rpm", "-q", pkg])
     if distro.is_debian:
         if shutil.which("dpkg-query") is None:
             return False
@@ -83,13 +116,17 @@ def system_package_exists(pkg: str) -> bool:
     distro = current_distro()
     if distro.is_arch:
         return shutil.which("pacman") is not None and _quiet(["pacman", "-Si", pkg])
+    if distro.is_fedora:
+        # dnf pode estar ausente em bases atomic; nesse caso degradamos para False.
+        return shutil.which("dnf") is not None and _quiet(["dnf", "list", "--available", pkg])
     if distro.is_debian:
         return shutil.which("apt-cache") is not None and _quiet(["apt-cache", "show", pkg])
     return False
 
 
 def aur_helper() -> str | None:
-    if not current_distro().is_arch:
+    distro = current_distro()
+    if not distro.is_arch or distro.immutable:
         return None
     for candidate in ("paru", "yay"):
         if command_exists(candidate):
@@ -102,6 +139,14 @@ def install_system_package(pkg: str, runner: Runner) -> None:
         announce(runner.logger, "skipped", f"{pkg} ja instalado")
         return
     distro = current_distro()
+    if distro.immutable:
+        announce(
+            runner.logger,
+            "warning",
+            f"sistema imutavel detectado: pulando pacote nativo '{pkg}'. "
+            "Prefira a versao Flatpak ou instale manualmente (rpm-ostree/Distrobox).",
+        )
+        return
     if distro.is_arch:
         runner.run(
             ["pacman", "-S", "--needed", pkg],
@@ -110,6 +155,16 @@ def install_system_package(pkg: str, runner: Runner) -> None:
             interactive=True,
             interactive_tty=True,
             manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes.",
+        )
+        return
+    if distro.is_fedora:
+        runner.run(
+            ["dnf", "install", "-y", pkg],
+            sudo=True,
+            action=f"Instalando pacote {pkg}",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o dnf pode pedir senha do sudo e confirmacoes.",
         )
         return
     if distro.is_debian:
@@ -153,6 +208,15 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
     if aur_pkg and system_installed(aur_pkg):
         announce(runner.logger, "skipped", f"{aur_pkg} ja instalado")
         return True
+    if current_distro().immutable:
+        # Em sistemas imutaveis nao instalamos nativo: sinalizamos falha para
+        # que o chamador caia no Flatpak.
+        announce(
+            runner.logger,
+            "warning",
+            f"sistema imutavel: '{system_pkg}' nao sera instalado de forma nativa; tentarei Flatpak.",
+        )
+        return False
     if system_package_exists(system_pkg):
         install_system_package(system_pkg, runner)
         return True
@@ -172,6 +236,23 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
 
 def update_system(runner: Runner) -> None:
     distro = current_distro()
+    if distro.is_fedora and distro.immutable:
+        runner.run(
+            ["rpm-ostree", "upgrade"],
+            sudo=True,
+            action="Atualizando imagem do sistema com rpm-ostree",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o rpm-ostree pode pedir senha do sudo. A atualizacao so vale apos reiniciar.",
+        )
+        return
+    if distro.is_arch and distro.immutable:
+        announce(
+            runner.logger,
+            "manual",
+            "SteamOS usa imagem read-only: atualize pela interface do SteamOS ou rode 'steamos-update' manualmente.",
+        )
+        return
     if distro.is_arch:
         install_system_package("pacman-contrib", runner)
         runner.run(
@@ -181,6 +262,16 @@ def update_system(runner: Runner) -> None:
             interactive=True,
             interactive_tty=True,
             manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacoes. Isso nao e travamento.",
+        )
+        return
+    if distro.is_fedora:
+        runner.run(
+            ["dnf", "upgrade", "--refresh", "-y"],
+            sudo=True,
+            action="Atualizando sistema com dnf",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o dnf pode pedir senha do sudo e confirmacoes. Isso nao e travamento.",
         )
         return
     if distro.is_debian:
@@ -206,8 +297,14 @@ def update_system(runner: Runner) -> None:
 
 def pending_updates_command() -> list[str] | str:
     distro = current_distro()
+    if distro.is_fedora and distro.immutable:
+        return "rpm-ostree upgrade --check 2>/dev/null; rc=$?; [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 77 ]"
+    if distro.is_arch and distro.immutable:
+        return "echo 'SteamOS: atualize pela interface do sistema (steamos-update)'"
     if distro.is_arch:
         return 'checkupdates; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]'
+    if distro.is_fedora:
+        return "dnf check-update 2>/dev/null; rc=$?; [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 100 ]"
     if distro.is_debian:
         return "apt list --upgradable 2>/dev/null | sed '1d'"
     raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")
@@ -217,6 +314,42 @@ def system_query_command(*packages: str) -> list[str]:
     distro = current_distro()
     if distro.is_arch:
         return ["pacman", "-Q", *packages]
+    if distro.is_fedora:
+        return ["rpm", "-q", *packages]
     if distro.is_debian:
         return ["dpkg-query", "-W", *packages]
     raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")
+
+
+def ensure_rpmfusion(runner: Runner) -> None:
+    """Habilita os repositorios RPM Fusion (free/nonfree) no Fedora mutavel.
+
+    Necessario para Steam, codecs e drivers NVIDIA nativos. No-op em outras
+    familias e em sistemas imutaveis (onde pacotes nativos sao degradados).
+    """
+    distro = current_distro()
+    if not distro.is_fedora or distro.immutable:
+        return
+    if system_installed("rpmfusion-free-release") and system_installed("rpmfusion-nonfree-release"):
+        announce(runner.logger, "skipped", "RPM Fusion (free/nonfree) ja habilitado")
+        return
+    announce(
+        runner.logger,
+        "info",
+        "Habilitando RPM Fusion (free/nonfree) para liberar Steam, codecs e drivers NVIDIA nativos.",
+    )
+    cmd = (
+        "dnf install https://mirrors.rpmfusion.org/free/fedora/"
+        "rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm "
+        "https://mirrors.rpmfusion.org/nonfree/fedora/"
+        "rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+    )
+    runner.run(
+        cmd,
+        sudo=True,
+        shell=True,
+        action="Habilitando repositorios RPM Fusion",
+        interactive=True,
+        interactive_tty=True,
+        manual_message="Comando interativo: o dnf vai pedir senha do sudo e sua confirmacao para adicionar o RPM Fusion.",
+    )

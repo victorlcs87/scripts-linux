@@ -9,8 +9,9 @@ O projeto substitui scripts shell longos por um CLI Python modular, com `apply`,
 
 ## Destaques
 
-- Suporte a Arch/CachyOS e Debian/Ubuntu.
-- Preparacao de Flatpak, Flathub, AppImage/FUSE e helper AUR quando aplicavel.
+- Suporte a Arch/CachyOS/SteamOS, Debian/Ubuntu e Fedora/Bazzite.
+- Sistemas imutaveis (Bazzite/SteamOS) sao detectados automaticamente: pacotes nativos sao priorizados via Flatpak e os passos que dependeriam deles viram aviso/manual.
+- Preparacao de Flatpak, Flathub, AppImage/FUSE, RPM Fusion (Fedora) e helper AUR quando aplicavel.
 - Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, NVIDIA/jogos, Sunshine/Moonlight, gestos KDE e Num Lock.
 - Integracao desktop para AppImages, incluindo Hydra Launcher com `StartupWMClass` correto no KDE Wayland.
 - Gestos KDE com `libinput-gestures` para abrir o Overview com swipe de 3 dedos para cima ou para baixo.
@@ -131,7 +132,9 @@ O atalho usa `StartupWMClass=hydralauncher`, necessario para agrupamento correto
 A etapa `00` centraliza o suporte AppImage:
 
 - Arch/CachyOS: `fuse2`.
+- Fedora/Bazzite: primeira opcao disponivel entre `fuse` e `fuse-libs`.
 - Debian/Ubuntu: primeira opcao disponivel entre `libfuse2t64`, `libfuse2` e `fuse`.
+- Em sistemas imutaveis o pacote nativo nao e instalado; o suporte vem da imagem base ou de Flatpak.
 
 ### Sunshine / Moonlight
 

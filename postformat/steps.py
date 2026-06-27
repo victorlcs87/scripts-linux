@@ -33,6 +33,7 @@ from .installers import (
     aur_helper,
     copy_asset,
     ensure_flatpak,
+    ensure_rpmfusion,
     flatpak_installed,
     install_first_available,
     install_flatpak,
@@ -74,15 +75,20 @@ class ShellyStep(Step):
         distro = current_distro()
         header(self, self.title, "Preparando base de pacotes, Flatpak e suporte AppImage")
         ready_before = self._basic_support_ready()
-        if distro.is_arch and not command_exists("shelly"):
+        if distro.immutable:
+            sistema = "SteamOS" if distro.is_arch else "Fedora atomico/Bazzite"
+            self.ctx.logger.write(f"{badge('info', Color.INFO)} {sistema} (imutavel) detectado. Vou priorizar Flatpak; pacotes nativos serao pulados.")
+        elif distro.is_arch and not command_exists("shelly"):
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Shelly nao encontrado. Vou preparar o suporte pelo sistema mesmo assim.")
         elif distro.is_arch:
             self.ctx.logger.write(f"{badge('info', Color.INFO)} Shelly CLI detectado com suporte a flatpak, appimage e aur.")
+        elif distro.is_fedora:
+            self.ctx.logger.write(f"{badge('info', Color.INFO)} Fedora detectado. Vou usar dnf, RPM Fusion e Flatpak, sem Shelly/AUR.")
         else:
             self.ctx.logger.write(f"{badge('info', Color.INFO)} Debian/Ubuntu detectado. Vou usar apt e opcoes do sistema, sem Shelly/AUR.")
         ensure_flatpak(self.ctx.runner)
         self._ensure_appimage_fuse()
-        if distro.is_arch:
+        if distro.is_arch and not distro.immutable:
             self._ensure_aur_helper()
         if self._basic_support_ready():
             if ready_before:
@@ -94,9 +100,9 @@ class ShellyStep(Step):
                 self.mark_done("Ecossistema base preparado com sucesso.")
                 self.mark_applied("Ecossistema base preparado com sucesso.")
             return
-        if not distro.is_arch:
+        if not distro.is_arch or distro.immutable:
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos do ecossistema.")
-            self.mark_pending("Faltam requisitos do ecossistema no Debian/Ubuntu.", missing=self._missing_basic_support())
+            self.mark_pending("Faltam requisitos do ecossistema.", missing=self._missing_basic_support())
             return
         self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos. Vou abrir o fallback assistido do Shelly.")
         if self.ctx.runner.dry_run:
@@ -158,7 +164,9 @@ class ShellyStep(Step):
             f"{badge('flathub', Color.SUCCESS if flathub_ready else Color.WARNING)} {'OK' if flathub_ready else 'ausente'}",
             f"{badge('appimage-fuse', Color.SUCCESS if fuse2_ready else Color.WARNING)} {'OK' if fuse2_ready else 'ausente'}",
         ]
-        if distro.is_arch:
+        if distro.immutable:
+            lines.append(f"{badge('imutavel', Color.INFO)} sim (pacotes nativos via Flatpak)")
+        if distro.is_arch and not distro.immutable:
             lines.extend([
                 f"{badge('shelly', Color.INFO)} {'OK' if command_exists('shelly') else 'ausente'}",
                 f"{badge('shelly-ui', Color.INFO)} {'OK' if command_exists('shelly-ui') else 'ausente'}",
@@ -166,7 +174,7 @@ class ShellyStep(Step):
                 f"{badge('aur', Color.SUCCESS if helper else Color.WARNING)} {helper or 'ausente'}",
             ])
         print_lines(self.ctx.logger, lines)
-        if distro.is_arch and command_exists("shelly") and flatpak_ready:
+        if distro.is_arch and not distro.immutable and command_exists("shelly") and flatpak_ready:
             self.ctx.runner.run(["shelly", "flatpak", "list-remotes"], check=False, action="Verificando remotes do Shelly", show_progress=False)
         if self._basic_support_ready():
             self.mark_applied("Flatpak, flathub e suporte AppImage estao aplicados.")
@@ -175,12 +183,14 @@ class ShellyStep(Step):
             self.mark_pending(f"Faltam componentes do ecossistema: {', '.join(missing)}.", missing=missing)
 
     def _basic_support_ready(self) -> bool:
+        distro = current_distro()
         base_ready = command_exists("flatpak") and self._flathub_ready() and self._appimage_fuse_ready()
-        if current_distro().is_arch:
+        if distro.is_arch and not distro.immutable:
             return base_ready and aur_helper() is not None
         return base_ready
 
     def _missing_basic_support(self) -> list[str]:
+        distro = current_distro()
         missing = []
         if not command_exists("flatpak"):
             missing.append("flatpak")
@@ -188,7 +198,7 @@ class ShellyStep(Step):
             missing.append("flathub")
         if not self._appimage_fuse_ready():
             missing.append("suporte AppImage/FUSE")
-        if current_distro().is_arch and not aur_helper():
+        if distro.is_arch and not distro.immutable and not aur_helper():
             missing.append("helper AUR")
         return missing
 
@@ -199,14 +209,20 @@ class ShellyStep(Step):
         return self.ctx.runner.dry_run and command_exists("flatpak")
 
     def _ensure_appimage_fuse(self) -> None:
-        if current_distro().is_arch:
+        distro = current_distro()
+        if distro.is_arch:
             install_first_available(("fuse2",), self.ctx.runner)
+        elif distro.is_fedora:
+            install_first_available(("fuse", "fuse-libs"), self.ctx.runner)
         else:
             install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
 
     def _appimage_fuse_ready(self) -> bool:
-        if current_distro().is_arch:
+        distro = current_distro()
+        if distro.is_arch:
             return system_installed("fuse2")
+        if distro.is_fedora:
+            return any(system_installed(pkg) for pkg in ("fuse", "fuse-libs"))
         return any(system_installed(pkg) for pkg in ("libfuse2t64", "libfuse2", "fuse"))
 
     def _ensure_aur_helper(self) -> None:
@@ -231,8 +247,15 @@ class UpdateSystemStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Atualizando a base do sistema e pacotes instalados")
+        distro = current_distro()
         update_system(self.ctx.runner)
-        self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
+        if distro.is_arch and distro.immutable:
+            self.mark_manual("SteamOS usa imagem read-only: atualize pela interface do sistema (steamos-update).")
+            return
+        if distro.immutable:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Atualizacao via rpm-ostree so vale apos reiniciar.")
+        else:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
         self.mark_done("Atualizacao do sistema executada.")
 
     def status(self) -> None:
@@ -319,9 +342,12 @@ class BrowserStep(Step):
     def undo(self) -> None:
         distro = current_distro()
         if distro.is_arch:
-            self.ctx.logger.write("Sugestao manual para Firefox/FirefoxPWA: sudo pacman -Rns firefox firefoxpwa")
+            cmd = "sudo pacman -Rns firefox firefoxpwa"
+        elif distro.is_fedora:
+            cmd = "sudo dnf remove firefox firefoxpwa"
         else:
-            self.ctx.logger.write("Sugestao manual para Firefox/FirefoxPWA: sudo apt-get remove firefox firefoxpwa")
+            cmd = "sudo apt-get remove firefox firefoxpwa"
+        self.ctx.logger.write(f"Sugestao manual para Firefox/FirefoxPWA: {cmd}")
         remove_flatpak("com.bitwarden.desktop", self.ctx.runner)
 
 
@@ -1203,6 +1229,11 @@ class AppsStep(Step):
 
     def _install_steam(self) -> None:
         distro = current_distro()
+        if distro.immutable and (command_exists("steam") or any(system_installed(p) for p in ("steam", "steam-installer", "steam-launcher"))):
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Steam ja disponivel no sistema.")
+            return
+        if distro.is_fedora and not distro.immutable:
+            ensure_rpmfusion(self.ctx.runner)
         if install_system_or_aur("steam", "steam", self.ctx.runner):
             return
         if distro.is_debian:
@@ -1211,12 +1242,15 @@ class AppsStep(Step):
                 "Habilite multiverse/non-free/non-free-firmware conforme sua distro e rode esta etapa novamente."
             )
             self.mark_manual("Steam depende de repositorios adicionais no Debian/Ubuntu.")
+            return
+        # Fedora sem RPM Fusion, imutaveis ou repos sem Steam: caimos no Flatpak.
+        install_flatpak("com.valvesoftware.Steam", self.ctx.runner)
 
     def _install_system_or_flatpak(self, system_pkg: str, aur_pkg: str | None, flatpak_id: str) -> None:
         if install_system_or_aur(system_pkg, aur_pkg, self.ctx.runner):
             return
-        if current_distro().is_debian:
-            install_flatpak(flatpak_id, self.ctx.runner)
+        # Qualquer familia (incluindo imutaveis) cai no Flatpak quando o nativo nao instala.
+        install_flatpak(flatpak_id, self.ctx.runner)
 
     def _install_hydra(self) -> None:
         header(self, "Hydra Launcher AppImage", "Baixando AppImage e criando integracao desktop")
@@ -1232,8 +1266,11 @@ class AppsStep(Step):
             self.add_hint("Hydra Launcher ja estava instalado.")
             return
         install_system_package("curl", self.ctx.runner)
-        if current_distro().is_arch:
+        distro = current_distro()
+        if distro.is_arch:
             install_first_available(("fuse2",), self.ctx.runner)
+        elif distro.is_fedora:
+            install_first_available(("fuse", "fuse-libs"), self.ctx.runner)
         else:
             install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
         if not self.ctx.runner.dry_run:

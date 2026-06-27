@@ -244,12 +244,20 @@ def render_summary(facts: HardwareFacts) -> list[str]:
 
 def _missing_tool_hint(tool: str) -> str:
     distro = current_distro()
+
+    def _install_cmd(pkg: str) -> str:
+        if distro.immutable:
+            return f"flatpak/distrobox (sistema imutavel) ou rpm-ostree install {pkg}"
+        if distro.is_arch:
+            return f"sudo pacman -S {pkg}"
+        if distro.is_fedora:
+            return f"sudo dnf install {pkg}"
+        return f"sudo apt-get install {pkg}"
+
     if tool == "inxi":
-        cmd = "sudo pacman -S inxi" if distro.is_arch else "sudo apt-get install inxi"
-        return f"(inxi nao instalado — para um resumo mais completo: {cmd})"
+        return f"(inxi nao instalado — para um resumo mais completo: {_install_cmd('inxi')})"
     if tool == "dmidecode":
-        cmd = "sudo pacman -S dmidecode" if distro.is_arch else "sudo apt-get install dmidecode"
-        return f"(dmidecode nao instalado — instale para detalhar RAM/placa-mae/BIOS: {cmd})"
+        return f"(dmidecode nao instalado — instale para detalhar RAM/placa-mae/BIOS: {_install_cmd('dmidecode')})"
     return f"(comando '{tool}' nao encontrado — pulei essa parte)"
 
 

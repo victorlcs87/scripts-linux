@@ -27,12 +27,15 @@ class BootstrapRequirement:
     debian_package: str | None
     aur_package: str | None = None
     pip_package: str | None = None
+    fedora_package: str | None = None
 
     def system_package_for(self, family: str) -> str | None:
         if family == "arch":
             return self.arch_package
         if family == "debian":
             return self.debian_package
+        if family == "fedora":
+            return self.fedora_package
         return None
 
     @property
@@ -42,7 +45,7 @@ class BootstrapRequirement:
 
 REQUIREMENTS = (
     BootstrapRequirement("InquirerPy", None, None, "python-inquirerpy", "InquirerPy"),
-    BootstrapRequirement("pytest", "python-pytest", "python3-pytest", None, "pytest"),
+    BootstrapRequirement("pytest", "python-pytest", "python3-pytest", None, "pytest", fedora_package="python3-pytest"),
 )
 
 
@@ -104,6 +107,10 @@ def install_missing_requirements(requirements: list[BootstrapRequirement], proje
 
 def _install_with_system_package(requirements: list[BootstrapRequirement], project_root: Path) -> None:
     distro = detect_distro()
+    if distro.immutable:
+        # Sistemas imutaveis (Bazzite/SteamOS): pulamos o gerenciador nativo e
+        # deixamos o fallback pip --user resolver as dependencias.
+        return
     packages = sorted({requirement.system_package_for(distro.family) for requirement in requirements if requirement.system_package_for(distro.family)})
     if not packages:
         return
@@ -111,6 +118,10 @@ def _install_with_system_package(requirements: list[BootstrapRequirement], proje
         if shutil.which("pacman") is None:
             raise BootstrapError("pacman nao esta disponivel para instalar dependencias do sistema.")
         cmd = ["sudo", "pacman", "-S", "--needed", *packages]
+    elif distro.is_fedora:
+        if shutil.which("dnf") is None:
+            raise BootstrapError("dnf nao esta disponivel para instalar dependencias do sistema.")
+        cmd = ["sudo", "dnf", "install", "-y", *packages]
     else:
         if shutil.which("apt-get") is None:
             raise BootstrapError("apt-get nao esta disponivel para instalar dependencias do sistema.")
