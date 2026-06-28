@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "scripts-linux-postformat"
 version = "1.0.0"
@@ -14,6 +18,9 @@ dev = [
     "pytest-cov",
     "ruff",
 ]
+
+[tool.setuptools]
+packages = ["postformat", "postformat.steps"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
