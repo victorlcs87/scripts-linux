@@ -8,6 +8,26 @@ dependencies = [
     "InquirerPy",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# O formatter ja gerencia a quebra de linha; E501 restante sao apenas strings
+# longas (saidas/log em PT-BR) que nao devem ser quebradas.
+ignore = ["E501"]
+
+[tool.coverage.run]
+source = ["postformat"]
