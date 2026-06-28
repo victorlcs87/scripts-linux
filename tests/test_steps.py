@@ -3,10 +3,23 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from postformat import hardware
 from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
 from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
-from postformat import hardware
-from postformat.steps import ALL_STEPS, AppsStep, FstabStep, GesturesStep, GitStep, HardwareStep, NvidiaSteamStep, NumLockStep, ShellyStep, SunshineStep, UpdateAppImagesStep
+from postformat.steps import (
+    ALL_STEPS,
+    AntigravityStep,
+    AppsStep,
+    FstabStep,
+    GesturesStep,
+    GitStep,
+    HardwareStep,
+    NumLockStep,
+    NvidiaSteamStep,
+    ShellyStep,
+    SunshineStep,
+    UpdateAppImagesStep,
+)
 from postformat.steps_base import StepContext
 
 
@@ -46,8 +59,12 @@ def test_sunshine_dry_run_mentions_udev_autostart_ufw_and_desktop(tmp_path: Path
     ctx = make_ctx(tmp_path)
     step = SunshineStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.install_system_package", lambda pkg, runner: runner.logger.write(f"instalaria {pkg}"))
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "update-desktop-database"})
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_system_package", lambda pkg, runner: runner.logger.write(f"instalaria {pkg}")
+    )
+    monkeypatch.setattr(
+        "postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "update-desktop-database"}
+    )
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
 
@@ -82,7 +99,7 @@ def test_sunshine_fallback_desktop_content(tmp_path: Path, monkeypatch) -> None:
     ctx.runner.dry_run = False
     step = SunshineStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: False)
     monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
 
     step._ensure_menu_launcher()
@@ -102,8 +119,8 @@ def test_sunshine_status_applied_when_everything_is_ready(tmp_path: Path, monkey
     step.autostart_file.parent.mkdir(parents=True)
     step.autostart_file.write_text(step._autostart_content(), encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "sunshine")
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
     monkeypatch.setattr(step, "_sunshine_running", lambda: True)
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
@@ -125,8 +142,8 @@ def test_sunshine_status_attention_when_user_service_exists(tmp_path: Path, monk
     step.user_service_file.parent.mkdir(parents=True)
     step.user_service_file.write_text("[Service]\nExecStart=/usr/bin/sunshine\n", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "sunshine")
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
     monkeypatch.setattr(step, "_sunshine_running", lambda: True)
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
@@ -142,7 +159,7 @@ def test_sunshine_undo_dry_run_mentions_managed_removals(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = SunshineStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name == "ufw")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name == "ufw")
 
     step.undo()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -158,17 +175,33 @@ def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path
     ctx = make_ctx(tmp_path)
     step = ShellyStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name in {"flatpak", "shelly"})
-    monkeypatch.setattr("postformat.steps.aur_helper", lambda: "paru")
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": False, "id": "cachyos", "family": "arch"})())
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "fuse2")
-    monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("postformat.steps.system.command_exists", lambda name: name in {"flatpak", "shelly"})
+    monkeypatch.setattr("postformat.steps.system.aur_helper", lambda: "paru")
+    monkeypatch.setattr(
+        "postformat.steps.system.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": False,
+                "id": "cachyos",
+                "family": "arch",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.system.system_installed", lambda pkg: pkg == "fuse2")
+    monkeypatch.setattr("postformat.steps.system.install_first_available", lambda *_args, **_kwargs: None)
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["flatpak", "remote-list", "--columns=name"]:
+
             class Result:
                 stdout = "flathub\n"
                 returncode = 0
+
             return Result()
         return None
 
@@ -185,10 +218,24 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
     ctx = make_ctx(tmp_path)
     step = ShellyStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "is_fedora": False, "immutable": False, "id": "ubuntu", "family": "debian"})())
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name == "flatpak")
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libfuse2")
-    monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "postformat.steps.system.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": False,
+                "is_debian": True,
+                "is_fedora": False,
+                "immutable": False,
+                "id": "ubuntu",
+                "family": "debian",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.system.command_exists", lambda name: name == "flatpak")
+    monkeypatch.setattr("postformat.steps.system.system_installed", lambda pkg: pkg == "libfuse2")
+    monkeypatch.setattr("postformat.steps.system.install_first_available", lambda *_args, **_kwargs: None)
 
     def fake_run(cmd, **_kwargs):
         if cmd == ["flatpak", "remote-list", "--columns=name"]:
@@ -210,12 +257,24 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": False, "id": "cachyos", "family": "arch"})())
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.system_package_exists", lambda pkg: pkg in {"steam", "heroic-games-launcher", "zapzap", "fuse2"})
-    monkeypatch.setattr("postformat.steps.aur_helper", lambda: None)
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": False,
+                "id": "cachyos",
+                "family": "arch",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -225,14 +284,32 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
     assert "com.discordapp.Discord" in log
 
 
-def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is_missing(tmp_path: Path, monkeypatch) -> None:
+def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
     installed_flatpaks: list[str] = []
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": True, "is_fedora": False, "immutable": False, "id": "ubuntu", "family": "debian"})())
-    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": False,
+                "is_debian": True,
+                "is_fedora": False,
+                "immutable": False,
+                "id": "ubuntu",
+                "family": "debian",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
+    )
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
     step._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
@@ -245,9 +322,25 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
     step = AppsStep(ctx)
     installed_flatpaks: list[str] = []
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": True, "id": "steamos", "family": "arch"})())
-    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": True,
+                "id": "steamos",
+                "family": "arch",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
+    )
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
 
@@ -259,11 +352,25 @@ def test_install_steam_enables_rpmfusion_on_mutable_fedora(tmp_path: Path, monke
     step = AppsStep(ctx)
     rpmfusion_called: list[bool] = []
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": False, "is_debian": False, "is_fedora": True, "immutable": False, "id": "fedora", "family": "fedora"})())
-    monkeypatch.setattr("postformat.steps.ensure_rpmfusion", lambda _runner: rpmfusion_called.append(True))
-    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": False,
+                "is_debian": False,
+                "is_fedora": True,
+                "immutable": False,
+                "id": "fedora",
+                "family": "fedora",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.gaming.ensure_rpmfusion", lambda _runner: rpmfusion_called.append(True))
+    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
 
     step._install_steam()
 
@@ -275,10 +382,24 @@ def test_install_steam_skips_when_preinstalled_on_immutable(tmp_path: Path, monk
     step = AppsStep(ctx)
     flatpaks: list[str] = []
 
-    monkeypatch.setattr("postformat.steps.current_distro", lambda: type("Distro", (), {"is_arch": True, "is_debian": False, "is_fedora": False, "immutable": True, "id": "steamos", "family": "arch"})())
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "steam")
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.install_flatpak", lambda app_id, _runner: flatpaks.append(app_id))
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": True,
+                "id": "steamos",
+                "family": "arch",
+            },
+        )(),
+    )
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: command == "steam")
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.install_flatpak", lambda app_id, _runner: flatpaks.append(app_id))
 
     step._install_steam()
 
@@ -309,10 +430,12 @@ def test_git_step_ctrl_c_on_repo_url_becomes_skipped(tmp_path: Path, monkeypatch
     ctx.runner.dry_run = False
     step = GitStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.install_system_package", lambda *args, **kwargs: None)
+    monkeypatch.setattr("postformat.steps.dev.install_system_package", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "postformat.steps.prompt_user",
-        lambda *args, **kwargs: (_ for _ in ()).throw(PromptInterruptedError("entrada interrompida pelo usuario: Informe a URL")),
+        "postformat.steps.dev.prompt_user",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            PromptInterruptedError("entrada interrompida pelo usuario: Informe a URL")
+        ),
     )
 
     step.apply()
@@ -359,9 +482,18 @@ def test_git_step_strip_host_block_removes_only_target_alias(tmp_path: Path) -> 
 def test_render_status_overview_groups_applied_pending_attention(tmp_path: Path) -> None:
     logger = Logger(tmp_path, "test")
     results = [
-        StepRunResult("00", "Ecossistema", "done", "Flatpak, flathub, AUR helper e fuse2 estao prontos.", "aplicado", 0.1),
+        StepRunResult(
+            "00", "Ecossistema", "done", "Flatpak, flathub, AUR helper e fuse2 estao prontos.", "aplicado", 0.1
+        ),
         StepRunResult("07", "Rclone", "manual", "Remote do Google Drive ainda nao foi configurado.", "pendente", 0.1),
-        StepRunResult("12", "Antigravity", "done", "Antigravity esta instalado, mas ~/.local/bin ainda nao esta no PATH.", "atencao", 0.1),
+        StepRunResult(
+            "12",
+            "Antigravity",
+            "done",
+            "Antigravity esta instalado, mas ~/.local/bin ainda nao esta no PATH.",
+            "atencao",
+            0.1,
+        ),
     ]
 
     render_status_overview(logger, results, 13, 1.2)
@@ -377,14 +509,20 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n")
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
         if cmd == ["prime-run", "glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n")
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n",
+            )
         if cmd == ["nvidia-smi"]:
             return CompletedProcess(cmd, 0, stdout="NVIDIA-SMI 610.43.02\n| 0 NVIDIA GeForce RTX 5050 Laptop GPU |\n")
         if cmd == ["pacman", "-Q", "steam", "heroic-games-launcher"]:
@@ -392,8 +530,10 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
+    )
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -410,23 +550,31 @@ def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_SESSION_TYPE": "x11"})
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "x11"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n")
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
         if cmd == ["prime-run", "glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n")
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n",
+            )
         if cmd == ["nvidia-smi"]:
             return CompletedProcess(cmd, 0, stdout="NVIDIA-SMI 610.43.02\n| 0 NVIDIA GeForce RTX 5050 Laptop GPU |\n")
         if cmd == ["pacman", "-Q", "steam", "heroic-games-launcher"]:
-            return CompletedProcess(cmd, 1, stdout="steam 1.0.0.85-7\nerror: package 'heroic-games-launcher' was not found\n")
+            return CompletedProcess(
+                cmd, 1, stdout="steam 1.0.0.85-7\nerror: package 'heroic-games-launcher' was not found\n"
+            )
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "steam")
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "steam")
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -441,12 +589,14 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n")
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
         if cmd == ["prime-run", "glxinfo", "-B"]:
             return CompletedProcess(cmd, 1, stdout="prime-run failed to start discrete GPU backend\n")
         if cmd == ["nvidia-smi"]:
@@ -456,8 +606,10 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
+    )
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -471,14 +623,20 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: No\nOpenGL renderer string: Mesa Intel(R) Graphics\n")
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: No\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
         if cmd == ["prime-run", "glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n")
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n",
+            )
         if cmd == ["nvidia-smi"]:
             return CompletedProcess(cmd, 0, stdout="NVIDIA-SMI 610.43.02\n| 0 NVIDIA GeForce RTX 5050 Laptop GPU |\n")
         if cmd == ["pacman", "-Q", "steam", "heroic-games-launcher"]:
@@ -486,8 +644,10 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
+    )
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -503,21 +663,29 @@ def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypa
     def fake_exists(name: str) -> bool:
         return name != "nvidia-smi"
 
-    monkeypatch.setattr("postformat.steps.command_exists", fake_exists)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", fake_exists)
+    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n")
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
         if cmd == ["prime-run", "glxinfo", "-B"]:
-            return CompletedProcess(cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n")
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n",
+            )
         if cmd == ["pacman", "-Q", "steam", "heroic-games-launcher"]:
             return CompletedProcess(cmd, 0, stdout="steam 1.0.0.85-7\nheroic-games-launcher-bin 2.22.0-1\n")
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
+    )
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -530,10 +698,10 @@ def test_apps_detect_install_source_prefers_existing_flatpak(tmp_path: Path, mon
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: app_id == "com.discordapp.Discord")
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "flatpak")
-    monkeypatch.setattr("postformat.steps.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: app_id == "com.discordapp.Discord")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: command == "flatpak")
+    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
 
     assert step._detect_install_source("Discord") == "flatpak (com.discordapp.Discord)"
 
@@ -545,10 +713,10 @@ def test_apps_detect_install_source_for_hydra_appimage(tmp_path: Path, monkeypat
     hydra.parent.mkdir(parents=True, exist_ok=True)
     hydra.write_text("bin", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
 
     source = step._detect_install_source("Hydra Launcher")
 
@@ -563,10 +731,10 @@ def test_apps_detect_install_source_for_hydra_canonical_desktop(tmp_path: Path, 
     desktop.parent.mkdir(parents=True, exist_ok=True)
     desktop.write_text("[Desktop Entry]\nName=Hydra Launcher\n", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
 
     source = step._detect_install_source("Hydra Launcher")
 
@@ -582,13 +750,21 @@ def test_install_hydra_reconciles_desktop_when_appimage_exists(tmp_path: Path, m
     copied_icons: list[Path] = []
     installed_desktops: list[tuple[Path, str]] = []
 
-    monkeypatch.setattr("postformat.steps.copy_asset", lambda _source, target, _runner: copied_icons.append(target))
     monkeypatch.setattr(
-        "postformat.steps.install_desktop_entry",
+        "postformat.steps.gaming.copy_asset", lambda _source, target, _runner: copied_icons.append(target)
+    )
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_desktop_entry",
         lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
     )
-    monkeypatch.setattr("postformat.steps.install_system_package", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar pacotes"))
-    monkeypatch.setattr("postformat.steps.install_first_available", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar fuse"))
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_system_package",
+        lambda *_args, **_kwargs: pytest.fail("nao deveria instalar pacotes"),
+    )
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_first_available",
+        lambda *_args, **_kwargs: pytest.fail("nao deveria instalar fuse"),
+    )
 
     step._install_hydra()
 
@@ -617,9 +793,9 @@ def test_update_appimages_migrates_manual_install(tmp_path: Path, monkeypatch) -
     )
 
     installed_desktops: list[tuple[Path, str]] = []
-    monkeypatch.setattr("postformat.steps.copy_asset", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("postformat.steps.appimage.copy_asset", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "postformat.steps.install_desktop_entry",
+        "postformat.steps.appimage.install_desktop_entry",
         lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
     )
 
@@ -719,9 +895,9 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
     step = GesturesStep(ctx)
 
     monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("postformat.steps.kde.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.kde.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -735,11 +911,11 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     step = GesturesStep(ctx)
 
     monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
-    monkeypatch.setattr("postformat.steps.system_installed", lambda pkg: pkg == "libinput-gestures")
-    monkeypatch.setattr("postformat.steps.command_exists", lambda command: command == "libinput-gestures-setup")
+    monkeypatch.setattr("postformat.steps.kde.system_installed", lambda pkg: pkg == "libinput-gestures")
+    monkeypatch.setattr("postformat.steps.kde.command_exists", lambda command: command == "libinput-gestures-setup")
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
     monkeypatch.setattr(step, "_libinput_gestures_running", lambda: False)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
 
@@ -787,7 +963,10 @@ def test_gestures_apply_skips_machine_without_touchpad(tmp_path: Path, monkeypat
     step = GesturesStep(ctx)
 
     monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
-    monkeypatch.setattr("postformat.steps.install_system_or_aur", lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"))
+    monkeypatch.setattr(
+        "postformat.steps.kde.install_system_or_aur",
+        lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"),
+    )
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -802,7 +981,7 @@ def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeyp
     step = GesturesStep(ctx)
 
     monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
-    monkeypatch.setattr("postformat.steps.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
 
@@ -814,7 +993,7 @@ def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path:
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 1)
 
     probe = step._probe_prime_gl()
@@ -827,7 +1006,7 @@ def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Pat
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 2)
 
     probe = step._probe_prime_gl()
@@ -879,7 +1058,12 @@ def test_run_all_clears_screen_before_first_step(tmp_path: Path, monkeypatch) ->
     call_order: list[str] = []
 
     monkeypatch.setattr("postformat.cli.clear_screen", lambda: call_order.append("clear"))
-    monkeypatch.setattr("postformat.cli.run_action", lambda *_args, **_kwargs: call_order.append("run") or StepRunResult("00", "Preparar", "done", "ok", "aplicado", 0.1))
+    monkeypatch.setattr(
+        "postformat.cli.run_action",
+        lambda *_args, **_kwargs: (
+            call_order.append("run") or StepRunResult("00", "Preparar", "done", "ok", "aplicado", 0.1)
+        ),
+    )
     monkeypatch.setattr("postformat.cli.render_run_summary", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("postformat.cli.prompt_return_to_menu", lambda *_args, **_kwargs: None)
 
@@ -909,7 +1093,7 @@ def test_hardware_nvidia_gpu_name_extracts_from_smi() -> None:
 
 
 def test_hardware_has_touchpad_reads_input_devices(monkeypatch) -> None:
-    monkeypatch.setattr(hardware.Path, "read_text", lambda self, **_kw: "N: Name=\"SynPS/2 Synaptics TouchPad\"")
+    monkeypatch.setattr(hardware.Path, "read_text", lambda self, **_kw: 'N: Name="SynPS/2 Synaptics TouchPad"')
     assert hardware.has_touchpad() is True
 
 
@@ -917,7 +1101,7 @@ def test_hardware_step_dry_run_does_not_write_report(tmp_path: Path, monkeypatch
     ctx = make_ctx(tmp_path)
     step = HardwareStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.command_exists", lambda name: True)
+    monkeypatch.setattr("postformat.steps.inventory.command_exists", lambda name: True)
     monkeypatch.setattr("postformat.hardware.command_exists", lambda name: True)
 
     step.apply()
@@ -947,3 +1131,67 @@ def test_hardware_step_status_applied_with_existing_report(tmp_path: Path) -> No
     step.status()
 
     assert step.result.compliance == "aplicado"
+
+
+def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": "/usr/bin"})
+
+    step.status()
+
+    assert step.result.compliance == "pendente"
+    assert set(step.result.missing_items) == {"instalacao", "desktop", "wrapper"}
+
+
+def test_antigravity_status_applied_when_everything_present(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    home = ctx.user.home
+    (home / "Antigravity IDE").mkdir(parents=True)
+    desktop = home / ".local/share/applications/antigravity-ide.desktop"
+    desktop.parent.mkdir(parents=True)
+    desktop.write_text("[Desktop Entry]\n", encoding="utf-8")
+    wrapper = home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": str(home / ".local/bin")})
+
+    step.status()
+
+    assert step.result.compliance == "aplicado"
+
+
+def test_antigravity_status_attention_when_path_missing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    home = ctx.user.home
+    wrapper = home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": "/usr/bin"})
+
+    step.status()
+
+    assert step.result.compliance == "atencao"
+
+
+def test_antigravity_undo_removes_artifacts(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False
+    step = AntigravityStep(ctx)
+    home = ctx.user.home
+    install_dir = home / "Antigravity IDE"
+    install_dir.mkdir(parents=True)
+    desktop = home / ".local/share/applications/antigravity-ide.desktop"
+    desktop.parent.mkdir(parents=True)
+    desktop.write_text("[Desktop Entry]\n", encoding="utf-8")
+    wrapper = home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    step.undo()
+
+    assert not install_dir.exists()
+    assert not desktop.exists()
+    assert not wrapper.exists()
