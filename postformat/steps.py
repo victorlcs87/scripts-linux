@@ -675,9 +675,36 @@ class GitStep(Step):
     id = "06"
     title = "Git / GitHub"
 
+    @property
+    def ssh_dir(self) -> Path:
+        return self.ctx.user.home / ".ssh"
+
+    @property
+    def config_file(self) -> Path:
+        return self.ssh_dir / "config"
+
+    def _key_path(self, alias: str) -> Path:
+        return self.ssh_dir / f"id_ed25519_{alias}"
+
     def apply(self) -> None:
-        header(self, self.title, "Preparando clone ou atualizacao do repositorio base")
+        header(self, self.title, "Repositorio base + contas GitHub via chave SSH")
         install_system_package("git", self.ctx.runner)
+        repo_msg = self._setup_base_repo()
+        account_msg = self._configure_accounts()
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}[dry-run]{Color.RESET} pediria a URL do repositorio e os dados das contas GitHub"
+            )
+            self.mark_manual("Dry-run indica solicitacao de URL do repositorio e dados das contas.")
+            return
+        partes = [p for p in (repo_msg, account_msg) if p]
+        if partes:
+            self.mark_done(" ".join(partes))
+            self.mark_applied(" ".join(partes))
+        else:
+            self.mark_skipped("Nenhuma acao executada (repositorio e contas pulados).")
+
+    def _setup_base_repo(self) -> str:
         base = self.ctx.user.home / "repositorios"
         target = base / "scripts-linux"
         if base.exists():
@@ -685,12 +712,10 @@ class GitStep(Step):
         else:
             self.ctx.runner.run(["mkdir", "-p", str(base)], action=f"Criando diretorio {base}", show_progress=False)
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} pediria a URL do repositorio e faria clone/pull")
-            self.mark_manual("Dry-run indica solicitacao de URL do repositorio.")
-            return
+            return ""
         try:
             repo_url = prompt_user(
-                "Informe a URL do repositorio scripts-linux (SSH/HTTPS)",
+                "Informe a URL do repositorio scripts-linux (SSH/HTTPS, vazio para pular)",
                 self.ctx.logger,
                 detail="O clone so continua depois que voce fornecer a URL desejada.",
                 prompt_label="Repo URL",
@@ -698,29 +723,203 @@ class GitStep(Step):
             ).strip()
         except PromptInterruptedError:
             self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Entrada da URL interrompida. Clone/pull cancelado.")
-            self.mark_skipped("URL do repositorio cancelada pelo usuario.")
-            return
+            return ""
         if not repo_url:
             self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} URL vazia, pulando clone.")
-            self.mark_skipped("URL do repositorio nao informada.")
-            return
+            return ""
         if (target / ".git").exists():
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} repositorio ja existe em {target}; atualizando")
             self.ctx.runner.run(["git", "-C", str(target), "pull", "--ff-only"], check=False, action="Atualizando repositorio scripts-linux")
-            self.mark_done("Repositorio scripts-linux atualizado.")
-        else:
-            self.ctx.runner.run(["git", "clone", repo_url, str(target)], action="Clonando repositorio scripts-linux")
-            self.mark_done("Repositorio scripts-linux clonado.")
+            return "Repositorio scripts-linux atualizado."
+        self.ctx.runner.run(["git", "clone", repo_url, str(target)], action="Clonando repositorio scripts-linux")
+        return "Repositorio scripts-linux clonado."
+
+    def _ensure_ssh_dir(self) -> None:
+        if self.ctx.runner.dry_run:
+            return
+        self.ssh_dir.mkdir(parents=True, exist_ok=True)
+        self.ssh_dir.chmod(0o700)
+
+    def _configure_accounts(self) -> str:
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}[dry-run]{Color.RESET} pediria alias/usuario/nome/email e geraria chave ed25519 por conta"
+            )
+            return ""
+        self._ensure_ssh_dir()
+        adicionados: list[str] = []
+        while True:
+            try:
+                alias = prompt_user(
+                    "Alias da conta GitHub (vazio para encerrar)",
+                    self.ctx.logger,
+                    detail="Ex: github-work. Cada conta ganha uma chave SSH dedicada. Deixe vazio para nao adicionar (mais).",
+                    prompt_label="Alias",
+                    allow_empty=True,
+                ).strip()
+            except PromptInterruptedError:
+                self.add_hint("Configuracao de contas GitHub interrompida pelo usuario.")
+                break
+            if not alias:
+                break
+            try:
+                ghuser = prompt_user("Usuario GitHub", self.ctx.logger, prompt_label="Usuario", allow_empty=False).strip()
+                gitname = prompt_user("Nome para commits", self.ctx.logger, prompt_label="Nome", allow_empty=False).strip()
+                email = prompt_user("Email", self.ctx.logger, prompt_label="Email", allow_empty=False).strip()
+            except PromptInterruptedError:
+                self.add_hint(f"Dados da conta '{alias}' interrompidos; conta nao configurada.")
+                break
+            if self._add_account(alias, ghuser, gitname, email):
+                adicionados.append(alias)
+        if adicionados:
+            return f"Contas GitHub configuradas: {', '.join(adicionados)}."
+        return ""
+
+    def _account_block(self, alias: str, key: Path) -> str:
+        return (
+            f"\nHost {alias}\n"
+            f"    HostName github.com\n"
+            f"    User git\n"
+            f"    IdentityFile {key}\n"
+            f"    IdentitiesOnly yes\n"
+        )
+
+    def _add_account(self, alias: str, ghuser: str, gitname: str, email: str) -> bool:
+        key = self._key_path(alias)
+        if key.exists():
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} chave do alias '{alias}' ja existe; pulando.")
+            self.add_hint(f"Alias '{alias}' ja possui chave em {key}; remova com 'undo' antes de recriar.")
+            return False
+        self.ctx.runner.run(
+            ["ssh-keygen", "-t", "ed25519", "-C", email, "-f", str(key), "-N", ""],
+            action=f"Gerando chave SSH ed25519 para '{alias}'",
+        )
+        existing = self.config_file.read_text(encoding="utf-8") if self.config_file.exists() else ""
+        if f"Host {alias}" not in existing:
+            backup_existing(self.config_file, self.ctx.runner)
+            write_text(self.config_file, existing + self._account_block(alias, key), self.ctx.runner, mode=0o600)
+        self.ctx.runner.run(
+            ["ssh-add", str(key)],
+            check=False,
+            action=f"Adicionando chave de '{alias}' ao ssh-agent",
+        )
+        pub = key.with_suffix(".pub")
+        pub_content = pub.read_text(encoding="utf-8").strip() if pub.exists() else "(chave publica nao encontrada)"
+        print_lines(
+            self.ctx.logger,
+            [
+                "",
+                paint("====================================", Color.SUCCESS),
+                paint(f"COPIE ESTA CHAVE PUBLICA ({alias})", Color.SUCCESS),
+                paint("====================================", Color.SUCCESS),
+                "",
+                pub_content,
+                "",
+                "Proximos passos:",
+                "  1) Acesse https://github.com/settings/keys e clique em 'New SSH Key'.",
+                "  2) Cole a chave publica acima e salve.",
+                f"  3) Teste a conexao: ssh -T git@{alias}",
+                f"     (deve aparecer algo como: Hi {ghuser}! You've successfully authenticated...)",
+                f"  4) Para clonar: git clone git@{alias}:USUARIO/REPOSITORIO.git",
+                "  5) Dentro do repositorio configure manualmente o autor dos commits:",
+                f'       git config user.name "{gitname}"',
+                f'       git config user.email "{email}"',
+                "",
+            ],
+        )
+        return True
+
+    def _remove_account(self, alias: str) -> bool:
+        key = self._key_path(alias)
+        pub = key.with_suffix(".pub")
+        removeu = False
+        for path in (key, pub):
+            if path.exists():
+                self.ctx.runner.run(["rm", "-f", str(path)], action=f"Removendo {path.name}", show_progress=False)
+                removeu = True
+        if self.config_file.exists():
+            content = self.config_file.read_text(encoding="utf-8")
+            new_content = self._strip_host_block(content, alias)
+            if new_content != content:
+                backup_existing(self.config_file, self.ctx.runner)
+                write_text(self.config_file, new_content, self.ctx.runner, mode=0o600)
+                removeu = True
+        return removeu
+
+    @staticmethod
+    def _strip_host_block(content: str, alias: str) -> str:
+        lines = content.splitlines(keepends=True)
+        result: list[str] = []
+        skip = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("Host "):
+                hosts = stripped.split()[1:]
+                skip = alias in hosts
+                if skip:
+                    continue
+            elif skip and stripped == "":
+                continue
+            elif skip and not line.startswith((" ", "\t")):
+                skip = False
+            if not skip:
+                result.append(line)
+        return "".join(result)
 
     def status(self) -> None:
-        header(self, self.title, "Verificando git local e estado do repositorio clonado")
+        header(self, self.title, "Repositorio base, chaves SSH e contas GitHub")
         self.ctx.runner.run(["git", "--version"], check=False)
         self.ctx.runner.run(["git", "-C", str(self.ctx.user.home / "repositorios/scripts-linux"), "status", "--short", "--branch"], check=False)
-        target = self.ctx.user.home / "repositorios/scripts-linux/.git"
-        if target.exists():
-            self.mark_applied("Repositorio scripts-linux esta clonado localmente.")
+        repo_ok = (self.ctx.user.home / "repositorios/scripts-linux/.git").exists()
+
+        self.ctx.logger.write("")
+        self.ctx.logger.write(paint("===== ~/.ssh/config =====", Color.ACCENT))
+        if self.config_file.exists():
+            print_lines(self.ctx.logger, self.config_file.read_text(encoding="utf-8").splitlines())
         else:
-            self.mark_pending("Repositorio scripts-linux ainda nao foi clonado.", missing=["repositorio scripts-linux"])
+            self.ctx.logger.write("Arquivo inexistente.")
+
+        keys = sorted(self.ssh_dir.glob("id_ed25519_*.pub")) if self.ssh_dir.exists() else []
+        self.ctx.logger.write("")
+        self.ctx.logger.write(paint("===== CHAVES POR CONTA =====", Color.ACCENT))
+        if keys:
+            for pub in keys:
+                alias = pub.name[len("id_ed25519_"):-len(".pub")]
+                self.ctx.logger.write(f"{badge(alias, Color.SUCCESS)} {pub}")
+        else:
+            self.ctx.logger.write("Nenhuma chave de conta encontrada.")
+        self.ctx.runner.run(["ssh-add", "-l"], check=False, action="Listando chaves no ssh-agent")
+
+        if repo_ok and keys:
+            self.mark_applied("Repositorio clonado e contas GitHub configuradas.")
+        elif repo_ok:
+            self.mark_applied("Repositorio scripts-linux clonado; nenhuma conta SSH configurada.")
+        elif keys:
+            self.mark_attention("Contas GitHub configuradas, mas repositorio base nao foi clonado.", attention=["repositorio scripts-linux"])
+        else:
+            self.mark_pending("Repositorio nao clonado e nenhuma conta GitHub configurada.", missing=["repositorio scripts-linux", "contas GitHub"])
+
+    def undo(self) -> None:
+        header(self, self.title, "Remover conta GitHub (chave SSH + bloco no config)")
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} pediria o alias e removeria chave e bloco do config")
+            self.mark_manual("Dry-run indica remocao de conta GitHub.")
+            return
+        try:
+            alias = prompt_user(
+                "Alias da conta a remover",
+                self.ctx.logger,
+                detail="Remove id_ed25519_<alias>(.pub) e o bloco Host correspondente do ~/.ssh/config.",
+                prompt_label="Alias",
+                allow_empty=False,
+            ).strip()
+        except PromptInterruptedError:
+            self.mark_skipped("Remocao cancelada pelo usuario.")
+            return
+        if self._remove_account(alias):
+            self.mark_done(f"Conta '{alias}' removida.")
+        else:
+            self.mark_skipped(f"Nada a remover para o alias '{alias}'.")
 
 
 class RcloneStep(Step):

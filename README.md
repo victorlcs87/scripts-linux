@@ -80,7 +80,7 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 | `03` | Navegador | Instala Firefox, FirefoxPWA e Bitwarden. |
 | `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
 | `05` | NVIDIA / jogos | Diagnostica sessao grafica, GPUs, Steam e Heroic. |
-| `06` | Git / GitHub | Instala Git e clona/atualiza o repositorio base. |
+| `06` | Git / GitHub | Instala Git, clona/atualiza o repositorio base e configura uma ou varias contas GitHub com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro). |
 | `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
 | `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |

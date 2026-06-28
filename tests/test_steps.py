@@ -318,7 +318,42 @@ def test_git_step_ctrl_c_on_repo_url_becomes_skipped(tmp_path: Path, monkeypatch
     step.apply()
 
     assert step.result.status == "skipped"
-    assert "cancelada pelo usuario" in step.result.message
+    assert "Nenhuma acao executada" in step.result.message
+
+
+def test_git_step_account_block_has_expected_ssh_config(tmp_path: Path) -> None:
+    step = GitStep(make_ctx(tmp_path))
+    key = step._key_path("github-work")
+
+    block = step._account_block("github-work", key)
+
+    assert "Host github-work" in block
+    assert "HostName github.com" in block
+    assert "User git" in block
+    assert f"IdentityFile {key}" in block
+    assert "IdentitiesOnly yes" in block
+
+
+def test_git_step_strip_host_block_removes_only_target_alias(tmp_path: Path) -> None:
+    step = GitStep(make_ctx(tmp_path))
+    content = (
+        "Host github-work\n"
+        "    HostName github.com\n"
+        "    IdentityFile /home/u/.ssh/id_ed25519_github-work\n"
+        "    IdentitiesOnly yes\n"
+        "\n"
+        "Host github-personal\n"
+        "    HostName github.com\n"
+        "    IdentityFile /home/u/.ssh/id_ed25519_github-personal\n"
+        "    IdentitiesOnly yes\n"
+    )
+
+    result = step._strip_host_block(content, "github-work")
+
+    assert "Host github-work" not in result
+    assert "id_ed25519_github-work" not in result
+    assert "Host github-personal" in result
+    assert "id_ed25519_github-personal" in result
 
 
 def test_render_status_overview_groups_applied_pending_attention(tmp_path: Path) -> None:
