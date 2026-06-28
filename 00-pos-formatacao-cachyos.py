@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from postformat.bootstrap import BootstrapError, ensure_bootstrap
 

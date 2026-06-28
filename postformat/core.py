@@ -7,11 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Sequence
-
 
 ANSI_ENABLED = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM", "dumb") != "dumb"
 SPINNER_FRAMES = ("|", "/", "-", "\\")
@@ -243,7 +242,11 @@ class Runner:
         if self.dry_run:
             announce(self.logger, "action", action)
             if interactive or interactive_tty:
-                announce(self.logger, "manual", manual_message or "Comando interativo: pode aguardar sua entrada e isso nao e travamento.")
+                announce(
+                    self.logger,
+                    "manual",
+                    manual_message or "Comando interativo: pode aguardar sua entrada e isso nao e travamento.",
+                )
             self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
         if sudo and no_new_privs_enabled():
@@ -265,7 +268,11 @@ class Runner:
             env.update(env_extra)
         announce(self.logger, "action", action)
         if interactive or interactive_tty:
-            announce(self.logger, "manual", manual_message or "Comando interativo: a janela ou terminal pode aguardar sua entrada.")
+            announce(
+                self.logger,
+                "manual",
+                manual_message or "Comando interativo: a janela ou terminal pode aguardar sua entrada.",
+            )
         self.logger.write(f"{paint('$', Color.COMMAND)} {paint(printable, Color.COMMAND)}")
         started = time.monotonic()
         if interactive_tty:
@@ -477,7 +484,12 @@ def backup_existing(path: Path, runner: Runner, *, sudo: bool = False) -> Path |
         return None
     target = backup_path(path)
     if sudo:
-        runner.run(["cp", "-a", str(path), str(target)], sudo=True, action=f"Criando backup de {path.name}", show_progress=False)
+        runner.run(
+            ["cp", "-a", str(path), str(target)],
+            sudo=True,
+            action=f"Criando backup de {path.name}",
+            show_progress=False,
+        )
     else:
         if runner.dry_run:
             runner.logger.write(f"{badge('dry-run', Color.DRY_RUN)} cp -a {path} {target}")
@@ -537,7 +549,9 @@ def ensure_owner(path: Path, user: UserInfo, runner: Runner, *, recursive: bool 
     if flag:
         cmd.append(flag)
     cmd.extend([f"{user.uid}:{user.gid}", str(path)])
-    runner.run(cmd, sudo=True, check=False, action=f"Ajustando permissao de {path}", show_progress=False, quiet_success=True)
+    runner.run(
+        cmd, sudo=True, check=False, action=f"Ajustando permissao de {path}", show_progress=False, quiet_success=True
+    )
 
 
 def confirm_phrase(phrase: str, logger: Logger) -> bool:

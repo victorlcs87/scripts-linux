@@ -79,8 +79,7 @@ def detect_distro(path: Path = Path("/etc/os-release")) -> Distro:
         return Distro(id=distro_id, id_like=id_like, family="debian", immutable=immutable)
     pretty = values.get("PRETTY_NAME") or distro_id or "desconhecida"
     raise UnsupportedDistroError(
-        f"distribuicao nao suportada: {pretty}. "
-        "Suportadas: Arch/CachyOS/SteamOS, Debian/Ubuntu e Fedora/Bazzite."
+        f"distribuicao nao suportada: {pretty}. Suportadas: Arch/CachyOS/SteamOS, Debian/Ubuntu e Fedora/Bazzite."
     )
 
 
@@ -197,7 +196,9 @@ def install_first_available(packages: tuple[str, ...] | list[str], runner: Runne
         if system_package_exists(pkg):
             install_system_package(pkg, runner)
             return pkg
-    runner.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote disponivel entre: {', '.join(packages)}")
+    runner.logger.write(
+        f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote disponivel entre: {', '.join(packages)}"
+    )
     return None
 
 
@@ -298,13 +299,13 @@ def update_system(runner: Runner) -> None:
 def pending_updates_command() -> list[str] | str:
     distro = current_distro()
     if distro.is_fedora and distro.immutable:
-        return "rpm-ostree upgrade --check 2>/dev/null; rc=$?; [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 77 ]"
+        return 'rpm-ostree upgrade --check 2>/dev/null; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 77 ]'
     if distro.is_arch and distro.immutable:
         return "echo 'SteamOS: atualize pela interface do sistema (steamos-update)'"
     if distro.is_arch:
         return 'checkupdates; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]'
     if distro.is_fedora:
-        return "dnf check-update 2>/dev/null; rc=$?; [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 100 ]"
+        return 'dnf check-update 2>/dev/null; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 100 ]'
     if distro.is_debian:
         return "apt list --upgradable 2>/dev/null | sed '1d'"
     raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")

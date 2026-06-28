@@ -1,5 +1,5 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -24,7 +24,11 @@ def test_ensure_bootstrap_installs_missing_requirements_once(tmp_path: Path, mon
     installed: list[list[str]] = []
 
     monkeypatch.setattr("importlib.util.find_spec", lambda _name: None)
-    monkeypatch.setattr(bootstrap, "install_missing_requirements", lambda requirements, _root: installed.append([item.module_name for item in requirements]))
+    monkeypatch.setattr(
+        bootstrap,
+        "install_missing_requirements",
+        lambda requirements, _root: installed.append([item.module_name for item in requirements]),
+    )
 
     ensure_root = tmp_path / "repo"
     ensure_root.mkdir()

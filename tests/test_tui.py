@@ -28,7 +28,9 @@ def test_choose_option_uses_inquirer_in_tty(monkeypatch, tmp_path: Path) -> None
     logger = Logger(tmp_path, "test")
     fake_inquirer = _FakeInquirer(1)
     options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
-    fake_style_factory = lambda style, style_override=False: {"style": style, "style_override": style_override}
+
+    def fake_style_factory(style, style_override=False):
+        return {"style": style, "style_override": style_override}
 
     monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: True)
     monkeypatch.setattr("postformat.tui.load_tui_deps", lambda: (fake_inquirer, fake_style_factory))
@@ -89,6 +91,7 @@ def test_choose_option_fallback_retries_after_invalid_number(monkeypatch, tmp_pa
 def test_choose_option_tty_interrupt_is_reported_cleanly(monkeypatch, tmp_path: Path) -> None:
     logger = Logger(tmp_path, "test")
     options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
+
     class _InterruptingInquirer:
         def select(self, **_kwargs):
             class _InterruptingPrompt:
@@ -98,7 +101,9 @@ def test_choose_option_tty_interrupt_is_reported_cleanly(monkeypatch, tmp_path: 
             return _InterruptingPrompt()
 
     monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: True)
-    monkeypatch.setattr("postformat.tui.load_tui_deps", lambda: (_InterruptingInquirer(), lambda style, style_override=False: style))
+    monkeypatch.setattr(
+        "postformat.tui.load_tui_deps", lambda: (_InterruptingInquirer(), lambda style, style_override=False: style)
+    )
 
     with pytest.raises(PromptInterruptedError):
         choose_option(

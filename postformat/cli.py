@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
@@ -10,24 +9,23 @@ from .core import (
     CommandInterruptedError,
     Logger,
     MenuOption,
-    PromptInterruptedError,
     PrivilegeEscalationBlockedError,
+    PromptInterruptedError,
     Runner,
     StepRunResult,
     badge,
     detect_user,
     divider,
+    format_elapsed,
     is_root,
     no_new_privs_enabled,
     paint,
     progress_bar,
     prompt_user,
-    format_elapsed,
 )
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
 from .tui import TuiDependencyError, choose_option
-
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -115,14 +113,18 @@ def run_all(action: str, logger: Logger) -> None:
         percent = index / total
         logger.write("")
         logger.write(paint(progress_bar(index, total), Color.ACCENT))
-        logger.write(paint(f"Etapa {index:02d}/{total:02d}  |  {int(percent * 100):02d}%  |  modo: {action}", Color.MUTED))
+        logger.write(
+            paint(f"Etapa {index:02d}/{total:02d}  |  {int(percent * 100):02d}%  |  modo: {action}", Color.MUTED)
+        )
         logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}")
         try:
             result = run_action(step_cls, action, logger)
             results.append(result)
         except PrivilegeEscalationBlockedError as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
-            logger.write(f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente.")
+            logger.write(
+                f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente."
+            )
             results.append(
                 StepRunResult(
                     step_id=step_cls.id,
@@ -191,7 +193,10 @@ def run_all(action: str, logger: Logger) -> None:
 
 
 def choose_step(logger: Logger) -> type[Step] | None:
-    options = [MenuOption(str(index), step_cls.title, display_key=f"{index:02d}") for index, step_cls in enumerate(ALL_STEPS, 1)]
+    options = [
+        MenuOption(str(index), step_cls.title, display_key=f"{index:02d}")
+        for index, step_cls in enumerate(ALL_STEPS, 1)
+    ]
     clear_screen()
     try:
         index = choose_option(
@@ -303,11 +308,15 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     logger = Logger(Path.cwd(), "00-pos-formatacao-cachyos")
     if is_root():
-        logger.write(f"{badge('erro', Color.ERROR)} nao execute como root. Use usuario normal; sudo sera chamado quando necessario.")
+        logger.write(
+            f"{badge('erro', Color.ERROR)} nao execute como root. Use usuario normal; sudo sera chamado quando necessario."
+        )
         return 1
     if no_new_privs_enabled():
         logger.write(f"{badge('aviso', Color.WARNING)} este terminal bloqueia sudo (NoNewPrivs=1).")
-        logger.write("Status e dry-run continuam funcionando, mas Apply de etapas privilegiadas precisa ser executado em uma sessao normal do sistema.")
+        logger.write(
+            "Status e dry-run continuam funcionando, mas Apply de etapas privilegiadas precisa ser executado em uma sessao normal do sistema."
+        )
     if argv and argv[0] == "step":
         if len(argv) < 2:
             logger.write("Uso: python -m postformat.cli step ID [apply|dry-run|status|undo|menu]")
@@ -322,7 +331,12 @@ def main(argv: list[str] | None = None) -> int:
                 step_menu(step_cls, logger)
             else:
                 run_action(step_cls, action, logger)
-        except (PrivilegeEscalationBlockedError, CommandInterruptedError, PromptInterruptedError, TuiDependencyError) as exc:
+        except (
+            PrivilegeEscalationBlockedError,
+            CommandInterruptedError,
+            PromptInterruptedError,
+            TuiDependencyError,
+        ) as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
             return 1
         return 0
@@ -371,7 +385,12 @@ def render_step_summary(logger: Logger, action: str, result: StepRunResult) -> N
     logger.write("")
     logger.write(divider(char="#", tone=Color.TITLE))
     logger.write(paint("Resumo da etapa", Color.TITLE))
-    logger.write(paint(f"Modo: {action}  |  Etapa: [{result.step_id}] {result.title}  |  Duracao: {format_elapsed(result.duration_seconds)}", Color.MUTED))
+    logger.write(
+        paint(
+            f"Modo: {action}  |  Etapa: [{result.step_id}] {result.title}  |  Duracao: {format_elapsed(result.duration_seconds)}",
+            Color.MUTED,
+        )
+    )
     logger.write(divider(char="-", tone=Color.BOX))
     logger.write(f"{badge(result.status, tone)} {result.message}")
     logger.write(divider(char="#", tone=Color.TITLE))
@@ -436,7 +455,11 @@ def render_run_summary(
     logger.write("")
     logger.write(divider(char="#", tone=Color.TITLE))
     logger.write(paint("Resumo final do fluxo", Color.TITLE))
-    logger.write(paint(f"Modo: {action}  |  Duracao total: {format_elapsed(duration_seconds)}  |  Log: {logger.path}", Color.MUTED))
+    logger.write(
+        paint(
+            f"Modo: {action}  |  Duracao total: {format_elapsed(duration_seconds)}  |  Log: {logger.path}", Color.MUTED
+        )
+    )
     logger.write(divider(char="-", tone=Color.BOX))
     logger.write(f"{badge('done', Color.SUCCESS)} {counts['done']} concluida(s)")
     logger.write(f"{badge('skipped', Color.WARNING)} {counts['skipped']} pulada(s)")

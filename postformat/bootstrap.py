@@ -7,11 +7,10 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .platform import UnsupportedDistroError, detect_distro
-
 
 BOOTSTRAP_VERSION = 1
 
@@ -79,7 +78,7 @@ def write_bootstrap_state(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": BOOTSTRAP_VERSION,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "requirements": [requirement.module_name for requirement in REQUIREMENTS],
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -100,8 +99,7 @@ def install_missing_requirements(requirements: list[BootstrapRequirement], proje
     except (FileNotFoundError, subprocess.CalledProcessError, BootstrapError, UnsupportedDistroError) as exc:
         missing_names = ", ".join(requirement.module_name for requirement in requirements)
         raise BootstrapError(
-            f"falha ao instalar dependencias internas ({missing_names}). "
-            "Corrija o problema e execute novamente."
+            f"falha ao instalar dependencias internas ({missing_names}). Corrija o problema e execute novamente."
         ) from exc
 
 
@@ -111,7 +109,13 @@ def _install_with_system_package(requirements: list[BootstrapRequirement], proje
         # Sistemas imutaveis (Bazzite/SteamOS): pulamos o gerenciador nativo e
         # deixamos o fallback pip --user resolver as dependencias.
         return
-    packages = sorted({requirement.system_package_for(distro.family) for requirement in requirements if requirement.system_package_for(distro.family)})
+    packages = sorted(
+        {
+            requirement.system_package_for(distro.family)
+            for requirement in requirements
+            if requirement.system_package_for(distro.family)
+        }
+    )
     if not packages:
         return
     if distro.is_arch:
@@ -137,7 +141,9 @@ def _install_with_aur(requirements: list[BootstrapRequirement], project_root: Pa
     distro = detect_distro()
     if not distro.is_arch:
         return
-    missing_after_system = [requirement for requirement in requirements if importlib.util.find_spec(requirement.module_name) is None]
+    missing_after_system = [
+        requirement for requirement in requirements if importlib.util.find_spec(requirement.module_name) is None
+    ]
     aur_packages = sorted({requirement.aur_package for requirement in missing_after_system if requirement.aur_package})
     if not aur_packages:
         return
@@ -150,7 +156,9 @@ def _install_with_aur(requirements: list[BootstrapRequirement], project_root: Pa
 
 
 def _install_with_pip(requirements: list[BootstrapRequirement], project_root: Path) -> None:
-    missing_after_system = [requirement for requirement in requirements if importlib.util.find_spec(requirement.module_name) is None]
+    missing_after_system = [
+        requirement for requirement in requirements if importlib.util.find_spec(requirement.module_name) is None
+    ]
     if not missing_after_system:
         return
     _ensure_pip_available(project_root)

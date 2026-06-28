@@ -4,8 +4,8 @@ import pytest
 
 from postformat.core import (
     Logger,
-    PromptInterruptedError,
     PrivilegeEscalationBlockedError,
+    PromptInterruptedError,
     Runner,
     backup_path,
     load_env_file,

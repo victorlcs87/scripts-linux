@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from postformat.core import Logger, Runner
 from postformat import platform
+from postformat.core import Logger, Runner
 
 
 def write_os_release(tmp_path: Path, text: str) -> Path:
@@ -134,7 +134,9 @@ def test_install_system_package_skips_native_on_immutable(tmp_path: Path, monkey
     logger = Logger(tmp_path, "test")
     runner = Runner(logger)
 
-    monkeypatch.setattr(platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True))
+    monkeypatch.setattr(
+        platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True)
+    )
     monkeypatch.setattr(platform, "system_installed", lambda pkg: False)
     monkeypatch.setattr(runner, "run", lambda cmd, **_kwargs: commands.append(list(cmd)))
 
@@ -148,7 +150,9 @@ def test_install_system_or_aur_returns_false_on_immutable(tmp_path: Path, monkey
     logger = Logger(tmp_path, "test")
     runner = Runner(logger)
 
-    monkeypatch.setattr(platform, "current_distro", lambda: platform.Distro("steamos", ("arch",), "arch", immutable=True))
+    monkeypatch.setattr(
+        platform, "current_distro", lambda: platform.Distro("steamos", ("arch",), "arch", immutable=True)
+    )
     monkeypatch.setattr(platform, "system_installed", lambda pkg: False)
 
     assert platform.install_system_or_aur("heroic", "heroic-bin", runner) is False
@@ -159,7 +163,9 @@ def test_update_system_uses_rpm_ostree_on_immutable_fedora(tmp_path: Path, monke
     logger = Logger(tmp_path, "test")
     runner = Runner(logger)
 
-    monkeypatch.setattr(platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True))
+    monkeypatch.setattr(
+        platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True)
+    )
     monkeypatch.setattr(runner, "run", lambda cmd, **_kwargs: commands.append(list(cmd)))
 
     platform.update_system(runner)
@@ -185,7 +191,9 @@ def test_update_system_steamos_immutable_is_manual_only(tmp_path: Path, monkeypa
     logger = Logger(tmp_path, "test")
     runner = Runner(logger)
 
-    monkeypatch.setattr(platform, "current_distro", lambda: platform.Distro("steamos", ("arch",), "arch", immutable=True))
+    monkeypatch.setattr(
+        platform, "current_distro", lambda: platform.Distro("steamos", ("arch",), "arch", immutable=True)
+    )
     monkeypatch.setattr(runner, "run", lambda cmd, **_kwargs: commands.append(list(cmd)))
 
     platform.update_system(runner)
@@ -215,7 +223,9 @@ def test_ensure_rpmfusion_is_noop_on_immutable(tmp_path: Path, monkeypatch) -> N
     logger = Logger(tmp_path, "test")
     runner = Runner(logger)
 
-    monkeypatch.setattr(platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True))
+    monkeypatch.setattr(
+        platform, "current_distro", lambda: platform.Distro("bazzite", ("fedora",), "fedora", immutable=True)
+    )
     monkeypatch.setattr(runner, "run", lambda cmd, **_kwargs: commands.append(cmd))
 
     platform.ensure_rpmfusion(runner)

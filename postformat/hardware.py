@@ -203,21 +203,21 @@ def facts_summary(facts: HardwareFacts) -> list[str]:
 def render_summary(facts: HardwareFacts) -> list[str]:
     """Painel visual estilo fastfetch com os dados coletados."""
     rows: list[tuple[str, str, str]] = [
-        ("host",   facts.hostname  or "desconhecido", Color.INFO),
-        ("os",     facts.os_pretty or "desconhecido", Color.INFO),
-        ("kernel", facts.kernel    or "desconhecido", Color.INFO),
-        ("tipo",   "Notebook" if facts.is_laptop else "Desktop", Color.ACCENT),
-        ("cpu",    facts.cpu_model or "desconhecida",  Color.ACCENT),
-        ("ram",    facts.ram_total or "desconhecida",  Color.ACCENT),
+        ("host", facts.hostname or "desconhecido", Color.INFO),
+        ("os", facts.os_pretty or "desconhecido", Color.INFO),
+        ("kernel", facts.kernel or "desconhecido", Color.INFO),
+        ("tipo", "Notebook" if facts.is_laptop else "Desktop", Color.ACCENT),
+        ("cpu", facts.cpu_model or "desconhecida", Color.ACCENT),
+        ("ram", facts.ram_total or "desconhecida", Color.ACCENT),
     ]
-    for gpu in (facts.gpus or []):
+    for gpu in facts.gpus or []:
         is_nvidia = "nvidia" in gpu.lower()
         display = (facts.nvidia_gpu_name or gpu) if is_nvidia else gpu
         tone = Color.WARNING if is_nvidia else Color.SUCCESS
         rows.append(("gpu", display, tone))
         if is_nvidia and facts.nvidia_driver_version:
             rows.append(("driver", facts.nvidia_driver_version, Color.WARNING))
-    for disk in (facts.disks or []):
+    for disk in facts.disks or []:
         rows.append(("disco", disk, Color.MUTED))
     if facts.desktop:
         rows.append(("de", facts.desktop, Color.MUTED))
@@ -233,7 +233,7 @@ def render_summary(facts: HardwareFacts) -> list[str]:
     for label, value, tone in rows:
         lbl_plain = f"[{label}]"
         lbl_colored = badge(label, tone)
-        prefix_visible = 2 + len(lbl_plain) + 2   # "  [label]  "
+        prefix_visible = 2 + len(lbl_plain) + 2  # "  [label]  "
         max_val = W - prefix_visible - 1
         val = value[:max_val] if len(value) > max_val else value
         padding = W - prefix_visible - len(val)
