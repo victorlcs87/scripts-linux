@@ -347,6 +347,80 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
     assert installed_flatpaks == ["com.heroicgameslauncher.hgl"]
 
 
+def _patch_distro(monkeypatch, *, immutable: bool) -> None:
+    monkeypatch.setattr(
+        "postformat.steps.gaming.current_distro",
+        lambda: type(
+            "Distro",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": immutable,
+                "id": "cachyos",
+                "family": "arch",
+            },
+        )(),
+    )
+
+
+def test_auto_cpufreq_uses_system_package_when_available(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    calls: list[tuple] = []
+
+    _patch_distro(monkeypatch, immutable=False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr(
+        "postformat.steps.gaming.install_system_or_aur",
+        lambda *args, **kwargs: calls.append(args) or True,
+    )
+
+    step._install_auto_cpufreq()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert calls == [("auto-cpufreq", "auto-cpufreq", ctx.runner)]
+    assert "auto-cpufreq --install" in log
+    assert "git clone" not in log
+
+
+def test_auto_cpufreq_falls_back_to_github_installer(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+
+    _patch_distro(monkeypatch, immutable=False)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
+    monkeypatch.setattr("postformat.steps.gaming.install_system_package", lambda pkg, runner: None)
+
+    step._install_auto_cpufreq()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "nao possui Flatpak oficial" in log
+    assert "git clone" in log
+    assert "auto-cpufreq-installer" in log
+    assert "auto-cpufreq --install" in log
+
+
+def test_auto_cpufreq_skips_github_on_immutable(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+
+    _patch_distro(monkeypatch, immutable=True)
+    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
+
+    step._install_auto_cpufreq()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "sistema imutavel" in log
+    assert "git clone" not in log
+
+
 def test_install_steam_enables_rpmfusion_on_mutable_fedora(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)

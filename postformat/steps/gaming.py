@@ -323,6 +323,13 @@ class AppsStep(Step):
             "desktop_paths": (),
             "kind": "cli",
         },
+        "auto-cpufreq": {
+            "system_aliases": ("auto-cpufreq",),
+            "flatpak_id": None,
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "system",
+        },
         "Hydra Launcher": {
             "system_aliases": (),
             "flatpak_id": None,
@@ -378,7 +385,72 @@ class AppsStep(Step):
                 self.ctx.runner.run(
                     ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
                 )
-        self.mark_done("Apps principais, Hydra e Codex CLI processados.")
+        self._install_auto_cpufreq()
+        self.mark_done("Apps principais, Hydra, Codex CLI e auto-cpufreq processados.")
+
+    def _install_auto_cpufreq(self) -> None:
+        source = self._detect_install_source("auto-cpufreq")
+        if source:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} auto-cpufreq ja detectado via {source}")
+            self._enable_auto_cpufreq_daemon()
+            return
+        header(self, "auto-cpufreq", "Instalando gerenciador automatico de CPU")
+        if install_system_or_aur("auto-cpufreq", "auto-cpufreq", self.ctx.runner):
+            self._enable_auto_cpufreq_daemon()
+            return
+        if current_distro().immutable:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} sistema imutavel: o instalador do auto-cpufreq escreve em /usr "
+                "(somente leitura). Pulando instalacao via GitHub."
+            )
+            self.add_hint("auto-cpufreq nao foi instalado: sistema imutavel sem pacote nativo disponivel.")
+            return
+        self.ctx.logger.write(
+            f"{Color.YELLOW}AVISO:{Color.RESET} auto-cpufreq nao possui Flatpak oficial; usando instalador do GitHub."
+        )
+        install_system_package("git", self.ctx.runner)
+        src_dir = self.ctx.user.home / ".cache/auto-cpufreq-src"
+        if src_dir.exists():
+            self.ctx.runner.run(
+                ["git", "-C", str(src_dir), "pull", "--ff-only"],
+                check=False,
+                action="Atualizando codigo do auto-cpufreq",
+            )
+        else:
+            if not self.ctx.runner.dry_run:
+                src_dir.parent.mkdir(parents=True, exist_ok=True)
+            self.ctx.runner.run(
+                ["git", "clone", "https://github.com/AdnanHodzic/auto-cpufreq.git", str(src_dir)],
+                check=False,
+                action="Clonando auto-cpufreq do GitHub",
+            )
+        self.ctx.runner.run(
+            ["./auto-cpufreq-installer"],
+            sudo=True,
+            cwd=src_dir,
+            check=False,
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Instalador interativo do auto-cpufreq: confirme com 'i' quando solicitado.",
+            action="Instalando auto-cpufreq via GitHub",
+        )
+        self._enable_auto_cpufreq_daemon()
+
+    def _enable_auto_cpufreq_daemon(self) -> None:
+        if not command_exists("auto-cpufreq") and not self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} binario auto-cpufreq nao encontrado para habilitar o daemon."
+            )
+            return
+        self.ctx.runner.run(
+            ["auto-cpufreq", "--install"],
+            sudo=True,
+            check=False,
+            interactive=True,
+            interactive_tty=True,
+            manual_message="auto-cpufreq --install pode pedir confirmacao/senha sudo.",
+            action="Habilitando daemon auto-cpufreq (systemd)",
+        )
 
     def _install_steam(self) -> None:
         distro = current_distro()
@@ -533,6 +605,8 @@ class AppsStep(Step):
                 return "cli (codex no PATH)"
             if npm_global_installed("@openai/codex"):
                 return "npm global"
+        if app_name == "auto-cpufreq" and command_exists("auto-cpufreq"):
+            return "cli (auto-cpufreq no PATH)"
         return None
 
 

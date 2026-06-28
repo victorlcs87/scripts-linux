@@ -84,7 +84,7 @@ Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digi
 | `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
 | `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |
-| `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage e Codex CLI. |
+| `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage, auto-cpufreq e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
