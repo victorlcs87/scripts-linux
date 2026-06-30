@@ -47,6 +47,19 @@ REQUIREMENTS = (
     BootstrapRequirement("pytest", "python-pytest", "python3-pytest", None, "pytest", fedora_package="python3-pytest"),
 )
 
+# Dependencia adicional, instalada sob demanda apenas quando a GUI e solicitada
+# (PySide6 e pesado para impor a todos os usuarios do CLI).
+GUI_REQUIREMENT = BootstrapRequirement(
+    "PySide6", "pyside6", "python3-pyside6", "pyside6", "PySide6", fedora_package="python3-pyside6"
+)
+
+
+def ensure_gui_bootstrap(project_root: Path) -> None:
+    """Garante PySide6 disponivel antes de abrir a GUI."""
+    if importlib.util.find_spec("PySide6") is not None:
+        return
+    install_missing_requirements([GUI_REQUIREMENT], project_root)
+
 
 def ensure_bootstrap(project_root: Path) -> None:
     state_path = bootstrap_state_path()

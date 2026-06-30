@@ -11,6 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 ANSI_ENABLED = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None and os.environ.get("TERM", "dumb") != "dumb"
 SPINNER_FRAMES = ("|", "/", "-", "\\")
@@ -85,6 +86,44 @@ def detect_user() -> UserInfo:
     return UserInfo(name=name, home=home, uid=entry.pw_uid, gid=entry.pw_gid)
 
 
+@runtime_checkable
+class InteractionProvider(Protocol):
+    """Canal de interacao com o usuario, abstraido da camada de apresentacao.
+
+    O frontend CLI usa o terminal (input()); um frontend grafico fornece sua
+    propria implementacao (dialogos) sem que os steps precisem mudar.
+    """
+
+    def ask_text(
+        self,
+        prompt: str,
+        *,
+        detail: str | None = None,
+        prompt_label: str = "Resposta",
+        allow_empty: bool = True,
+    ) -> str: ...
+
+    def confirm_phrase(self, phrase: str, *, detail: str | None = None) -> bool: ...
+
+
+@runtime_checkable
+class InteractiveExecutor(Protocol):
+    """Executa um comando interativo (com TTY) fora do terminal atual.
+
+    Implementado pela GUI usando um pty num painel de terminal embutido.
+    Retorna o codigo de saida do processo.
+    """
+
+    def __call__(
+        self,
+        cmd: Sequence[str] | str,
+        *,
+        cwd: Path | None,
+        env: dict[str, str],
+        action: str,
+    ) -> int: ...
+
+
 class Logger:
     def __init__(self, run_dir: Path, name: str) -> None:
         self.log_dir = run_dir / "LOGS"
@@ -92,12 +131,20 @@ class Logger:
         self.path = self.log_dir / f"{name}-{datetime.now():%Y%m%d-%H%M%S}.log"
         self._tty = sys.stdout.isatty()
         self._transient_active = False
+        # Canal de interacao opcional. Quando None, prompt_user/confirm_phrase
+        # caem no comportamento de terminal (input()). Um frontend grafico
+        # injeta um InteractionProvider aqui.
+        self.interaction: InteractionProvider | None = None
 
     def write(self, message: str = "") -> None:
         self.clear_transient()
-        print(message)
+        self._emit_console(message)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(strip_ansi(message) + "\n")
+
+    def _emit_console(self, message: str) -> None:
+        """Emite uma linha no console. Subclasses (GUI) redirecionam para a UI."""
+        print(message)
 
     def transient(self, message: str) -> None:
         if not self._tty:
@@ -194,6 +241,12 @@ def prompt_user(
     prompt_label: str = "Resposta",
     allow_empty: bool = True,
 ) -> str:
+    if logger.interaction is not None:
+        logger.log_only(divider(char="~", tone=Color.ACCENT))
+        logger.log_only(f"{badge('waiting', Color.WAITING)} {prompt}")
+        if detail:
+            logger.log_only(paint(detail, Color.MUTED))
+        return logger.interaction.ask_text(prompt, detail=detail, prompt_label=prompt_label, allow_empty=allow_empty)
     logger.write(divider(char="~", tone=Color.ACCENT))
     announce(logger, "waiting", prompt)
     if detail:
@@ -213,6 +266,14 @@ class Runner:
     def __init__(self, logger: Logger, dry_run: bool = False) -> None:
         self.logger = logger
         self.dry_run = dry_run
+        # Caminho de um helper askpass grafico. Quando definido, comandos com
+        # sudo usam `sudo -A` e SUDO_ASKPASS, abrindo um dialogo em vez de pedir
+        # a senha no terminal (necessario num frontend grafico).
+        self.askpass: str | None = None
+        # Executor alternativo para comandos interactive_tty. Quando definido, a
+        # GUI roda esses comandos num terminal embutido (pty) em vez de assumir o
+        # TTY atual. Assinatura: (cmd, *, cwd, env, action) -> returncode (int).
+        self.interactive_executor: InteractiveExecutor | None = None
 
     def cmd_text(self, cmd: Sequence[str] | str, sudo: bool = False) -> str:
         if isinstance(cmd, str):
@@ -254,18 +315,22 @@ class Runner:
                 "este ambiente bloqueia sudo porque NoNewPrivs=1. "
                 "Execute o sisteminha em uma sessao normal do seu sistema, fora de contêiner, sandbox ou terminal restrito."
             )
-        full_cmd: Sequence[str] | str
-        if sudo:
-            if isinstance(cmd, str):
-                full_cmd = f"sudo {cmd}"
-                shell = True
-            else:
-                full_cmd = ["sudo", *cmd]
-        else:
-            full_cmd = cmd
         env = os.environ.copy()
         if env_extra:
             env.update(env_extra)
+        sudo_flag = ""
+        if sudo and self.askpass:
+            env["SUDO_ASKPASS"] = self.askpass
+            sudo_flag = "-A "
+        full_cmd: Sequence[str] | str
+        if sudo:
+            if isinstance(cmd, str):
+                full_cmd = f"sudo {sudo_flag}{cmd}"
+                shell = True
+            else:
+                full_cmd = ["sudo", *(["-A"] if self.askpass else []), *cmd]
+        else:
+            full_cmd = cmd
         announce(self.logger, "action", action)
         if interactive or interactive_tty:
             announce(
@@ -275,6 +340,22 @@ class Runner:
             )
         self.logger.write(f"{paint('$', Color.COMMAND)} {paint(printable, Color.COMMAND)}")
         started = time.monotonic()
+        if interactive_tty and self.interactive_executor is not None:
+            try:
+                returncode = self.interactive_executor(full_cmd, cwd=cwd, env=env, action=action)
+            except KeyboardInterrupt as exc:
+                elapsed = format_elapsed(time.monotonic() - started)
+                announce(self.logger, "failed", f"{action} interrompido pelo usuario em {elapsed}")
+                raise CommandInterruptedError(f"comando interrompido pelo usuario: {printable}") from exc
+            elapsed = format_elapsed(time.monotonic() - started)
+            if returncode == 0:
+                if not quiet_success:
+                    announce(self.logger, "done", f"{action} concluido em {elapsed}")
+            else:
+                announce(self.logger, "failed", f"{action} falhou em {elapsed}")
+            if check and returncode != 0:
+                raise RuntimeError(f"comando falhou ({returncode}): {printable}")
+            return subprocess.CompletedProcess(args=full_cmd, returncode=returncode, stdout="")
         if interactive_tty:
             try:
                 result = subprocess.run(
@@ -555,10 +636,17 @@ def ensure_owner(path: Path, user: UserInfo, runner: Runner, *, recursive: bool 
 
 
 def confirm_phrase(phrase: str, logger: Logger) -> bool:
+    detail = "O sisteminha esta aguardando sua confirmacao. Isso nao e travamento."
+    if logger.interaction is not None:
+        if logger.interaction.confirm_phrase(phrase, detail=detail):
+            announce(logger, "done", "Confirmacao recebida")
+            return True
+        announce(logger, "skipped", "Confirmacao nao conferiu. Operacao cancelada.")
+        return False
     typed = prompt_user(
         f"Digite {phrase} para continuar",
         logger,
-        detail="O sisteminha esta aguardando sua confirmacao. Isso nao e travamento.",
+        detail=detail,
         prompt_label="Confirmacao",
         allow_empty=False,
     )

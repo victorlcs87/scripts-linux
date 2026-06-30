@@ -13,14 +13,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PySide6",
+]
 dev = [
     "pytest",
     "pytest-cov",
+    "pytest-qt",
     "ruff",
 ]
 
+[project.gui-scripts]
+sisteminha-gui = "postformat.gui:main"
+
 [tool.setuptools]
-packages = ["postformat", "postformat.steps"]
+packages = ["postformat", "postformat.steps", "postformat.gui"]
+
+[tool.setuptools.package-data]
+"postformat.gui" = ["theme.qss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

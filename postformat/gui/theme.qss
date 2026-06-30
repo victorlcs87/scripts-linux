@@ -1,0 +1,128 @@
+/* Tema escuro moderno do sisteminha. Cores alinhadas a paleta do CLI
+   (acentos ciano/magenta, estados semanticos). */
+
+QWidget {
+    background-color: #14161c;
+    color: #e6e8ee;
+    font-family: "Inter", "Noto Sans", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+#sidebar {
+    background-color: #0f1116;
+    border-right: 1px solid #20232c;
+}
+
+#sidebarTitle {
+    color: #8a8f98;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding-bottom: 6px;
+}
+
+#stepList {
+    background: transparent;
+    border: none;
+    outline: 0;
+}
+
+#stepList::item {
+    padding: 9px 10px;
+    border-radius: 8px;
+    margin: 2px 0;
+}
+
+#stepList::item:selected {
+    background-color: #1d2230;
+}
+
+#stepList::item:hover {
+    background-color: #191d28;
+}
+
+#stepTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+#statusLine {
+    color: #6f7480;
+    font-size: 11px;
+}
+
+QPushButton {
+    background-color: #1d2230;
+    color: #e6e8ee;
+    border: 1px solid #2a3040;
+    border-radius: 9px;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background-color: #252c3d;
+    border-color: #3a4255;
+}
+
+QPushButton:pressed {
+    background-color: #2c3346;
+}
+
+QPushButton:disabled {
+    color: #5a606d;
+    background-color: #161a22;
+    border-color: #222735;
+}
+
+QPushButton#primary {
+    background-color: #2b6cff;
+    border-color: #2b6cff;
+    color: #ffffff;
+}
+
+QPushButton#primary:hover {
+    background-color: #3d7bff;
+}
+
+#console, QPlainTextEdit {
+    background-color: #0c0e13;
+    border: 1px solid #20232c;
+    border-radius: 10px;
+    color: #d6d9e0;
+    font-family: "JetBrains Mono", "Fira Code", "monospace";
+    font-size: 12px;
+    padding: 8px;
+}
+
+QProgressBar {
+    background-color: #0c0e13;
+    border: 1px solid #20232c;
+    border-radius: 9px;
+    text-align: center;
+    color: #cfd3db;
+    height: 20px;
+}
+
+QProgressBar::chunk {
+    background-color: #2b6cff;
+    border-radius: 8px;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: #2a3040;
+    border-radius: 5px;
+    min-height: 24px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
