@@ -9,3 +9,9 @@ LOGS/
 fstab-backups/
 hardware_info_*.txt
 .env.local
+
+# Artefatos de empacotamento (PyInstaller/AppImage)
+build/
+dist/
+*.AppImage
+*.AppImage.zsync

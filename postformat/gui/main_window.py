@@ -6,8 +6,8 @@ import html
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -30,6 +30,7 @@ from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
 from .step_runner import StepWorker
 from .terminal import TerminalExecutor, TerminalWidget
+from .updater import UpdateChecker
 
 # Aparencia dos estados de conformidade (compliance) na sidebar.
 _COMPLIANCE = {
@@ -99,6 +100,21 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._terminal_executor = TerminalExecutor(self._terminal, on_activate=self._show_terminal)
         self._select_step(0)
+
+        # Checagem de atualizacao em background (silenciosa em caso de falha).
+        self._update_checker = UpdateChecker()
+        self._update_checker.updateAvailable.connect(self._on_update_available)
+        self._update_checker.start()
+
+    def _on_update_available(self, tag: str, url: str) -> None:
+        self._append(f"[info] Nova versao disponivel: {tag}")
+        answer = QMessageBox.question(
+            self,
+            "Atualizacao disponivel",
+            f"Uma nova versao ({tag}) esta disponivel. Abrir a pagina de download?",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            QDesktopServices.openUrl(QUrl(url))
 
     # --- construcao da UI --------------------------------------------------------
     def _build_ui(self) -> None:

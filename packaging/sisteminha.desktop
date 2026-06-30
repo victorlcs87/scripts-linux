@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sisteminha
+GenericName=Pos-Formatacao Linux/KDE
+Comment=Automacao de pos-formatacao com etapas auditaveis
+Exec=sisteminha %U
+Icon=sisteminha
+Categories=System;Settings;Utility;
+Terminal=false
+StartupNotify=true
+StartupWMClass=sisteminha
+Keywords=pos-formatacao;setup;kde;cachyos;

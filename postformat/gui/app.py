@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName("Sisteminha Pos-Formatacao")
     app.setApplicationDisplayName("Sisteminha")
+    # Alinha o WM_CLASS ao .desktop (sisteminha.desktop) para que o KDE Wayland
+    # agrupe a janela com o icone correto na barra de tarefas.
+    app.setDesktopFileName("sisteminha")
     if _THEME.exists():
         app.setStyleSheet(_THEME.read_text(encoding="utf-8"))
 

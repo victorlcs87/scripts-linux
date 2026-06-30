@@ -26,6 +26,43 @@ O projeto substitui scripts shell longos por um CLI Python modular, com `apply`,
 
 O bootstrap instala dependencias Python internas quando necessario, incluindo `InquirerPy` e `pytest`.
 
+## Interface grafica (GUI)
+
+Alem do CLI, ha uma interface grafica moderna em PySide6/Qt6 que reaproveita o
+mesmo motor (mesmos steps, mesmos `apply`/`dry-run`/`status`/`undo`):
+
+```fish
+python 00-pos-formatacao-cachyos.py --gui   # bootstrap do PySide6 + abre a GUI
+python -m postformat.gui                     # se o PySide6 ja estiver instalado
+```
+
+A janela traz uma barra lateral com as etapas (com indicador de conformidade),
+botoes de acao por etapa e globais ("Aplicar tudo", "Dry-run tudo", "Status
+geral"), console com saida em streaming e barra de progresso. Comandos com
+`sudo` abrem um dialogo grafico de senha (askpass) e comandos interativos
+(pacman/apt) rodam num terminal embutido. A GUI checa atualizacoes no GitHub
+Releases ao abrir.
+
+### Executavel (AppImage)
+
+O app e distribuido como **AppImage** (arquivo unico, sem instalacao). Cada push
+na branch `main` gera automaticamente um novo release com o executavel anexado:
+
+```fish
+chmod +x Sisteminha-*-x86_64.AppImage
+./Sisteminha-*-x86_64.AppImage
+```
+
+O AppImage embute informacao de auto-update (zsync); ferramentas como
+`AppImageUpdate` aplicam atualizacoes incrementais a partir dos Releases.
+
+Para construir localmente:
+
+```fish
+pip install -e .[gui] pyinstaller
+bash packaging/build-appimage.sh   # gera dist/Sisteminha-*-x86_64.AppImage
+```
+
 ## Uso Rapido
 
 Executar o fluxo interativo principal:
