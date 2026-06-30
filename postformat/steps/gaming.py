@@ -337,6 +337,20 @@ class AppsStep(Step):
             "desktop_paths": (),
             "kind": "system",
         },
+        "Flatseal": {
+            "system_aliases": (),
+            "flatpak_id": "com.github.tchx84.Flatseal",
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "flatpak",
+        },
+        "LocalSend": {
+            "system_aliases": ("localsend", "localsend-bin"),
+            "flatpak_id": "org.localsend.localsend_app",
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "system",
+        },
         "Hydra Launcher": {
             "system_aliases": (),
             "flatpak_id": None,
@@ -374,6 +388,12 @@ class AppsStep(Step):
             )
         else:
             self._install_solaar()
+        if self._detect_install_source("LocalSend"):
+            self.ctx.logger.write(
+                f"{Color.GREEN}OK:{Color.RESET} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
+            )
+        else:
+            self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
         self._install_hydra()
         for name, definition in self.apps.items():
             if definition["kind"] != "flatpak":
