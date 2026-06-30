@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 gui = [
     "PySide6",
+    "certifi",
 ]
 dev = [
     "pytest",

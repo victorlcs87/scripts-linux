@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
 from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
-from reforja.gui.updater import parse_release, running_appimage  # noqa: E402
+from reforja.gui.updater import _ssl_context, parse_release, running_appimage  # noqa: E402
 from reforja.steps import ALL_GROUPS, ALL_STEPS  # noqa: E402
 
 
@@ -129,6 +129,15 @@ def test_parse_release_available_e_current() -> None:
     assert url == "http://x/Reforja.AppImage"
     # Mesma versao (com/sem 'v') => current
     assert parse_release({"tag_name": "v1.0.5", "assets": []}, "1.0.5")[0] == "current"
+
+
+def test_ssl_context_disponivel() -> None:
+    import ssl
+
+    ctx = _ssl_context()
+    # Contexto valido com verificacao habilitada (usa certifi quando presente).
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_running_appimage_env(monkeypatch) -> None:

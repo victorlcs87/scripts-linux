@@ -143,11 +143,12 @@ class MainWindow(QMainWindow):
             self._append(f"[done] Voce ja esta na versao mais recente (v{tag}).")
             QMessageBox.information(self, "Atualizacao", f"Voce ja esta na versao mais recente (v{tag}).")
         elif status == "error":
-            self._append("[aviso] Nao foi possivel verificar atualizacoes (sem rede ou release indisponivel).")
+            detail = url or "erro desconhecido"
+            self._append(f"[aviso] Nao foi possivel verificar atualizacoes: {detail}")
             QMessageBox.warning(
                 self,
                 "Atualizacao",
-                "Nao foi possivel verificar atualizacoes.\nVerifique a conexao ou se ha releases publicados.",
+                f"Nao foi possivel verificar atualizacoes.\n\nDetalhe: {detail}",
             )
         else:  # available
             self._offer_update(tag, url)

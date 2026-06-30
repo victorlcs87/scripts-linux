@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import stat
 import urllib.error
 import urllib.request
@@ -28,6 +29,19 @@ from ._version import __version__
 _API_LATEST = "https://api.github.com/repos/victorlcs87/scripts-linux/releases/latest"
 _RELEASES_PAGE = "https://github.com/victorlcs87/scripts-linux/releases/latest"
 _TIMEOUT = 8
+
+try:  # certifi garante CAs validas mesmo no AppImage congelado (PyInstaller).
+    import certifi
+
+    _CA_FILE: str | None = certifi.where()
+except Exception:  # noqa: BLE001 - sem certifi, caimos no contexto padrao do sistema
+    _CA_FILE = None
+
+
+def _ssl_context() -> ssl.SSLContext:
+    if _CA_FILE and os.path.exists(_CA_FILE):
+        return ssl.create_default_context(cafile=_CA_FILE)
+    return ssl.create_default_context()
 
 
 def _norm(version: str) -> str:
@@ -60,7 +74,7 @@ def running_appimage() -> Path | None:
 
 def _fetch_latest() -> dict:
     req = urllib.request.Request(_API_LATEST, headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (URL fixa, https)
+    with urllib.request.urlopen(req, timeout=_TIMEOUT, context=_ssl_context()) as resp:  # noqa: S310 (URL fixa, https)
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -97,8 +111,9 @@ class CheckWorker(QThread):
     def run(self) -> None:  # noqa: D401 (override QThread.run)
         try:
             data = _fetch_latest()
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-            self.resultReady.emit("error", "", "")
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            # Repassa o detalhe real do erro (no campo url) para nao mascarar como "sem rede".
+            self.resultReady.emit("error", "", f"{type(exc).__name__}: {exc}")
             return
         status, tag, url = parse_release(data, self._current)
         self.resultReady.emit(status, tag, url)
@@ -119,7 +134,10 @@ class DownloadWorker(QThread):
         tmp = target.with_name(target.name + ".new")
         try:
             req = urllib.request.Request(self._url, headers={"Accept": "application/octet-stream"})
-            with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:  # noqa: S310
+            with (
+                urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp,  # noqa: S310
+                open(tmp, "wb") as out,
+            ):
                 while True:
                     chunk = resp.read(65536)
                     if not chunk:

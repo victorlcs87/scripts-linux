@@ -18,7 +18,8 @@ datas = [
 ]
 
 # Garante que todos os steps (carregados dinamicamente) entrem no bundle.
-hidden = collect_submodules("reforja")
+# certifi entra explicitamente para o seu hook embutir o cacert.pem (HTTPS no AppImage).
+hidden = collect_submodules("reforja") + ["certifi"]
 
 a = Analysis(
     [str(ROOT / "packaging" / "entry.py")],
