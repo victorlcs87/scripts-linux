@@ -29,7 +29,7 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
 app = QApplication(sys.argv)
 prompt = sys.argv[1] if len(sys.argv) > 1 else "Senha:"
-text, ok = QInputDialog.getText(None, "Sisteminha - autenticacao", prompt, QLineEdit.EchoMode.Password)
+text, ok = QInputDialog.getText(None, "Reforja - autenticacao", prompt, QLineEdit.EchoMode.Password)
 if not ok:
     sys.exit(1)
 sys.stdout.write(text)
@@ -46,7 +46,7 @@ def _system_askpass() -> str | None:
 
 
 def _build_fallback() -> str:
-    cache = Path(tempfile.gettempdir()) / "sisteminha-askpass"
+    cache = Path(tempfile.gettempdir()) / "reforja-askpass"
     cache.mkdir(parents=True, exist_ok=True)
     script = cache / "_askpass_dialog.py"
     script.write_text(_FALLBACK_SCRIPT, encoding="utf-8")

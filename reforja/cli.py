@@ -204,7 +204,7 @@ def choose_step(logger: Logger) -> type[Step] | None:
             logger=logger,
             prompt="Digite o numero da etapa",
             options=options,
-            detail="O sisteminha esta aguardando sua escolha de etapa.",
+            detail="O reforja esta aguardando sua escolha de etapa.",
             prompt_label="Etapa",
         )
     except PromptInterruptedError as exc:
@@ -232,8 +232,8 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
                 logger=logger,
                 prompt="Escolha uma acao para esta etapa",
                 options=options,
-                footer="Durante comandos longos, o sisteminha mostra atividade viva para voce saber que nao travou.",
-                detail="O sisteminha esta aguardando sua escolha.",
+                footer="Durante comandos longos, o reforja mostra atividade viva para voce saber que nao travou.",
+                detail="O reforja esta aguardando sua escolha.",
                 prompt_label="Escolha",
             )
         except PromptInterruptedError as exc:
@@ -268,12 +268,12 @@ def main_menu(logger: Logger) -> None:
         clear_screen()
         try:
             option = choose_option(
-                title="Sisteminha pos-formatacao Linux/KDE",
+                title="Reforja pos-formatacao Linux/KDE",
                 logger=logger,
                 prompt="Escolha uma opcao do menu principal",
                 options=options,
                 footer="Tema neon ativo quando o terminal suporta ANSI. Use NO_COLOR=1 para desativar as cores.",
-                detail="Quando o menu esta aqui, o sisteminha esta esperando voce e nao travado.",
+                detail="Quando o menu esta aqui, o reforja esta esperando voce e nao travado.",
                 prompt_label="Escolha",
             )
         except PromptInterruptedError as exc:
@@ -319,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if argv and argv[0] == "step":
         if len(argv) < 2:
-            logger.write("Uso: python -m postformat.cli step ID [apply|dry-run|status|undo|menu]")
+            logger.write("Uso: python -m reforja.cli step ID [apply|dry-run|status|undo|menu]")
             return 1
         step_cls = step_by_id(argv[1])
         if not step_cls:
@@ -431,7 +431,7 @@ def prompt_return_to_menu(logger: Logger) -> None:
         prompt_user(
             "Pressione ENTER para voltar ao menu",
             logger,
-            detail="O sisteminha esta pausado para voce conseguir ler o resumo.",
+            detail="O reforja esta pausado para voce conseguir ler o resumo.",
             prompt_label="ENTER",
         )
     except PromptInterruptedError as exc:

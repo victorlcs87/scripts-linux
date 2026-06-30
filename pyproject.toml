@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scripts-linux-postformat"
+name = "reforja"
 version = "1.0.0"
 description = "Automacao pos-formatacao para Linux/KDE"
 requires-python = ">=3.11"
@@ -23,13 +23,13 @@ dev = [
 ]
 
 [project.gui-scripts]
-sisteminha-gui = "postformat.gui:main"
+reforja-gui = "reforja.gui:main"
 
 [tool.setuptools]
-packages = ["postformat", "postformat.steps", "postformat.gui"]
+packages = ["reforja", "reforja.steps", "reforja.gui"]
 
 [tool.setuptools.package-data]
-"postformat.gui" = ["theme.qss"]
+"reforja.gui" = ["theme.qss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -46,4 +46,4 @@ select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
 [tool.coverage.run]
-source = ["postformat"]
+source = ["reforja"]

@@ -14,8 +14,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from postformat.gui.gui_logger import GuiLogger  # noqa: E402
-from postformat.gui.main_window import _format_line_html  # noqa: E402
+from reforja.gui.gui_logger import GuiLogger  # noqa: E402
+from reforja.gui.main_window import _format_line_html  # noqa: E402
 
 
 @pytest.fixture(scope="module")

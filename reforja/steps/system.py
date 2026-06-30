@@ -116,7 +116,7 @@ class ShellyStep(Step):
         prompt_user(
             "Pressione ENTER depois de revisar no Shelly",
             self.ctx.logger,
-            detail="O sisteminha esta pausado aguardando voce confirmar que terminou a revisao.",
+            detail="O reforja esta pausado aguardando voce confirmar que terminou a revisao.",
             prompt_label="ENTER",
         )
         self.mark_manual("Etapa dependeu de revisao manual no Shelly.")

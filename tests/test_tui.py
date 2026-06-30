@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from postformat.core import Logger, MenuOption, PromptInterruptedError
-from postformat.tui import TuiDependencyError, choose_option
+from reforja.core import Logger, MenuOption, PromptInterruptedError
+from reforja.tui import TuiDependencyError, choose_option
 
 
 class _FakePrompt:
@@ -32,8 +32,8 @@ def test_choose_option_uses_inquirer_in_tty(monkeypatch, tmp_path: Path) -> None
     def fake_style_factory(style, style_override=False):
         return {"style": style, "style_override": style_override}
 
-    monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: True)
-    monkeypatch.setattr("postformat.tui.load_tui_deps", lambda: (fake_inquirer, fake_style_factory))
+    monkeypatch.setattr("reforja.tui._supports_interactive_tui", lambda: True)
+    monkeypatch.setattr("reforja.tui.load_tui_deps", lambda: (fake_inquirer, fake_style_factory))
 
     selected = choose_option(
         title="Menu Teste",
@@ -54,7 +54,7 @@ def test_choose_option_fallback_accepts_number(monkeypatch, tmp_path: Path) -> N
     logger = Logger(tmp_path, "test")
     options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
 
-    monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: False)
+    monkeypatch.setattr("reforja.tui._supports_interactive_tui", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _prompt="": "2")
 
     selected = choose_option(
@@ -73,7 +73,7 @@ def test_choose_option_fallback_retries_after_invalid_number(monkeypatch, tmp_pa
     options = [MenuOption("1", "Primeira"), MenuOption("2", "Segunda")]
     answers = iter(["9", "2"])
 
-    monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: False)
+    monkeypatch.setattr("reforja.tui._supports_interactive_tui", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     selected = choose_option(
@@ -100,9 +100,9 @@ def test_choose_option_tty_interrupt_is_reported_cleanly(monkeypatch, tmp_path: 
 
             return _InterruptingPrompt()
 
-    monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: True)
+    monkeypatch.setattr("reforja.tui._supports_interactive_tui", lambda: True)
     monkeypatch.setattr(
-        "postformat.tui.load_tui_deps", lambda: (_InterruptingInquirer(), lambda style, style_override=False: style)
+        "reforja.tui.load_tui_deps", lambda: (_InterruptingInquirer(), lambda style, style_override=False: style)
     )
 
     with pytest.raises(PromptInterruptedError):
@@ -119,8 +119,8 @@ def test_choose_option_raises_clear_dependency_error(monkeypatch, tmp_path: Path
     logger = Logger(tmp_path, "test")
     options = [MenuOption("1", "Primeira")]
 
-    monkeypatch.setattr("postformat.tui._supports_interactive_tui", lambda: True)
-    monkeypatch.setattr("postformat.tui.load_tui_deps", lambda: (_ for _ in ()).throw(TuiDependencyError("faltou lib")))
+    monkeypatch.setattr("reforja.tui._supports_interactive_tui", lambda: True)
+    monkeypatch.setattr("reforja.tui.load_tui_deps", lambda: (_ for _ in ()).throw(TuiDependencyError("faltou lib")))
 
     with pytest.raises(TuiDependencyError):
         choose_option(

@@ -78,7 +78,7 @@ def _format_line_html(line: str) -> str:
 class MainWindow(QMainWindow):
     def __init__(self, run_dir: Path) -> None:
         super().__init__()
-        self.setWindowTitle("Sisteminha - Pos-Formatacao")
+        self.setWindowTitle("Reforja - Pos-Formatacao")
         self.resize(1080, 720)
         self._run_dir = run_dir
 

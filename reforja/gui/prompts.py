@@ -42,7 +42,7 @@ class GuiInteraction(QObject):
             label = f"{label}\n\n{req['detail']}"
         text, ok = QInputDialog.getText(
             self._window,
-            "Sisteminha - entrada necessaria",
+            "Reforja - entrada necessaria",
             label,
             QLineEdit.EchoMode.Normal,
         )
@@ -64,7 +64,7 @@ class GuiInteraction(QObject):
             label = f"{label}\n\n{req['detail']}"
         text, ok = QInputDialog.getText(
             self._window,
-            "Sisteminha - confirmacao",
+            "Reforja - confirmacao",
             label,
             QLineEdit.EchoMode.Normal,
         )

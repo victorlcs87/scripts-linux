@@ -2,4 +2,4 @@
 set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
-python -m postformat step 06 "${1:-menu}"
+python -m reforja step 06 "${1:-menu}"

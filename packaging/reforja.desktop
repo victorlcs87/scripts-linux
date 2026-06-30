@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=Sisteminha
+Name=Reforja
 GenericName=Pos-Formatacao Linux/KDE
 Comment=Automacao de pos-formatacao com etapas auditaveis
-Exec=sisteminha %U
-Icon=sisteminha
+Exec=reforja %U
+Icon=reforja
 Categories=System;Settings;Utility;
 Terminal=false
 StartupNotify=true
-StartupWMClass=sisteminha
+StartupWMClass=reforja
 Keywords=pos-formatacao;setup;kde;cachyos;

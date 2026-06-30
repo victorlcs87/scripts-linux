@@ -1,4 +1,4 @@
-"""Frontend grafico (PySide6) do sisteminha de pos-formatacao.
+"""Frontend grafico (PySide6) do reforja de pos-formatacao.
 
 A GUI reaproveita integralmente o motor (steps, Runner, StepContext): apenas
 substitui o Logger por um GuiLogger que emite sinais Qt e fornece canais

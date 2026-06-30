@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from postformat.core import Logger, Runner, confirm_phrase, prompt_user
+from reforja.core import Logger, Runner, confirm_phrase, prompt_user
 
 
 class FakeInteraction:

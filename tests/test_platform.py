@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from postformat import platform
-from postformat.core import Logger, Runner
+from reforja import platform
+from reforja.core import Logger, Runner
 
 
 def write_os_release(tmp_path: Path, text: str) -> Path:

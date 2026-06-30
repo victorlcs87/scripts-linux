@@ -138,7 +138,7 @@ Description=Notificacao de falha na montagem do Google Drive
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao montado" "Token pode ter expirado. Para corrigir, execute:\\npython -m postformat step 07 apply"
+ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao montado" "Token pode ter expirado. Para corrigir, execute:\\npython -m reforja step 07 apply"
 """
         service_was_current = (
             service_file.exists()

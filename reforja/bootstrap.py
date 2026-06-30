@@ -75,7 +75,7 @@ def ensure_bootstrap(project_root: Path) -> None:
 
 def bootstrap_state_path() -> Path:
     cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "scripts-linux-postformat" / "bootstrap-state.json"
+    return cache_home / "reforja" / "bootstrap-state.json"
 
 
 def load_bootstrap_state(path: Path) -> dict[str, object]:

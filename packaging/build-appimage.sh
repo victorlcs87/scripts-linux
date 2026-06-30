@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Constroi o AppImage do sisteminha.
+# Constroi o AppImage do reforja.
 #
 # Fluxo: PyInstaller (--onedir) -> AppDir -> appimagetool.
 # Variaveis de ambiente:
 #   VERSION       versao a embutir no nome (default: 0.0.0-dev)
 #   UPDATE_INFO   update info do AppImage (zsync). Quando definido, gera .zsync
 #                 e habilita auto-update. Ex.:
-#                 gh-releases-zsync|victorlcs87|scripts-linux|latest|Sisteminha-*-x86_64.AppImage.zsync
+#                 gh-releases-zsync|victorlcs87|scripts-linux|latest|Reforja-*-x86_64.AppImage.zsync
 #   OUTDIR        diretorio de saida (default: dist)
 set -euo pipefail
 
@@ -17,27 +17,27 @@ VERSION="${VERSION:-0.0.0-dev}"
 OUTDIR="${OUTDIR:-${ROOT}/dist}"
 ARCH="${ARCH:-x86_64}"
 APPDIR="${ROOT}/build/AppDir"
-OUTPUT="${OUTDIR}/Sisteminha-${VERSION}-${ARCH}.AppImage"
+OUTPUT="${OUTDIR}/Reforja-${VERSION}-${ARCH}.AppImage"
 
 echo ">> Limpando builds anteriores"
-rm -rf "${ROOT}/build" "${ROOT}/dist/sisteminha"
+rm -rf "${ROOT}/build" "${ROOT}/dist/reforja"
 mkdir -p "${OUTDIR}"
 
 echo ">> Congelando com PyInstaller"
-python -m PyInstaller --noconfirm --clean packaging/sisteminha.spec
+python -m PyInstaller --noconfirm --clean packaging/reforja.spec
 
 echo ">> Montando AppDir"
 rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin" \
          "${APPDIR}/usr/share/applications" \
          "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
-cp -a "${ROOT}/dist/sisteminha/." "${APPDIR}/usr/bin/"
+cp -a "${ROOT}/dist/reforja/." "${APPDIR}/usr/bin/"
 
 install -m 0755 "${ROOT}/packaging/AppRun" "${APPDIR}/AppRun"
-install -m 0644 "${ROOT}/packaging/sisteminha.desktop" "${APPDIR}/sisteminha.desktop"
-install -m 0644 "${ROOT}/packaging/sisteminha.desktop" "${APPDIR}/usr/share/applications/sisteminha.desktop"
-install -m 0644 "${ROOT}/assets/sisteminha.png" "${APPDIR}/sisteminha.png"
-install -m 0644 "${ROOT}/assets/sisteminha.png" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/sisteminha.png"
+install -m 0644 "${ROOT}/packaging/reforja.desktop" "${APPDIR}/reforja.desktop"
+install -m 0644 "${ROOT}/packaging/reforja.desktop" "${APPDIR}/usr/share/applications/reforja.desktop"
+install -m 0644 "${ROOT}/assets/reforja.png" "${APPDIR}/reforja.png"
+install -m 0644 "${ROOT}/assets/reforja.png" "${APPDIR}/usr/share/icons/hicolor/512x512/apps/reforja.png"
 
 # appimagetool: usa o do PATH ou baixa o AppImage oficial.
 APPIMAGETOOL="$(command -v appimagetool || true)"

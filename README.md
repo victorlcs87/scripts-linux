@@ -1,4 +1,4 @@
-# scripts-linux-postformat
+# Reforja
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![KDE](https://img.shields.io/badge/Desktop-KDE-1D99F3?logo=kde&logoColor=white)](https://kde.org/)
@@ -33,7 +33,7 @@ mesmo motor (mesmos steps, mesmos `apply`/`dry-run`/`status`/`undo`):
 
 ```fish
 python 00-pos-formatacao-cachyos.py --gui   # bootstrap do PySide6 + abre a GUI
-python -m postformat.gui                     # se o PySide6 ja estiver instalado
+python -m reforja.gui                     # se o PySide6 ja estiver instalado
 ```
 
 A janela traz uma barra lateral com as etapas (com indicador de conformidade),
@@ -49,8 +49,8 @@ O app e distribuido como **AppImage** (arquivo unico, sem instalacao). Cada push
 na branch `main` gera automaticamente um novo release com o executavel anexado:
 
 ```fish
-chmod +x Sisteminha-*-x86_64.AppImage
-./Sisteminha-*-x86_64.AppImage
+chmod +x Reforja-*-x86_64.AppImage
+./Reforja-*-x86_64.AppImage
 ```
 
 O AppImage embute informacao de auto-update (zsync); ferramentas como
@@ -60,7 +60,7 @@ Para construir localmente:
 
 ```fish
 pip install -e .[gui] pyinstaller
-bash packaging/build-appimage.sh   # gera dist/Sisteminha-*-x86_64.AppImage
+bash packaging/build-appimage.sh   # gera dist/Reforja-*-x86_64.AppImage
 ```
 
 ## Uso Rapido
@@ -80,9 +80,9 @@ bash scripts/10-instalar-apps-jogos-comunicacao-dev.sh
 Executar pelo modulo Python:
 
 ```fish
-python -m postformat step 10 dry-run
-python -m postformat step 11 status
-python -m postformat step 13 apply
+python -m reforja step 10 dry-run
+python -m reforja step 11 status
+python -m reforja step 13 apply
 ```
 
 ## Menus
@@ -179,7 +179,7 @@ A etapa `13` instala e configura o Sunshine para streaming local com Moonlight:
 
 ```fish
 bash scripts/13-instalar-configurar-sunshine-cachyos.sh
-python -m postformat step 13 status
+python -m reforja step 13 status
 ```
 
 Ela cria o autostart KDE em:
@@ -218,7 +218,7 @@ A etapa `14` coleta um retrato do hardware (CPU, RAM, GPUs, discos, PCI/USB e, q
 ~/.cache/scripts-linux/hardware/hardware-info.txt
 ```
 
-Esse mesmo modulo (`postformat/hardware.py`) e a fonte unica de deteccao de hardware do sistema: a etapa de gestos (`09`) e a validacao de GPU (`05`) consultam-no para decidir touchpad e GPUs. O `dry-run` apenas lista o que seria coletado, e o `undo` remove o relatorio salvo.
+Esse mesmo modulo (`reforja/hardware.py`) e a fonte unica de deteccao de hardware do sistema: a etapa de gestos (`09`) e a validacao de GPU (`05`) consultam-no para decidir touchpad e GPUs. O `dry-run` apenas lista o que seria coletado, e o `undo` remove o relatorio salvo.
 
 ## Seguranca E Confiabilidade
 
@@ -235,7 +235,7 @@ Esse mesmo modulo (`postformat/hardware.py`) e a fonte unica de deteccao de hard
 Validar sintaxe:
 
 ```fish
-python -m py_compile 00-pos-formatacao-cachyos.py postformat/*.py
+python -m py_compile 00-pos-formatacao-cachyos.py reforja/*.py
 ```
 
 Rodar testes:
@@ -251,7 +251,7 @@ python -m pytest
 ├── 00-pos-formatacao-cachyos.py
 ├── assets/
 │   └── hydra.png
-├── postformat/
+├── reforja/
 │   ├── cli.py
 │   ├── core.py
 │   ├── desktop.py

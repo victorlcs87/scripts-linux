@@ -313,7 +313,7 @@ class Runner:
         if sudo and no_new_privs_enabled():
             raise PrivilegeEscalationBlockedError(
                 "este ambiente bloqueia sudo porque NoNewPrivs=1. "
-                "Execute o sisteminha em uma sessao normal do seu sistema, fora de contêiner, sandbox ou terminal restrito."
+                "Execute o reforja em uma sessao normal do seu sistema, fora de contêiner, sandbox ou terminal restrito."
             )
         env = os.environ.copy()
         if env_extra:
@@ -636,7 +636,7 @@ def ensure_owner(path: Path, user: UserInfo, runner: Runner, *, recursive: bool 
 
 
 def confirm_phrase(phrase: str, logger: Logger) -> bool:
-    detail = "O sisteminha esta aguardando sua confirmacao. Isso nao e travamento."
+    detail = "O reforja esta aguardando sua confirmacao. Isso nao e travamento."
     if logger.interaction is not None:
         if logger.interaction.confirm_phrase(phrase, detail=detail):
             announce(logger, "done", "Confirmacao recebida")

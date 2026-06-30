@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Gera o icone do app (assets/sisteminha.png) usando Qt.
+"""Gera o icone do app (assets/reforja.png) usando Qt.
 
-Icone simples e reconhecivel: gradiente escuro com um "S" estilizado e um
+Icone simples e reconhecivel: gradiente escuro com um "R" estilizado e um
 acento ciano, alinhado a paleta do tema. Rode com QT_QPA_PLATFORM=offscreen.
 """
 
@@ -18,7 +18,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPix
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 SIZE = 512
-OUT = Path(__file__).resolve().parent.parent / "assets" / "sisteminha.png"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "reforja.png"
 
 
 def render() -> None:
@@ -39,12 +39,12 @@ def render() -> None:
     painter.setBrush(QColor("#2b6cff"))
     painter.drawRoundedRect(QRectF(96, 360, SIZE - 192, 40), 20, 20)
 
-    # "S" central.
+    # "R" central.
     font = QFont("DejaVu Sans", 280)
     font.setBold(True)
     painter.setFont(font)
     painter.setPen(QColor("#5fe1ff"))
-    painter.drawText(QRectF(0, 20, SIZE, SIZE - 120), Qt.AlignmentFlag.AlignCenter, "S")
+    painter.drawText(QRectF(0, 20, SIZE, SIZE - 120), Qt.AlignmentFlag.AlignCenter, "R")
 
     painter.end()
     OUT.parent.mkdir(parents=True, exist_ok=True)

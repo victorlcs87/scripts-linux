@@ -34,11 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     from .main_window import MainWindow
 
     app = QApplication(argv if argv is not None else sys.argv)
-    app.setApplicationName("Sisteminha Pos-Formatacao")
-    app.setApplicationDisplayName("Sisteminha")
-    # Alinha o WM_CLASS ao .desktop (sisteminha.desktop) para que o KDE Wayland
+    app.setApplicationName("Reforja Pos-Formatacao")
+    app.setApplicationDisplayName("Reforja")
+    # Alinha o WM_CLASS ao .desktop (reforja.desktop) para que o KDE Wayland
     # agrupe a janela com o icone correto na barra de tarefas.
-    app.setDesktopFileName("sisteminha")
+    app.setDesktopFileName("reforja")
     if _THEME.exists():
         app.setStyleSheet(_THEME.read_text(encoding="utf-8"))
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from postformat import bootstrap
+from reforja import bootstrap
 
 
 def test_ensure_bootstrap_writes_state_when_requirements_are_present(tmp_path: Path, monkeypatch) -> None:

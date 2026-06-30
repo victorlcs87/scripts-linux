@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-from postformat.bootstrap import BootstrapError, ensure_bootstrap, ensure_gui_bootstrap
+from reforja.bootstrap import BootstrapError, ensure_bootstrap, ensure_gui_bootstrap
 
 
 def run() -> int:
@@ -16,10 +16,10 @@ def run() -> int:
         print(f"[bootstrap] {exc}", file=sys.stderr)
         return 1
     if use_gui:
-        from postformat.gui import main as gui_main
+        from reforja.gui import main as gui_main
 
         return gui_main([sys.argv[0], *[arg for arg in sys.argv[1:] if arg != "--gui"]])
-    from postformat.cli import main
+    from reforja.cli import main
 
     return main()
 

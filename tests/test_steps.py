@@ -3,10 +3,10 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from postformat import hardware
-from postformat.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
-from postformat.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
-from postformat.steps import (
+from reforja import hardware
+from reforja.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
+from reforja.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
+from reforja.steps import (
     ALL_STEPS,
     AntigravityStep,
     AppsStep,
@@ -20,7 +20,7 @@ from postformat.steps import (
     SunshineStep,
     UpdateAppImagesStep,
 )
-from postformat.steps_base import StepContext
+from reforja.steps_base import StepContext
 
 
 def make_ctx(tmp_path: Path) -> StepContext:
@@ -60,10 +60,10 @@ def test_sunshine_dry_run_mentions_udev_autostart_ufw_and_desktop(tmp_path: Path
     step = SunshineStep(ctx)
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_system_package", lambda pkg, runner: runner.logger.write(f"instalaria {pkg}")
+        "reforja.steps.gaming.install_system_package", lambda pkg, runner: runner.logger.write(f"instalaria {pkg}")
     )
     monkeypatch.setattr(
-        "postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "update-desktop-database"}
+        "reforja.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "update-desktop-database"}
     )
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
@@ -99,7 +99,7 @@ def test_sunshine_fallback_desktop_content(tmp_path: Path, monkeypatch) -> None:
     ctx.runner.dry_run = False
     step = SunshineStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: False)
     monkeypatch.setattr(step, "_find_existing_launcher", lambda: None)
 
     step._ensure_menu_launcher()
@@ -119,8 +119,8 @@ def test_sunshine_status_applied_when_everything_is_ready(tmp_path: Path, monkey
     step.autostart_file.parent.mkdir(parents=True)
     step.autostart_file.write_text(step._autostart_content(), encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
     monkeypatch.setattr(step, "_sunshine_running", lambda: True)
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
@@ -142,8 +142,8 @@ def test_sunshine_status_attention_when_user_service_exists(tmp_path: Path, monk
     step.user_service_file.parent.mkdir(parents=True)
     step.user_service_file.write_text("[Service]\nExecStart=/usr/bin/sunshine\n", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg == "sunshine")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name in {"sunshine", "ufw", "ss"})
     monkeypatch.setattr(step, "_sunshine_running", lambda: True)
     monkeypatch.setattr(step, "_user_in_group", lambda group: group == "input")
     monkeypatch.setattr(step, "_udev_rule_ready", lambda: True)
@@ -159,7 +159,7 @@ def test_sunshine_undo_dry_run_mentions_managed_removals(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = SunshineStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name == "ufw")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name == "ufw")
 
     step.undo()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -175,10 +175,10 @@ def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path
     ctx = make_ctx(tmp_path)
     step = ShellyStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.system.command_exists", lambda name: name in {"flatpak", "shelly"})
-    monkeypatch.setattr("postformat.steps.system.aur_helper", lambda: "paru")
+    monkeypatch.setattr("reforja.steps.system.command_exists", lambda name: name in {"flatpak", "shelly"})
+    monkeypatch.setattr("reforja.steps.system.aur_helper", lambda: "paru")
     monkeypatch.setattr(
-        "postformat.steps.system.current_distro",
+        "reforja.steps.system.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -192,8 +192,8 @@ def test_shelly_step_dry_run_prepares_stack_without_ui_when_ready(tmp_path: Path
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.system.system_installed", lambda pkg: pkg == "fuse2")
-    monkeypatch.setattr("postformat.steps.system.install_first_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.steps.system.system_installed", lambda pkg: pkg == "fuse2")
+    monkeypatch.setattr("reforja.steps.system.install_first_available", lambda *_args, **_kwargs: None)
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["flatpak", "remote-list", "--columns=name"]:
@@ -219,7 +219,7 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
     step = ShellyStep(ctx)
 
     monkeypatch.setattr(
-        "postformat.steps.system.current_distro",
+        "reforja.steps.system.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -233,9 +233,9 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.system.command_exists", lambda name: name == "flatpak")
-    monkeypatch.setattr("postformat.steps.system.system_installed", lambda pkg: pkg == "libfuse2")
-    monkeypatch.setattr("postformat.steps.system.install_first_available", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.steps.system.command_exists", lambda name: name == "flatpak")
+    monkeypatch.setattr("reforja.steps.system.system_installed", lambda pkg: pkg == "libfuse2")
+    monkeypatch.setattr("reforja.steps.system.install_first_available", lambda *_args, **_kwargs: None)
 
     def fake_run(cmd, **_kwargs):
         if cmd == ["flatpak", "remote-list", "--columns=name"]:
@@ -258,7 +258,7 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
     step = AppsStep(ctx)
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -272,9 +272,9 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -292,7 +292,7 @@ def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is
     installed_flatpaks: list[str] = []
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -306,9 +306,9 @@ def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
+        "reforja.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
     )
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
@@ -323,7 +323,7 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
     installed_flatpaks: list[str] = []
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -337,9 +337,9 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
+        "reforja.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
     )
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
@@ -349,7 +349,7 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
 
 def _patch_distro(monkeypatch, *, immutable: bool) -> None:
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -371,10 +371,10 @@ def test_auto_cpufreq_uses_system_package_when_available(tmp_path: Path, monkeyp
     calls: list[tuple] = []
 
     _patch_distro(monkeypatch, immutable=False)
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_system_or_aur",
+        "reforja.steps.gaming.install_system_or_aur",
         lambda *args, **kwargs: calls.append(args) or True,
     )
 
@@ -391,10 +391,10 @@ def test_auto_cpufreq_falls_back_to_github_installer(tmp_path: Path, monkeypatch
     step = AppsStep(ctx)
 
     _patch_distro(monkeypatch, immutable=False)
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
-    monkeypatch.setattr("postformat.steps.gaming.install_system_package", lambda pkg, runner: None)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_system_package", lambda pkg, runner: None)
 
     step._install_auto_cpufreq()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -410,9 +410,9 @@ def test_auto_cpufreq_skips_github_on_immutable(tmp_path: Path, monkeypatch) -> 
     step = AppsStep(ctx)
 
     _patch_distro(monkeypatch, immutable=True)
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *args, **kwargs: False)
 
     step._install_auto_cpufreq()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -427,7 +427,7 @@ def test_install_steam_enables_rpmfusion_on_mutable_fedora(tmp_path: Path, monke
     rpmfusion_called: list[bool] = []
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -441,10 +441,10 @@ def test_install_steam_enables_rpmfusion_on_mutable_fedora(tmp_path: Path, monke
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.gaming.ensure_rpmfusion", lambda _runner: rpmfusion_called.append(True))
-    monkeypatch.setattr("postformat.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.ensure_rpmfusion", lambda _runner: rpmfusion_called.append(True))
+    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
 
     step._install_steam()
 
@@ -457,7 +457,7 @@ def test_install_steam_skips_when_preinstalled_on_immutable(tmp_path: Path, monk
     flatpaks: list[str] = []
 
     monkeypatch.setattr(
-        "postformat.steps.gaming.current_distro",
+        "reforja.steps.gaming.current_distro",
         lambda: type(
             "Distro",
             (),
@@ -471,9 +471,9 @@ def test_install_steam_skips_when_preinstalled_on_immutable(tmp_path: Path, monk
             },
         )(),
     )
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: command == "steam")
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.install_flatpak", lambda app_id, _runner: flatpaks.append(app_id))
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: command == "steam")
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.install_flatpak", lambda app_id, _runner: flatpaks.append(app_id))
 
     step._install_steam()
 
@@ -504,9 +504,9 @@ def test_git_step_ctrl_c_on_repo_url_becomes_skipped(tmp_path: Path, monkeypatch
     ctx.runner.dry_run = False
     step = GitStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.dev.install_system_package", lambda *args, **kwargs: None)
+    monkeypatch.setattr("reforja.steps.dev.install_system_package", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "postformat.steps.dev.prompt_user",
+        "reforja.steps.dev.prompt_user",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             PromptInterruptedError("entrada interrompida pelo usuario: Informe a URL")
         ),
@@ -583,8 +583,8 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
@@ -604,10 +604,8 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr(
-        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
-    )
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -624,8 +622,8 @@ def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "x11"})
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "x11"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
@@ -647,8 +645,8 @@ def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeyp
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: pkg == "steam")
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg == "steam")
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -663,8 +661,8 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
@@ -680,10 +678,8 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr(
-        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
-    )
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -697,8 +693,8 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
@@ -718,10 +714,8 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr(
-        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
-    )
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -737,8 +731,8 @@ def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypa
     def fake_exists(name: str) -> bool:
         return name != "nvidia-smi"
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", fake_exists)
-    monkeypatch.setattr("postformat.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", fake_exists)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
         if cmd == ["glxinfo", "-B"]:
@@ -756,10 +750,8 @@ def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypa
         raise AssertionError(cmd)
 
     monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr(
-        "postformat.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"}
-    )
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg in {"steam", "heroic-games-launcher"})
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -772,10 +764,10 @@ def test_apps_detect_install_source_prefers_existing_flatpak(tmp_path: Path, mon
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: app_id == "com.discordapp.Discord")
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: command == "flatpak")
-    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: app_id == "com.discordapp.Discord")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: command == "flatpak")
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
 
     assert step._detect_install_source("Discord") == "flatpak (com.discordapp.Discord)"
 
@@ -787,10 +779,10 @@ def test_apps_detect_install_source_for_hydra_appimage(tmp_path: Path, monkeypat
     hydra.parent.mkdir(parents=True, exist_ok=True)
     hydra.write_text("bin", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
 
     source = step._detect_install_source("Hydra Launcher")
 
@@ -805,10 +797,10 @@ def test_apps_detect_install_source_for_hydra_canonical_desktop(tmp_path: Path, 
     desktop.parent.mkdir(parents=True, exist_ok=True)
     desktop.write_text("[Desktop Entry]\nName=Hydra Launcher\n", encoding="utf-8")
 
-    monkeypatch.setattr("postformat.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.gaming.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.gaming.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
 
     source = step._detect_install_source("Hydra Launcher")
 
@@ -824,19 +816,17 @@ def test_install_hydra_reconciles_desktop_when_appimage_exists(tmp_path: Path, m
     copied_icons: list[Path] = []
     installed_desktops: list[tuple[Path, str]] = []
 
+    monkeypatch.setattr("reforja.steps.gaming.copy_asset", lambda _source, target, _runner: copied_icons.append(target))
     monkeypatch.setattr(
-        "postformat.steps.gaming.copy_asset", lambda _source, target, _runner: copied_icons.append(target)
-    )
-    monkeypatch.setattr(
-        "postformat.steps.gaming.install_desktop_entry",
+        "reforja.steps.gaming.install_desktop_entry",
         lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
     )
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_system_package",
+        "reforja.steps.gaming.install_system_package",
         lambda *_args, **_kwargs: pytest.fail("nao deveria instalar pacotes"),
     )
     monkeypatch.setattr(
-        "postformat.steps.gaming.install_first_available",
+        "reforja.steps.gaming.install_first_available",
         lambda *_args, **_kwargs: pytest.fail("nao deveria instalar fuse"),
     )
 
@@ -867,9 +857,9 @@ def test_update_appimages_migrates_manual_install(tmp_path: Path, monkeypatch) -
     )
 
     installed_desktops: list[tuple[Path, str]] = []
-    monkeypatch.setattr("postformat.steps.appimage.copy_asset", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "postformat.steps.appimage.install_desktop_entry",
+        "reforja.steps.appimage.install_desktop_entry",
         lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
     )
 
@@ -968,10 +958,10 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
-    monkeypatch.setattr("postformat.steps.kde.system_installed", lambda pkg: False)
-    monkeypatch.setattr("postformat.steps.kde.command_exists", lambda command: False)
-    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: True)
+    monkeypatch.setattr("reforja.steps.kde.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.kde.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -984,12 +974,12 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: True)
-    monkeypatch.setattr("postformat.steps.kde.system_installed", lambda pkg: pkg == "libinput-gestures")
-    monkeypatch.setattr("postformat.steps.kde.command_exists", lambda command: command == "libinput-gestures-setup")
+    monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: True)
+    monkeypatch.setattr("reforja.steps.kde.system_installed", lambda pkg: pkg == "libinput-gestures")
+    monkeypatch.setattr("reforja.steps.kde.command_exists", lambda command: command == "libinput-gestures-setup")
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
     monkeypatch.setattr(step, "_libinput_gestures_running", lambda: False)
-    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("reforja.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
 
@@ -1036,9 +1026,9 @@ def test_gestures_apply_skips_machine_without_touchpad(tmp_path: Path, monkeypat
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
+    monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: False)
     monkeypatch.setattr(
-        "postformat.steps.kde.install_system_or_aur",
+        "reforja.steps.kde.install_system_or_aur",
         lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"),
     )
 
@@ -1054,8 +1044,8 @@ def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeyp
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
 
-    monkeypatch.setattr("postformat.hardware.has_touchpad", lambda: False)
-    monkeypatch.setattr("postformat.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
+    monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: False)
+    monkeypatch.setattr("reforja.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
 
@@ -1067,7 +1057,7 @@ def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path:
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 1)
 
     probe = step._probe_prime_gl()
@@ -1080,7 +1070,7 @@ def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Pat
     ctx = make_ctx(tmp_path)
     step = NvidiaSteamStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.gaming.command_exists", lambda name: name != "prime-run")
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 2)
 
     probe = step._probe_prime_gl()
@@ -1091,8 +1081,8 @@ def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Pat
 def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
 
-    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
-    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: 1)
 
     selected = choose_step(logger)
 
@@ -1104,9 +1094,9 @@ def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> Non
     choices = iter([0, 6])
     called: list[str] = []
 
-    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
-    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: next(choices))
-    monkeypatch.setattr("postformat.cli.run_all", lambda action, _logger: called.append(action))
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("reforja.cli.run_all", lambda action, _logger: called.append(action))
 
     main_menu(logger)
 
@@ -1118,9 +1108,9 @@ def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:
     choices = iter([2, 4])
     called: list[str] = []
 
-    monkeypatch.setattr("postformat.cli.clear_screen", lambda: None)
-    monkeypatch.setattr("postformat.cli.choose_option", lambda *_args, **_kwargs: next(choices))
-    monkeypatch.setattr("postformat.cli.run_action_safe", lambda _step_cls, action, _logger: called.append(action))
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("reforja.cli.run_action_safe", lambda _step_cls, action, _logger: called.append(action))
 
     step_menu(ALL_STEPS[0], logger)
 
@@ -1131,15 +1121,15 @@ def test_run_all_clears_screen_before_first_step(tmp_path: Path, monkeypatch) ->
     logger = Logger(tmp_path, "test")
     call_order: list[str] = []
 
-    monkeypatch.setattr("postformat.cli.clear_screen", lambda: call_order.append("clear"))
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: call_order.append("clear"))
     monkeypatch.setattr(
-        "postformat.cli.run_action",
+        "reforja.cli.run_action",
         lambda *_args, **_kwargs: (
             call_order.append("run") or StepRunResult("00", "Preparar", "done", "ok", "aplicado", 0.1)
         ),
     )
-    monkeypatch.setattr("postformat.cli.render_run_summary", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("postformat.cli.prompt_return_to_menu", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.cli.render_run_summary", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.cli.prompt_return_to_menu", lambda *_args, **_kwargs: None)
 
     run_all("apply", logger)
 
@@ -1175,8 +1165,8 @@ def test_hardware_step_dry_run_does_not_write_report(tmp_path: Path, monkeypatch
     ctx = make_ctx(tmp_path)
     step = HardwareStep(ctx)
 
-    monkeypatch.setattr("postformat.steps.inventory.command_exists", lambda name: True)
-    monkeypatch.setattr("postformat.hardware.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.inventory.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.hardware.command_exists", lambda name: True)
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
@@ -1210,7 +1200,7 @@ def test_hardware_step_status_applied_with_existing_report(tmp_path: Path) -> No
 def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
-    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": "/usr/bin"})
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": "/usr/bin"})
 
     step.status()
 
@@ -1229,7 +1219,7 @@ def test_antigravity_status_applied_when_everything_present(tmp_path: Path, monk
     wrapper = home / ".local/bin/antigravity-ide"
     wrapper.parent.mkdir(parents=True)
     wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
-    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": str(home / ".local/bin")})
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": str(home / ".local/bin")})
 
     step.status()
 
@@ -1243,7 +1233,7 @@ def test_antigravity_status_attention_when_path_missing(tmp_path: Path, monkeypa
     wrapper = home / ".local/bin/antigravity-ide"
     wrapper.parent.mkdir(parents=True)
     wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
-    monkeypatch.setattr("postformat.steps.dev.os.environ", {"PATH": "/usr/bin"})
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": "/usr/bin"})
 
     step.status()
 

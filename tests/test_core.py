@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from postformat.core import (
+from reforja.core import (
     Logger,
     PrivilegeEscalationBlockedError,
     PromptInterruptedError,
@@ -13,7 +13,7 @@ from postformat.core import (
     prompt_user,
     write_text,
 )
-from postformat.desktop import DesktopEntry
+from reforja.desktop import DesktopEntry
 
 
 def test_dry_run_does_not_execute_command(tmp_path: Path) -> None:
@@ -66,7 +66,7 @@ def test_write_text_skips_when_content_is_current(tmp_path: Path) -> None:
 def test_sudo_is_blocked_cleanly_when_no_new_privs(monkeypatch, tmp_path: Path) -> None:
     logger = Logger(tmp_path, "test")
     runner = Runner(logger, dry_run=False)
-    monkeypatch.setattr("postformat.core.no_new_privs_enabled", lambda: True)
+    monkeypatch.setattr("reforja.core.no_new_privs_enabled", lambda: True)
 
     with pytest.raises(PrivilegeEscalationBlockedError):
         runner.run(["true"], sudo=True)

@@ -1,5 +1,5 @@
 #!/bin/sh
-# AppRun do AppImage do sisteminha: localiza a raiz e executa o binario congelado.
+# AppRun do AppImage do reforja: localiza a raiz e executa o binario congelado.
 HERE="$(dirname "$(readlink -f "${0}")")"
 export PATH="${HERE}/usr/bin:${PATH}"
-exec "${HERE}/usr/bin/sisteminha" "$@"
+exec "${HERE}/usr/bin/reforja" "$@"

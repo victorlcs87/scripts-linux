@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Spec do PyInstaller para o sisteminha (GUI).
+"""Spec do PyInstaller para o reforja (GUI).
 
-Empacota o pacote postformat (incluindo o tema da GUI e os assets) num
+Empacota o pacote reforja (incluindo o tema da GUI e os assets) num
 diretorio --onedir, que o build-appimage.sh transforma em AppDir/AppImage.
 """
 
@@ -12,13 +12,13 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPECPATH).parent
 
 datas = [
-    (str(ROOT / "postformat" / "gui" / "theme.qss"), "postformat/gui"),
+    (str(ROOT / "reforja" / "gui" / "theme.qss"), "reforja/gui"),
     (str(ROOT / "assets"), "assets"),
     (str(ROOT / "scripts"), "scripts"),
 ]
 
 # Garante que todos os steps (carregados dinamicamente) entrem no bundle.
-hidden = collect_submodules("postformat")
+hidden = collect_submodules("reforja")
 
 a = Analysis(
     [str(ROOT / "packaging" / "entry.py")],
@@ -38,7 +38,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="sisteminha",
+    name="reforja",
     debug=False,
     strip=False,
     upx=False,
@@ -50,5 +50,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="sisteminha",
+    name="reforja",
 )
