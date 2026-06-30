@@ -61,7 +61,7 @@ jobs:
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0
 
       - name: Instalar projeto + GUI + PyInstaller
-        run: pip install -e .[dev,gui] pyinstaller
+        run: pip install -e .[dev,gui] pytest-qt pyinstaller
 
       - name: Definir versao do build
         id: ver

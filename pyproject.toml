@@ -19,7 +19,6 @@ gui = [
 dev = [
     "pytest",
     "pytest-cov",
-    "pytest-qt",
     "ruff",
 ]
 
