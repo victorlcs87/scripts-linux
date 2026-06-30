@@ -60,5 +60,14 @@ fi
 ARCH="${ARCH}" "${APPIMAGETOOL}" --appimage-extract-and-run \
     "${EXTRA_ARGS[@]}" "${APPDIR}" "${OUTPUT}"
 
+# Quando ha update info, o appimagetool gera o .zsync no diretorio atual (ROOT)
+# com o nome-base do AppImage. Movemos para OUTDIR para o release anexa-lo.
+if [ -n "${UPDATE_INFO:-}" ]; then
+    ZSYNC_NAME="$(basename "${OUTPUT}").zsync"
+    if [ -f "${ROOT}/${ZSYNC_NAME}" ] && [ "${ROOT}/${ZSYNC_NAME}" != "${OUTDIR}/${ZSYNC_NAME}" ]; then
+        mv -f "${ROOT}/${ZSYNC_NAME}" "${OUTDIR}/${ZSYNC_NAME}"
+    fi
+fi
+
 echo ">> Pronto:"
 ls -lh "${OUTPUT}"*
