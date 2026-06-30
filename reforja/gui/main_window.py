@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from pathlib import Path
 
@@ -104,11 +105,15 @@ class MainWindow(QMainWindow):
         self._updating = False
         self._check_worker: CheckWorker | None = None
         self._download_worker: DownloadWorker | None = None
+        self._update_checker: UpdateChecker | None = None
 
         # Checagem de atualizacao em background (silenciosa em caso de falha).
-        self._update_checker = UpdateChecker()
-        self._update_checker.updateAvailable.connect(self._on_update_available)
-        self._update_checker.start()
+        # Desabilitavel via env var (testes/headless) para nao deixar uma thread
+        # de rede viva durante o teardown do processo.
+        if os.environ.get("REFORJA_NO_UPDATE_CHECK") != "1":
+            self._update_checker = UpdateChecker()
+            self._update_checker.updateAvailable.connect(self._on_update_available)
+            self._update_checker.start()
 
     # --- atualizacao do app ------------------------------------------------------
     def _on_update_available(self, tag: str, url: str) -> None:
@@ -487,4 +492,8 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        # Aguarda threads de rede terminarem para nao destrui-las em execucao.
+        for thread in (self._update_checker, self._check_worker, self._download_worker):
+            if thread is not None and thread.isRunning():
+                thread.wait(3000)
         event.accept()

@@ -11,6 +11,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Nao inicia a checagem de atualizacao (thread de rede) durante os testes.
+os.environ["REFORJA_NO_UPDATE_CHECK"] = "1"
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

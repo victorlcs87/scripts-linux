@@ -73,6 +73,7 @@ jobs:
       - name: Smoke test da GUI (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
+          REFORJA_NO_UPDATE_CHECK: "1"
         run: python -m pytest tests/test_gui.py -q
 
       - name: Construir AppImage
