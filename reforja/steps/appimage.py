@@ -41,6 +41,7 @@ class UpdateAppImagesStep(Step):
             "icon_target": Path(".local/share/icons/hydra-launcher.png"),
             "wm_class": "hydralauncher",
             "categories": ("Game",),
+            "installable": True,
         },
         {
             "name": "Reforja",

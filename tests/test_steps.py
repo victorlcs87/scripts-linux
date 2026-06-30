@@ -253,7 +253,7 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
     assert step.result.compliance == "aplicado"
 
 
-def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -> None:
+def test_apps_dry_run_mentions_codex_and_flatpaks(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
 
@@ -279,9 +279,10 @@ def test_apps_dry_run_mentions_appimage_and_codex(tmp_path: Path, monkeypatch) -
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
 
-    assert "fuse2" in log
     assert "@openai/codex" in log
     assert "com.discordapp.Discord" in log
+    # Hydra deixou de ser instalado aqui (passou para o passo 15).
+    assert "hydra" not in log.lower()
 
 
 def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is_missing(
@@ -772,72 +773,32 @@ def test_apps_detect_install_source_prefers_existing_flatpak(tmp_path: Path, mon
     assert step._detect_install_source("Discord") == "flatpak (com.discordapp.Discord)"
 
 
-def test_apps_detect_install_source_for_hydra_appimage(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    step = AppsStep(ctx)
-    hydra = ctx.user.home / "AppImages/HydraLauncher-latest.AppImage"
-    hydra.parent.mkdir(parents=True, exist_ok=True)
-    hydra.write_text("bin", encoding="utf-8")
-
-    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
-
-    source = step._detect_install_source("Hydra Launcher")
-
-    assert source is not None
-    assert source.startswith("appimage")
+def test_apps_does_not_manage_hydra_or_bitwarden(tmp_path: Path) -> None:
+    # Hydra migrou para o passo 15; Bitwarden ficou so no passo 03.
+    step = AppsStep(make_ctx(tmp_path))
+    assert "Hydra Launcher" not in step.apps
+    assert "Bitwarden" not in step.apps
 
 
-def test_apps_detect_install_source_for_hydra_canonical_desktop(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    step = AppsStep(ctx)
-    desktop = ctx.user.home / ".local/share/applications/hydralauncher.desktop"
-    desktop.parent.mkdir(parents=True, exist_ok=True)
-    desktop.write_text("[Desktop Entry]\nName=Hydra Launcher\n", encoding="utf-8")
-
-    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
-    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
-    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
-    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
-
-    source = step._detect_install_source("Hydra Launcher")
-
-    assert source == f"desktop ({desktop})"
+def test_hydra_is_installable_in_step15(tmp_path: Path) -> None:
+    step = UpdateAppImagesStep(make_ctx(tmp_path))
+    hydra = next(app for app in step._APPIMAGES if app["name"] == "Hydra Launcher")
+    assert hydra["installable"] is True
 
 
-def test_install_hydra_reconciles_desktop_when_appimage_exists(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    step = AppsStep(ctx)
-    hydra = ctx.user.home / "AppImages/HydraLauncher-latest.AppImage"
-    hydra.parent.mkdir(parents=True, exist_ok=True)
-    hydra.write_text("bin", encoding="utf-8")
-    copied_icons: list[Path] = []
-    installed_desktops: list[tuple[Path, str]] = []
+def test_step15_installs_hydra_when_missing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)  # dry-run
+    step = UpdateAppImagesStep(ctx)
+    fake_run, _calls = _fake_github_run("v4.1.0", "hydralauncher-4.1.0.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+    monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
 
-    monkeypatch.setattr("reforja.steps.gaming.copy_asset", lambda _source, target, _runner: copied_icons.append(target))
-    monkeypatch.setattr(
-        "reforja.steps.gaming.install_desktop_entry",
-        lambda path, entry, _runner: installed_desktops.append((path, entry.render())),
-    )
-    monkeypatch.setattr(
-        "reforja.steps.gaming.install_system_package",
-        lambda *_args, **_kwargs: pytest.fail("nao deveria instalar pacotes"),
-    )
-    monkeypatch.setattr(
-        "reforja.steps.gaming.install_first_available",
-        lambda *_args, **_kwargs: pytest.fail("nao deveria instalar fuse"),
-    )
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
 
-    step._install_hydra()
-
-    assert copied_icons == [ctx.user.home / ".local/share/icons/hydra-launcher.png"]
-    assert installed_desktops
-    desktop_path, rendered = installed_desktops[0]
-    assert desktop_path == ctx.user.home / ".local/share/applications/hydralauncher.desktop"
-    assert f"Exec={hydra} %U" in rendered
-    assert "StartupWMClass=hydralauncher" in rendered
+    assert "Hydra Launcher: nao instalado; instalando." in log
+    assert "atualizado para v4.1.0" in log
 
 
 def test_update_appimages_migrates_manual_install(tmp_path: Path, monkeypatch) -> None:

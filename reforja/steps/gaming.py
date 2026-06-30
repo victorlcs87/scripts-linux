@@ -20,10 +20,8 @@ from ..core import (
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
-    copy_asset,
     ensure_rpmfusion,
     flatpak_installed,
-    install_first_available,
     install_flatpak,
     install_system_or_aur,
     install_system_package,
@@ -248,10 +246,6 @@ class NvidiaSteamStep(Step):
 class AppsStep(Step):
     id = "10"
     title = "Apps / jogos / comunicacao / dev"
-    hydra_appimage_path = Path("AppImages/HydraLauncher-latest.AppImage")
-    hydra_desktop_path = Path(".local/share/applications/hydralauncher.desktop")
-    hydra_legacy_desktop_path = Path(".local/share/applications/hydra-launcher.desktop")
-    hydra_wm_class = "hydralauncher"
     apps = {
         "Steam": {
             "system_aliases": ("steam", "steam-installer", "steam-launcher"),
@@ -309,13 +303,6 @@ class AppsStep(Step):
             "desktop_paths": (),
             "kind": "flatpak",
         },
-        "Bitwarden": {
-            "system_aliases": ("bitwarden",),
-            "flatpak_id": "com.bitwarden.desktop",
-            "appimage_paths": (),
-            "desktop_paths": (),
-            "kind": "flatpak",
-        },
         "Codex CLI": {
             "system_aliases": ("nodejs", "npm"),
             "flatpak_id": None,
@@ -351,17 +338,10 @@ class AppsStep(Step):
             "desktop_paths": (),
             "kind": "system",
         },
-        "Hydra Launcher": {
-            "system_aliases": (),
-            "flatpak_id": None,
-            "appimage_paths": (hydra_appimage_path,),
-            "desktop_paths": (hydra_desktop_path, hydra_legacy_desktop_path),
-            "kind": "appimage",
-        },
     }
 
     def apply(self) -> None:
-        header(self, self.title, "Instalando apps principais, Hydra e Codex CLI")
+        header(self, self.title, "Instalando apps principais e Codex CLI")
         if self._detect_install_source("Steam"):
             self.ctx.logger.write(
                 f"{Color.GREEN}OK:{Color.RESET} Steam ja detectado via {self._detect_install_source('Steam')}"
@@ -394,7 +374,6 @@ class AppsStep(Step):
             )
         else:
             self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
-        self._install_hydra()
         for name, definition in self.apps.items():
             if definition["kind"] != "flatpak":
                 continue
@@ -419,7 +398,7 @@ class AppsStep(Step):
                     ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
                 )
         self._install_auto_cpufreq()
-        self.mark_done("Apps principais, Hydra, Codex CLI e auto-cpufreq processados.")
+        self.mark_done("Apps principais, Codex CLI e auto-cpufreq processados.")
 
     def _install_auto_cpufreq(self) -> None:
         source = self._detect_install_source("auto-cpufreq")
@@ -529,81 +508,6 @@ class AppsStep(Step):
         # Qualquer familia (incluindo imutaveis) cai no Flatpak quando o nativo nao instala.
         install_flatpak(flatpak_id, self.ctx.runner)
 
-    def _install_hydra(self) -> None:
-        header(self, "Hydra Launcher AppImage", "Baixando AppImage e criando integracao desktop")
-        appimage_dir = self.ctx.user.home / "AppImages"
-        out = self.ctx.user.home / self.hydra_appimage_path
-        icon_source = self.ctx.root / "assets/hydra.png"
-        icon_target = self.ctx.user.home / ".local/share/icons/hydra-launcher.png"
-        desktop_file = self.ctx.user.home / self.hydra_desktop_path
-
-        if out.exists():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Hydra Launcher ja detectado via appimage ({out})")
-            self._reconcile_hydra_desktop(out, icon_source, icon_target, desktop_file)
-            self.add_hint("Hydra Launcher ja estava instalado.")
-            return
-        install_system_package("curl", self.ctx.runner)
-        distro = current_distro()
-        if distro.is_arch:
-            install_first_available(("fuse2",), self.ctx.runner)
-        elif distro.is_fedora:
-            install_first_available(("fuse", "fuse-libs"), self.ctx.runner)
-        else:
-            install_first_available(("libfuse2t64", "libfuse2", "fuse"), self.ctx.runner)
-        if not self.ctx.runner.dry_run:
-            appimage_dir.mkdir(parents=True, exist_ok=True)
-        url_cmd = "curl -fsSL https://api.github.com/repos/hydralauncher/hydra/releases/latest | grep -Eo 'https://[^\\\"]+\\.AppImage' | head -n1"
-        result = self.ctx.runner.run(
-            url_cmd, shell=True, check=False, action="Consultando release mais recente do Hydra", show_progress=False
-        )
-        url = result.stdout.strip() if result and result.stdout else "HYDRA_APPIMAGE_URL"
-        if url == "HYDRA_APPIMAGE_URL" and not self.ctx.runner.dry_run:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Nao encontrei AppImage do Hydra no release latest."
-            )
-            return
-        self.ctx.runner.run(["curl", "-L", url, "-o", str(out)], check=False, action="Baixando Hydra Launcher AppImage")
-        self.ctx.runner.run(
-            ["chmod", "+x", str(out)], check=False, action="Tornando Hydra Launcher executavel", show_progress=False
-        )
-        self._reconcile_hydra_desktop(out, icon_source, icon_target, desktop_file)
-
-    def _reconcile_hydra_desktop(
-        self, appimage: Path, icon_source: Path, icon_target: Path, desktop_file: Path
-    ) -> None:
-        copy_asset(icon_source, icon_target, self.ctx.runner)
-        entry = DesktopEntry(
-            name="Hydra Launcher",
-            exec_line=f"{appimage} %U",
-            icon=str(icon_target),
-            categories=("Game",),
-            startup_wm_class=self.hydra_wm_class,
-        )
-        install_desktop_entry(desktop_file, entry, self.ctx.runner)
-        self._remove_hydra_legacy_desktop(appimage)
-
-    def _remove_hydra_legacy_desktop(self, appimage: Path) -> None:
-        legacy_file = self.ctx.user.home / self.hydra_legacy_desktop_path
-        canonical_file = self.ctx.user.home / self.hydra_desktop_path
-        if not legacy_file.exists() or legacy_file == canonical_file:
-            return
-        legacy_text = legacy_file.read_text(encoding="utf-8", errors="ignore")
-        managed_legacy = str(appimage) in legacy_text and (
-            "Name=Hydra Launcher" in legacy_text
-            or "hydra-launcher" in legacy_text
-            or self.hydra_wm_class in legacy_text
-        )
-        if not managed_legacy:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} {legacy_file} parece customizado; preservando para revisao manual."
-            )
-            return
-        if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria atalho legado {legacy_file}")
-            return
-        legacy_file.unlink()
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Atalho legado removido: {legacy_file}")
-
     def status(self) -> None:
         header(self, self.title, "Verificando origem detectada de cada app")
         for name in self.apps:
@@ -620,21 +524,6 @@ class AppsStep(Step):
             )
         else:
             self.mark_pending("Nenhum dos apps monitorados foi detectado.", missing=missing)
-
-    def undo(self) -> None:
-        self.ctx.logger.write(
-            "Nao vou remover pacotes automaticamente. Removendo apenas Hydra AppImage/atalho/icone criados pela etapa."
-        )
-        for path in (
-            self.ctx.user.home / "AppImages/HydraLauncher-latest.AppImage",
-            self.ctx.user.home / ".local/share/applications/hydralauncher.desktop",
-            self.ctx.user.home / ".local/share/applications/hydra-launcher.desktop",
-            self.ctx.user.home / ".local/share/icons/hydra-launcher.png",
-        ):
-            if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
-            else:
-                path.unlink(missing_ok=True)
 
     def _detect_install_source(self, app_name: str) -> str | None:
         definition = self.apps[app_name]
