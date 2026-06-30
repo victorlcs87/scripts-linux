@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
 from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
+from reforja.gui.updater import parse_release, running_appimage  # noqa: E402
 from reforja.steps import ALL_STEPS  # noqa: E402
 
 
@@ -85,3 +86,75 @@ def test_marcar_todas_e_limpar(app, tmp_path: Path) -> None:
     assert len(window._checked_steps()) == len(ALL_STEPS)
     window._set_all_checked(False)
     assert window._checked_steps() == []
+
+
+# --- atualizacao do app -----------------------------------------------------------
+def test_parse_release_available_e_current() -> None:
+    data = {
+        "tag_name": "v1.0.9",
+        "assets": [
+            {"name": "SHA256SUMS"},
+            {"name": "Reforja-1.0.9-x86_64.AppImage", "browser_download_url": "http://x/Reforja.AppImage"},
+        ],
+    }
+    status, tag, url = parse_release(data, "1.0.5")
+    assert status == "available"
+    assert tag == "1.0.9"
+    assert url == "http://x/Reforja.AppImage"
+    # Mesma versao (com/sem 'v') => current
+    assert parse_release({"tag_name": "v1.0.5", "assets": []}, "1.0.5")[0] == "current"
+
+
+def test_running_appimage_env(monkeypatch) -> None:
+    monkeypatch.delenv("APPIMAGE", raising=False)
+    assert running_appimage() is None
+    monkeypatch.setenv("APPIMAGE", "/home/u/Reforja-x86_64.AppImage")
+    assert running_appimage() == Path("/home/u/Reforja-x86_64.AppImage")
+
+
+class _FakeSignal:
+    def connect(self, *_args, **_kwargs) -> None:
+        pass
+
+
+def test_offer_update_inicia_download_quando_em_appimage(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    started: dict[str, object] = {}
+
+    class _FakeDownload:
+        def __init__(self, url, target) -> None:
+            started["url"] = url
+            started["target"] = target
+
+        finished = _FakeSignal()
+
+        def start(self) -> None:
+            started["started"] = True
+
+    import reforja.gui.main_window as mw
+
+    monkeypatch.setattr(mw, "DownloadWorker", _FakeDownload)
+    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.Yes))
+    monkeypatch.setattr(mw, "running_appimage", lambda: Path("/home/u/Reforja.AppImage"))
+
+    window._offer_update("1.0.9", "http://x/Reforja.AppImage")
+
+    assert started.get("started") is True
+    assert started["target"] == Path("/home/u/Reforja.AppImage")
+    assert window._updating is True
+
+
+def test_offer_update_sem_appimage_abre_pagina(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    import reforja.gui.main_window as mw
+
+    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.Yes))
+    monkeypatch.setattr(mw.QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(mw, "running_appimage", lambda: None)
+    opened: list[object] = []
+    monkeypatch.setattr(mw.QDesktopServices, "openUrl", staticmethod(lambda url: opened.append(url)))
+
+    window._offer_update("1.0.9", "http://x/page")
+
+    assert opened, "deveria abrir a pagina de download como fallback"
+    assert window._updating is False

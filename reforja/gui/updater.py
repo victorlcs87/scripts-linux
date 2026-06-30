@@ -1,15 +1,25 @@
-"""Checagem de atualizacao via GitHub Releases.
+"""Atualizacao do app via GitHub Releases.
 
-Consulta o release mais recente do repositorio e, se a tag for diferente da
-versao embutida, sinaliza que ha atualizacao. A checagem roda numa thread e
-falha em silencio (sem rede, sem release, etc.).
+Duas frentes:
+- checagem automatica no startup (UpdateChecker) — apenas avisa;
+- checagem/atualizacao manual sob demanda (CheckWorker + DownloadWorker), que
+  baixa o novo AppImage e substitui o que esta em execucao (in-place).
+
+Quando o app roda como AppImage, o arquivo em execucao esta em $APPIMAGE; e esse
+arquivo que substituimos, de forma atomica (os.replace no mesmo diretorio), para
+nao corromper o mount FUSE em uso. A nova versao vale no proximo lancamento.
+
+Tudo falha em silencio/com mensagem (sem rede, sem release, repo privado, etc.).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import stat
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
@@ -17,10 +27,47 @@ from ._version import __version__
 
 _API_LATEST = "https://api.github.com/repos/victorlcs87/scripts-linux/releases/latest"
 _RELEASES_PAGE = "https://github.com/victorlcs87/scripts-linux/releases/latest"
+_TIMEOUT = 8
+
+
+def _norm(version: str) -> str:
+    return version.lstrip("v").strip()
+
+
+def parse_release(data: dict, current: str) -> tuple[str, str, str]:
+    """Interpreta o JSON de releases/latest.
+
+    Retorna (status, tag, appimage_url) com status em {"available", "current"}.
+    tag e a versao remota (sem 'v'); url e o asset .AppImage (ou a pagina de
+    releases como fallback).
+    """
+    tag = _norm(str(data.get("tag_name", "")))
+    url = _RELEASES_PAGE
+    for asset in data.get("assets", []):
+        if str(asset.get("name", "")).endswith(".AppImage"):
+            url = asset.get("browser_download_url", url)
+            break
+    if not tag or tag == _norm(current):
+        return "current", tag or _norm(current), url
+    return "available", tag, url
+
+
+def running_appimage() -> Path | None:
+    """Caminho do AppImage em execucao (variavel APPIMAGE), ou None fora de AppImage."""
+    value = os.environ.get("APPIMAGE")
+    return Path(value) if value else None
+
+
+def _fetch_latest() -> dict:
+    req = urllib.request.Request(_API_LATEST, headers={"Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (URL fixa, https)
+        return json.loads(resp.read().decode("utf-8"))
 
 
 class UpdateChecker(QThread):
-    updateAvailable = Signal(str, str)  # (tag, url do AppImage ou pagina)
+    """Checagem automatica no startup. Silenciosa; so emite se houver versao nova."""
+
+    updateAvailable = Signal(str, str)  # (tag, url)
 
     def __init__(self, current: str = __version__) -> None:
         super().__init__()
@@ -28,21 +75,64 @@ class UpdateChecker(QThread):
 
     def run(self) -> None:  # noqa: D401 (override QThread.run)
         if self._current.endswith("-dev"):
-            # Build de desenvolvimento: nao incomoda com checagem.
             return
         try:
-            req = urllib.request.Request(_API_LATEST, headers={"Accept": "application/vnd.github+json"})
-            with urllib.request.urlopen(req, timeout=6) as resp:  # noqa: S310 (URL fixa, https)
-                data = json.loads(resp.read().decode("utf-8"))
+            data = _fetch_latest()
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             return
-        tag = str(data.get("tag_name", "")).lstrip("v")
-        if not tag or tag == self._current.lstrip("v"):
+        status, tag, url = parse_release(data, self._current)
+        if status == "available":
+            self.updateAvailable.emit(tag, url)
+
+
+class CheckWorker(QThread):
+    """Checagem manual sob demanda. Sempre reporta um resultado."""
+
+    resultReady = Signal(str, str, str)  # (status, tag, url) — status: available|current|error
+
+    def __init__(self, current: str = __version__) -> None:
+        super().__init__()
+        self._current = current
+
+    def run(self) -> None:  # noqa: D401 (override QThread.run)
+        try:
+            data = _fetch_latest()
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            self.resultReady.emit("error", "", "")
             return
-        url = _RELEASES_PAGE
-        for asset in data.get("assets", []):
-            name = asset.get("name", "")
-            if name.endswith(".AppImage"):
-                url = asset.get("browser_download_url", url)
-                break
-        self.updateAvailable.emit(tag, url)
+        status, tag, url = parse_release(data, self._current)
+        self.resultReady.emit(status, tag, url)
+
+
+class DownloadWorker(QThread):
+    """Baixa o novo AppImage e substitui o arquivo alvo de forma atomica."""
+
+    finished = Signal(bool, str)  # (ok, message)
+
+    def __init__(self, url: str, target: Path) -> None:
+        super().__init__()
+        self._url = url
+        self._target = target
+
+    def run(self) -> None:  # noqa: D401 (override QThread.run)
+        target = self._target
+        tmp = target.with_name(target.name + ".new")
+        try:
+            req = urllib.request.Request(self._url, headers={"Accept": "application/octet-stream"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:  # noqa: S310
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            # Rename atomico no mesmo diretorio: a instancia em uso mantem o inode antigo.
+            os.replace(tmp, target)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.finished.emit(False, f"Falha ao baixar/instalar a atualizacao: {exc}")
+            return
+        self.finished.emit(True, str(target))

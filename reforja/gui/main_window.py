@@ -30,7 +30,7 @@ from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
 from .step_runner import StepWorker
 from .terminal import TerminalExecutor, TerminalWidget
-from .updater import UpdateChecker
+from .updater import CheckWorker, DownloadWorker, UpdateChecker, running_appimage
 
 # Aparencia dos estados de conformidade (compliance) na sidebar.
 _COMPLIANCE = {
@@ -101,20 +101,103 @@ class MainWindow(QMainWindow):
         self._terminal_executor = TerminalExecutor(self._terminal, on_activate=self._show_terminal)
         self._select_step(0)
 
+        self._updating = False
+        self._check_worker: CheckWorker | None = None
+        self._download_worker: DownloadWorker | None = None
+
         # Checagem de atualizacao em background (silenciosa em caso de falha).
         self._update_checker = UpdateChecker()
         self._update_checker.updateAvailable.connect(self._on_update_available)
         self._update_checker.start()
 
+    # --- atualizacao do app ------------------------------------------------------
     def _on_update_available(self, tag: str, url: str) -> None:
+        # Disparado pela checagem automatica do startup; oferece o update in-place.
         self._append(f"[info] Nova versao disponivel: {tag}")
+        self._offer_update(tag, url)
+
+    def _check_updates_manual(self) -> None:
+        if self._updating or self._check_worker is not None:
+            return
+        self._append("[info] Verificando atualizacoes...")
+        self._btn_update.setEnabled(False)
+        worker = CheckWorker()
+        worker.resultReady.connect(self._on_check_result)
+        worker.finished.connect(lambda: setattr(self, "_check_worker", None))
+        self._check_worker = worker
+        worker.start()
+
+    def _on_check_result(self, status: str, tag: str, url: str) -> None:
+        self._btn_update.setEnabled(True)
+        if status == "current":
+            self._append(f"[done] Voce ja esta na versao mais recente (v{tag}).")
+            QMessageBox.information(self, "Atualizacao", f"Voce ja esta na versao mais recente (v{tag}).")
+        elif status == "error":
+            self._append("[aviso] Nao foi possivel verificar atualizacoes (sem rede ou release indisponivel).")
+            QMessageBox.warning(
+                self,
+                "Atualizacao",
+                "Nao foi possivel verificar atualizacoes.\nVerifique a conexao ou se ha releases publicados.",
+            )
+        else:  # available
+            self._offer_update(tag, url)
+
+    def _offer_update(self, tag: str, url: str) -> None:
+        if self._updating:
+            return
         answer = QMessageBox.question(
             self,
             "Atualizacao disponivel",
-            f"Uma nova versao ({tag}) esta disponivel. Abrir a pagina de download?",
+            f"Uma nova versao (v{tag}) esta disponivel. Atualizar agora?",
         )
-        if answer == QMessageBox.StandardButton.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        target = running_appimage()
+        if target is None:
+            # Rodando do fonte (sem AppImage): a auto-atualizacao nao se aplica.
+            self._append("[aviso] Atualizacao automatica disponivel apenas no AppImage. Abrindo a pagina de download.")
+            QMessageBox.information(
+                self,
+                "Atualizacao",
+                "A atualizacao automatica so funciona no executavel (AppImage).\n"
+                "Abrindo a pagina de download para baixar manualmente.",
+            )
             QDesktopServices.openUrl(QUrl(url))
+            return
+        self._start_self_update(url, target, tag)
+
+    def _start_self_update(self, url: str, target: Path, tag: str) -> None:
+        self._updating = True
+        self._btn_update.setEnabled(False)
+        self._set_running(True)
+        self._append(f"[info] Baixando e instalando a versao v{tag}...")
+        self._progress.setRange(0, 0)  # modo "ocupado"
+        worker = DownloadWorker(url, target)
+        worker.finished.connect(lambda ok, msg, t=tag: self._on_update_finished(ok, msg, t))
+        self._download_worker = worker
+        worker.start()
+
+    def _on_update_finished(self, ok: bool, message: str, tag: str) -> None:
+        self._download_worker = None
+        self._updating = False
+        self._progress.setRange(0, 100)
+        self._progress.setValue(100 if ok else 0)
+        self._set_running(False)
+        self._btn_update.setEnabled(True)
+        if ok:
+            self._append(f"[done] Atualizado para v{tag}. Reabra o Reforja para concluir.")
+            QMessageBox.information(
+                self,
+                "Atualizacao concluida",
+                f"Reforja atualizado para a versao v{tag}.\nFeche e reabra o app para usar a nova versao.",
+            )
+        else:
+            self._append(f"[erro] {message}")
+            QMessageBox.critical(
+                self,
+                "Falha na atualizacao",
+                f"{message}\n\nVoce pode baixar manualmente em:\nhttps://github.com/victorlcs87/scripts-linux/releases/latest",
+            )
 
     # --- construcao da UI --------------------------------------------------------
     def _build_ui(self) -> None:
@@ -213,6 +296,9 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self._btn_console)
         bottom.addWidget(self._btn_terminal)
         bottom.addStretch(1)
+        self._btn_update = QPushButton("Verificar atualizacoes")
+        self._btn_update.clicked.connect(self._check_updates_manual)
+        bottom.addWidget(self._btn_update)
         self._progress = QProgressBar()
         self._progress.setObjectName("progress")
         self._progress.setTextVisible(True)
@@ -276,6 +362,7 @@ class MainWindow(QMainWindow):
             self._btn_status_all,
             self._btn_check_all,
             self._btn_check_none,
+            self._btn_update,
         ):
             btn.setEnabled(not running)
         if not running:
