@@ -5,6 +5,7 @@ __pycache__/
 .coverage
 htmlcov/
 *.pyc
+*.egg-info/
 LOGS/
 fstab-backups/
 hardware_info_*.txt
