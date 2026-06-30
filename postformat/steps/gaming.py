@@ -330,6 +330,13 @@ class AppsStep(Step):
             "desktop_paths": (),
             "kind": "system",
         },
+        "Solaar": {
+            "system_aliases": ("solaar",),
+            "flatpak_id": "io.github.pwr_solaar.solaar",
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "system",
+        },
         "Hydra Launcher": {
             "system_aliases": (),
             "flatpak_id": None,
@@ -361,6 +368,12 @@ class AppsStep(Step):
             )
         else:
             self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
+        if self._detect_install_source("Solaar"):
+            self.ctx.logger.write(
+                f"{Color.GREEN}OK:{Color.RESET} Solaar ja detectado via {self._detect_install_source('Solaar')}"
+            )
+        else:
+            self._install_solaar()
         self._install_hydra()
         for name, definition in self.apps.items():
             if definition["kind"] != "flatpak":
@@ -472,6 +485,23 @@ class AppsStep(Step):
             return
         # Fedora sem RPM Fusion, imutaveis ou repos sem Steam: caimos no Flatpak.
         install_flatpak("com.valvesoftware.Steam", self.ctx.runner)
+
+    def _install_solaar(self) -> None:
+        header(self, "Solaar", "Gerenciador de dispositivos Logitech")
+        if install_system_or_aur("solaar", "solaar", self.ctx.runner):
+            return
+        install_flatpak("io.github.pwr_solaar.solaar", self.ctx.runner)
+        # Em dry-run nada e instalado de fato; nao acionar o fallback.
+        if self.ctx.runner.dry_run or flatpak_installed("io.github.pwr_solaar.solaar"):
+            return
+        self.ctx.logger.write(
+            f"{Color.YELLOW}AVISO:{Color.RESET} Solaar indisponivel nos repositorios; "
+            "instalando Piper como alternativa."
+        )
+        header(self, "Piper", "Alternativa ao Solaar para mouses gaming")
+        if install_system_or_aur("piper", "piper", self.ctx.runner):
+            return
+        install_flatpak("org.freedesktop.Piper", self.ctx.runner)
 
     def _install_system_or_flatpak(self, system_pkg: str, aur_pkg: str | None, flatpak_id: str) -> None:
         if install_system_or_aur(system_pkg, aur_pkg, self.ctx.runner):
