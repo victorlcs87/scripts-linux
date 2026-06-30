@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
 from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
 from reforja.gui.updater import parse_release, running_appimage  # noqa: E402
-from reforja.steps import ALL_STEPS  # noqa: E402
+from reforja.steps import ALL_GROUPS, ALL_STEPS  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -60,26 +60,50 @@ def test_format_line_html_colore_badges() -> None:
     assert "&lt;tag&gt;" in _format_line_html("[info] <tag>")
 
 
-def test_batch_executa_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> None:
+def _check(window, step_id: str) -> None:
+    window._item_for_step(step_id).setCheckState(Qt.CheckState.Checked)
+
+
+def test_acao_roda_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> None:
     window = MainWindow(tmp_path)
     # Evita iniciar threads de verdade: so queremos inspecionar a fila montada.
     monkeypatch.setattr(window, "_next_in_queue", lambda: None)
 
-    window._list.item(2).setCheckState(Qt.CheckState.Checked)
-    window._list.item(4).setCheckState(Qt.CheckState.Checked)
-    assert [s.id for s in window._checked_steps()] == [ALL_STEPS[2].id, ALL_STEPS[4].id]
+    _check(window, "03")
+    _check(window, "10")
+    assert sorted(s.id for s in window._checked_steps()) == ["03", "10"]
 
-    window._run_batch("dry-run")
-    assert [s.id for s, _ in window._queue] == [ALL_STEPS[2].id, ALL_STEPS[4].id]
+    window._run_action("dry-run")
+    assert sorted(s.id for s, _ in window._queue) == ["03", "10"]
     assert all(action == "dry-run" for _s, action in window._queue)
 
 
-def test_batch_sem_marcacao_roda_todas(app, tmp_path: Path, monkeypatch) -> None:
+def test_acao_sem_marcacao_usa_destacada(app, tmp_path: Path, monkeypatch) -> None:
     window = MainWindow(tmp_path)
     monkeypatch.setattr(window, "_next_in_queue", lambda: None)
 
-    window._run_batch("status")
-    assert len(window._queue) == len(ALL_STEPS)
+    window._list.setCurrentItem(window._item_for_step("00"))
+    window._run_action("status")
+    assert [s.id for s, _ in window._queue] == ["00"]
+
+
+def test_clicar_cabecalho_marca_e_desmarca_grupo(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    header = next(
+        window._list.item(i) for i in range(window._list.count()) if window._list.item(i).text() == "APLICATIVOS"
+    )
+    window._on_item_clicked(header)
+    assert sorted(s.id for s in window._checked_steps()) == ["02", "03", "04", "10", "15"]
+    window._on_item_clicked(header)
+    assert window._checked_steps() == []
+
+
+def test_sidebar_tem_cabecalhos_e_todas_as_etapas(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    steps = [step.id for _item, step in window._step_items()]
+    assert sorted(steps) == sorted(s.id for s in ALL_STEPS)
+    # total = etapas + um cabecalho por grupo
+    assert window._list.count() == len(ALL_STEPS) + len(ALL_GROUPS)
 
 
 def test_marcar_todas_e_limpar(app, tmp_path: Path) -> None:

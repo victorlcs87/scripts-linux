@@ -1159,7 +1159,8 @@ def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None
 
 def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    choices = iter([0, 6])
+    # opcao 0 = Aplicar tudo; opcao 4 = Sair (menu consolidado de 5 itens)
+    choices = iter([0, 4])
     called: list[str] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
@@ -1169,6 +1170,42 @@ def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> Non
     main_menu(logger)
 
     assert called == ["apply"]
+
+
+def test_main_menu_opens_category(tmp_path: Path, monkeypatch) -> None:
+    from reforja.cli import ALL_GROUPS
+
+    logger = Logger(tmp_path, "test")
+    # opcao 3 = Categorias...; depois opcao 4 = Sair
+    choices = iter([3, 4])
+    opened: list[str] = []
+
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("reforja.cli.choose_group", lambda _logger: ALL_GROUPS[1])
+    monkeypatch.setattr("reforja.cli.group_menu", lambda group, _logger: opened.append(group.id))
+
+    main_menu(logger)
+
+    assert opened == ["apps"]
+
+
+def test_group_menu_runs_action_on_children(tmp_path: Path, monkeypatch) -> None:
+    from reforja.cli import ALL_GROUPS, group_menu
+
+    logger = Logger(tmp_path, "test")
+    group = next(g for g in ALL_GROUPS if g.id == "apps")
+    # opcao 1 = Dry-run do grupo; opcao 6 = Voltar
+    choices = iter([1, 6])
+    ran: list[tuple[int, str]] = []
+
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger: ran.append((len(steps), action)))
+
+    group_menu(group, logger)
+
+    assert ran == [(len(group.children), "dry-run")]
 
 
 def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:

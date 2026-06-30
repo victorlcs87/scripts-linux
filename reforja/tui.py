@@ -65,6 +65,109 @@ def choose_option(
     return selected
 
 
+def choose_multiple(
+    *,
+    title: str,
+    logger: Logger,
+    prompt: str,
+    options: Sequence[MenuOption],
+    footer: str | None = None,
+    detail: str | None = None,
+    prompt_label: str = "Selecione",
+) -> list[int]:
+    """Selecao multipla (checkbox). Retorna os indices escolhidos. Vazio = nenhum."""
+    if not options:
+        return []
+    logger.log_only(divider(char="~", tone=Color.ACCENT))
+    logger.log_only(f"{badge('waiting', Color.WAITING)} {prompt}")
+    if detail:
+        logger.log_only(paint(detail, Color.MUTED))
+    if _supports_interactive_tui():
+        selected = _choose_multiple_tty(
+            title=title, logger=logger, prompt=prompt, options=options, footer=footer, detail=detail
+        )
+    else:
+        selected = _choose_multiple_fallback(
+            title=title,
+            logger=logger,
+            prompt=prompt,
+            options=options,
+            footer=footer,
+            detail=detail,
+            prompt_label=prompt_label,
+        )
+    logger.log_only(f"{badge('choice', Color.CHOICE)} {len(selected)} selecionada(s)")
+    return selected
+
+
+def _choose_multiple_tty(
+    *, title: str, logger: Logger, prompt: str, options: Sequence[MenuOption], footer: str | None, detail: str | None
+) -> list[int]:
+    inquirer, get_style = load_tui_deps()
+    print(_build_prompt_message(title, logger, footer=footer, detail=detail))
+    style = get_style(
+        {
+            "questionmark": "#5fd7ff bold",
+            "question": "#ff8fd8 bold",
+            "pointer": "#7dff7d bold",
+            "checkbox": "#7dff7d",
+            "instruction": "#87afff",
+            "answer": "#7dff7d bold",
+            "separator": "#5f87ff",
+        },
+        style_override=False,
+    )
+    try:
+        selected = inquirer.checkbox(
+            message=prompt,
+            choices=[
+                {"name": f"{option.display_key or option.key}. {option.label}", "value": index, "enabled": True}
+                for index, option in enumerate(options)
+            ],
+            instruction="espaco marca/desmarca | Enter confirma",
+            style=style,
+            cycle=True,
+        ).execute()
+    except (KeyboardInterrupt, EOFError) as exc:
+        raise PromptInterruptedError(f"selecao interrompida pelo usuario: {title}") from exc
+    return [int(value) for value in selected]
+
+
+def _choose_multiple_fallback(
+    *,
+    title: str,
+    logger: Logger,
+    prompt: str,
+    options: Sequence[MenuOption],
+    footer: str | None,
+    detail: str | None,
+    prompt_label: str,
+) -> list[int]:
+    print(render_menu(title, logger, options, footer=footer))
+    while True:
+        answer = prompt_user(
+            f"{prompt} (numeros separados por virgula; vazio = todas)",
+            logger,
+            detail=detail,
+            prompt_label=prompt_label,
+            allow_empty=True,
+        ).strip()
+        if not answer:
+            return list(range(len(options)))
+        keys = [piece.strip() for piece in answer.split(",") if piece.strip()]
+        indices: list[int] = []
+        valid = True
+        for key in keys:
+            match = next((index for index, option in enumerate(options) if option.key == key), None)
+            if match is None:
+                valid = False
+                break
+            indices.append(match)
+        if valid and indices:
+            return sorted(set(indices))
+        print(paint("Selecao invalida", Color.ERROR))
+
+
 def render_menu(title: str, logger: Logger, options: Sequence[MenuOption], *, footer: str | None = None) -> str:
     body = _menu_frame(title, logger, footer=footer)
     body.extend(_render_menu_lines(options))

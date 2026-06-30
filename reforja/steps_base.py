@@ -28,6 +28,18 @@ class StepContext:
     runner: Runner
 
 
+@dataclass(frozen=True)
+class StepGroup:
+    """Categoria que agrupa etapas para navegacao (CLI/GUI).
+
+    E uma camada de apresentacao: nao altera as classes de Step nem os IDs.
+    """
+
+    id: str
+    title: str
+    children: tuple[type[Step], ...]
+
+
 class Step:
     id = "00"
     title = "Etapa"

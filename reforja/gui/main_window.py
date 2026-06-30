@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import StepRunResult
-from ..steps import ALL_STEPS
+from ..steps import ALL_GROUPS
 from .askpass import resolve_askpass
 from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
@@ -60,6 +60,11 @@ _BADGE_COLORS = {
 }
 
 _BADGE_RE = re.compile(r"^\[(?P<name>[\w-]+)\]")
+
+# Roles dos itens da sidebar: a etapa (classe Step) ou None para cabecalhos de
+# grupo; e a string de compliance para colorir o glyph.
+_ROLE_STEP = Qt.ItemDataRole.UserRole
+_ROLE_COMPLIANCE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 def _format_line_html(line: str) -> str:
@@ -221,13 +226,22 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(title)
         self._list = QListWidget()
         self._list.setObjectName("stepList")
-        for _step in ALL_STEPS:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, "desconhecido")
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Unchecked)
-            self._list.addItem(item)
+        # Itens agrupados por categoria: cabecalho (sem checkbox) + etapas-filhas.
+        for group in ALL_GROUPS:
+            header = QListWidgetItem(group.title.upper())
+            header.setData(_ROLE_STEP, None)
+            header.setFlags(Qt.ItemFlag.ItemIsEnabled)  # nao selecionavel/checkavel
+            header.setForeground(QColor("#8a8f98"))
+            self._list.addItem(header)
+            for step in group.children:
+                item = QListWidgetItem()
+                item.setData(_ROLE_STEP, step)
+                item.setData(_ROLE_COMPLIANCE, "desconhecido")
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                self._list.addItem(item)
         self._list.currentRowChanged.connect(self._select_step)
+        self._list.itemClicked.connect(self._on_item_clicked)
         side_layout.addWidget(self._list, 1)
 
         # Marcar/limpar selecao
@@ -240,19 +254,10 @@ class MainWindow(QMainWindow):
         select_row.addWidget(self._btn_check_none)
         side_layout.addLayout(select_row)
 
-        # Acoes em lote: rodam nas etapas marcadas (ou em todas se nenhuma marcada).
-        caption = QLabel("Lote: etapas marcadas (ou todas se nenhuma)")
+        caption = QLabel("Acoes agem nas etapas marcadas (ou na destacada). Clique no grupo para marcar a categoria.")
         caption.setObjectName("statusLine")
         caption.setWordWrap(True)
         side_layout.addWidget(caption)
-        self._btn_apply_all = QPushButton("Aplicar")
-        self._btn_dry_all = QPushButton("Dry-run")
-        self._btn_status_all = QPushButton("Status")
-        self._btn_apply_all.clicked.connect(lambda: self._run_batch("apply"))
-        self._btn_dry_all.clicked.connect(lambda: self._run_batch("dry-run"))
-        self._btn_status_all.clicked.connect(lambda: self._run_batch("status"))
-        for btn in (self._btn_status_all, self._btn_dry_all, self._btn_apply_all):
-            side_layout.addWidget(btn)
         sidebar.setFixedWidth(280)
         root.addWidget(sidebar)
 
@@ -272,10 +277,10 @@ class MainWindow(QMainWindow):
         self._btn_dry = QPushButton("Dry-run")
         self._btn_status = QPushButton("Status")
         self._btn_undo = QPushButton("Undo")
-        self._btn_apply.clicked.connect(lambda: self._run_single("apply"))
-        self._btn_dry.clicked.connect(lambda: self._run_single("dry-run"))
-        self._btn_status.clicked.connect(lambda: self._run_single("status"))
-        self._btn_undo.clicked.connect(lambda: self._run_single("undo"))
+        self._btn_apply.clicked.connect(lambda: self._run_action("apply"))
+        self._btn_dry.clicked.connect(lambda: self._run_action("dry-run"))
+        self._btn_status.clicked.connect(lambda: self._run_action("status"))
+        self._btn_undo.clicked.connect(lambda: self._run_action("undo"))
         for btn in (self._btn_apply, self._btn_dry, self._btn_status, self._btn_undo):
             actions.addWidget(btn)
         actions.addStretch(1)
@@ -321,39 +326,63 @@ class MainWindow(QMainWindow):
         self._refresh_step_items()
 
     # --- estado dos steps --------------------------------------------------------
-    def _refresh_step_items(self) -> None:
-        for row, step in enumerate(ALL_STEPS):
+    def _step_items(self):
+        """Itera (item, step) das etapas, ignorando cabecalhos de grupo."""
+        for row in range(self._list.count()):
             item = self._list.item(row)
-            compliance = item.data(Qt.ItemDataRole.UserRole) or "desconhecido"
+            step = item.data(_ROLE_STEP)
+            if step is not None:
+                yield item, step
+
+    def _item_for_step(self, step_id: str):
+        for item, step in self._step_items():
+            if step.id == step_id:
+                return item
+        return None
+
+    def _refresh_step_items(self) -> None:
+        for item, step in self._step_items():
+            compliance = item.data(_ROLE_COMPLIANCE) or "desconhecido"
             glyph, color = _COMPLIANCE.get(compliance, _COMPLIANCE["desconhecido"])
             item.setText(f"{glyph}  {step.id}. {step.title}")
             item.setForeground(QColor(color))
 
     def _select_step(self, row: int) -> None:
-        if row < 0 or row >= len(ALL_STEPS):
+        if row < 0:
             return
-        step = ALL_STEPS[row]
+        step = self._list.item(row).data(_ROLE_STEP)
+        if step is None:  # cabecalho de grupo
+            return
         self._step_title.setText(f"{step.id}. {step.title}")
         # Undo so e oferecido quando o step de fato implementa o metodo.
         self._btn_undo.setEnabled("undo" in step.__dict__)
 
     def _current_step(self) -> type | None:
-        row = self._list.currentRow()
-        if row < 0:
-            return None
-        return ALL_STEPS[row]
+        item = self._list.currentItem()
+        return item.data(_ROLE_STEP) if item is not None else None
 
     def _checked_steps(self) -> list[type]:
-        return [
-            ALL_STEPS[row]
-            for row in range(self._list.count())
-            if self._list.item(row).checkState() == Qt.CheckState.Checked
-        ]
+        return [step for item, step in self._step_items() if item.checkState() == Qt.CheckState.Checked]
 
     def _set_all_checked(self, checked: bool) -> None:
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        for row in range(self._list.count()):
-            self._list.item(row).setCheckState(state)
+        for item, _step in self._step_items():
+            item.setCheckState(state)
+
+    def _on_item_clicked(self, item) -> None:
+        # Clique num cabecalho de grupo marca/desmarca todas as filhas do grupo.
+        if item.data(_ROLE_STEP) is not None:
+            return
+        group_title = item.text()
+        group = next((g for g in ALL_GROUPS if g.title.upper() == group_title), None)
+        if group is None:
+            return
+        child_ids = {child.id for child in group.children}
+        members = [it for it, st in self._step_items() if st.id in child_ids]
+        any_unchecked = any(it.checkState() != Qt.CheckState.Checked for it in members)
+        state = Qt.CheckState.Checked if any_unchecked else Qt.CheckState.Unchecked
+        for it in members:
+            it.setCheckState(state)
 
     # --- execucao ----------------------------------------------------------------
     def _set_running(self, running: bool) -> None:
@@ -362,9 +391,6 @@ class MainWindow(QMainWindow):
             self._btn_dry,
             self._btn_status,
             self._btn_undo,
-            self._btn_apply_all,
-            self._btn_dry_all,
-            self._btn_status_all,
             self._btn_check_all,
             self._btn_check_none,
             self._btn_update,
@@ -373,24 +399,16 @@ class MainWindow(QMainWindow):
         if not running:
             self._select_step(self._list.currentRow())
 
-    def _run_single(self, action: str) -> None:
-        if self._worker is not None:
-            return
-        step_cls = self._current_step()
-        if step_cls is None:
-            return
-        self._queue = []
-        self._queue_total = 1
-        self._results = []
-        self._queue_action = action
-        self._append(f"==== {action.upper()} -> {step_cls.id}. {step_cls.title} ====")
-        self._progress.setValue(0)
-        self._start_worker(step_cls, action)
+    def _target_steps(self) -> list[type]:
+        """Alvo das acoes: as etapas marcadas; se nenhuma, a etapa destacada."""
+        checked = self._checked_steps()
+        if checked:
+            return checked
+        current = self._current_step()
+        return [current] if current is not None else []
 
-    def _run_batch(self, action: str) -> None:
-        # Roda nas etapas marcadas; se nenhuma estiver marcada, roda em todas.
-        steps = self._checked_steps() or list(ALL_STEPS)
-        self._run_steps(action, steps)
+    def _run_action(self, action: str) -> None:
+        self._run_steps(action, self._target_steps())
 
     def _run_steps(self, action: str, steps: list[type]) -> None:
         if self._worker is not None or not steps:
@@ -399,7 +417,10 @@ class MainWindow(QMainWindow):
         self._queue_total = len(self._queue)
         self._queue_action = action
         self._results = []
-        self._append(f"==== {action.upper()} EM LOTE ({self._queue_total} etapas) ====")
+        if len(steps) == 1:
+            self._append(f"==== {action.upper()} -> {steps[0].id}. {steps[0].title} ====")
+        else:
+            self._append(f"==== {action.upper()} EM LOTE ({self._queue_total} etapas) ====")
         self._progress.setValue(0)
         self._next_in_queue()
 
@@ -431,10 +452,9 @@ class MainWindow(QMainWindow):
 
     def _on_result(self, result: StepRunResult) -> None:
         self._results.append(result)
-        for row, step in enumerate(ALL_STEPS):
-            if step.id == result.step_id:
-                self._list.item(row).setData(Qt.ItemDataRole.UserRole, result.compliance)
-                break
+        item = self._item_for_step(result.step_id)
+        if item is not None:
+            item.setData(_ROLE_COMPLIANCE, result.compliance)
         self._refresh_step_items()
         self._append(f"[{result.status}] {result.title}: {result.message}")
 

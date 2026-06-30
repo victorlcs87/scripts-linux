@@ -1,6 +1,6 @@
-"""Pacote de etapas. Re-exporta as classes e ALL_STEPS para preservar a API."""
+"""Pacote de etapas. Re-exporta as classes, ALL_STEPS e ALL_GROUPS."""
 
-from ..steps_base import Step
+from ..steps_base import Step, StepGroup
 from .appimage import UpdateAppImagesStep
 from .browser import BrowserStep, WebAppsStep
 from .dev import AntigravityStep, GitStep
@@ -29,6 +29,18 @@ ALL_STEPS: tuple[type[Step], ...] = (
     UpdateAppImagesStep,
 )
 
+# Camada de categorias para navegacao (CLI/GUI). Orthogonal a ALL_STEPS, que
+# permanece a lista canonica sequencial (IDs 00..15 inalterados).
+ALL_GROUPS: tuple[StepGroup, ...] = (
+    StepGroup("sistema", "Sistema base", (ShellyStep, UpdateSystemStep)),
+    StepGroup("apps", "Aplicativos", (LinuxToysStep, BrowserStep, WebAppsStep, AppsStep, UpdateAppImagesStep)),
+    StepGroup("dev", "Dev", (GitStep, AntigravityStep)),
+    StepGroup("jogos", "Jogos e streaming", (NvidiaSteamStep, SunshineStep)),
+    StepGroup("kde", "Desktop / KDE", (GesturesStep, NumLockStep)),
+    StepGroup("armazenamento", "Armazenamento", (RcloneStep, FstabStep)),
+    StepGroup("info", "Hardware / Info", (HardwareStep,)),
+)
+
 __all__ = [
     "ShellyStep",
     "UpdateSystemStep",
@@ -47,4 +59,6 @@ __all__ = [
     "HardwareStep",
     "UpdateAppImagesStep",
     "ALL_STEPS",
+    "ALL_GROUPS",
+    "StepGroup",
 ]
