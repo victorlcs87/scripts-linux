@@ -22,6 +22,10 @@ class UpdateAppImagesStep(Step):
     title = "Atualizar AppImages"
 
     # Cada entrada: nome exibivel, caminho relativo ao home, função que retorna (url_download, tag_versao)
+    # Flags opcionais por entrada:
+    #   installable: instala (baixa + cria atalho) quando o AppImage nao esta presente.
+    #   self_update: o AppImage pode ser o proprio app rodando; atualiza com seguranca
+    #                (baixa para .new e faz mv atomico, sem encerrar/relancar o processo).
     _APPIMAGES: list[dict] = [
         {
             "name": "Hydra Launcher",
@@ -38,6 +42,20 @@ class UpdateAppImagesStep(Step):
             "wm_class": "hydralauncher",
             "categories": ("Game",),
         },
+        {
+            "name": "Reforja",
+            "path": Path("AppImages/Reforja-latest.AppImage"),
+            "github_repo": "victorlcs87/scripts-linux",
+            "asset_pattern": r"\.AppImage$",
+            "desktop_path": Path(".local/share/applications/reforja.desktop"),
+            "alt_desktop_paths": (),
+            "icon_asset": "assets/reforja.png",
+            "icon_target": Path(".local/share/icons/reforja.png"),
+            "wm_class": "reforja",
+            "categories": ("System", "Settings", "Utility"),
+            "installable": True,
+            "self_update": True,
+        },
     ]
 
     def apply(self) -> None:
@@ -48,6 +66,14 @@ class UpdateAppImagesStep(Step):
         for app in self._APPIMAGES:
             appimage_path = self._resolve_and_migrate(app)
             if appimage_path is None:
+                if app.get("installable"):
+                    result = self._install_fresh(app)
+                    if result == "updated":
+                        updated.append(app["name"])
+                    elif result == "current":
+                        # Instalacao tentada mas o download nao concluiu.
+                        missing.append(app["name"])
+                    continue
                 self.ctx.logger.write(
                     f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado, pulando."
                 )
@@ -97,13 +123,22 @@ class UpdateAppImagesStep(Step):
         )
 
         # Reconcilia o atalho canonico apontando para o caminho padrao.
+        self._install_launcher(app, canonical)
+
+        # Em dry-run o arquivo nao foi realmente movido; retorna o canonico mesmo assim
+        # para que o restante do fluxo simule a atualizacao.
+        return canonical
+
+    def _install_launcher(self, app: dict, appimage_path: Path) -> None:
+        """Cria o atalho .desktop + icone do AppImage e remove atalhos nao-canonicos."""
+        name = app["name"]
         icon_source = self.ctx.root / app["icon_asset"]
         icon_target = self.ctx.user.home / app["icon_target"]
         desktop_file = self.ctx.user.home / app["desktop_path"]
         copy_asset(icon_source, icon_target, self.ctx.runner)
         entry = DesktopEntry(
             name=name,
-            exec_line=f"{canonical} %U",
+            exec_line=f"{appimage_path} %U",
             icon=str(icon_target),
             categories=tuple(app["categories"]),
             startup_wm_class=app["wm_class"],
@@ -121,9 +156,24 @@ class UpdateAppImagesStep(Step):
                 alt.unlink(missing_ok=True)
                 self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Atalho nao-canonico removido: {alt}")
 
-        # Em dry-run o arquivo nao foi realmente movido; retorna o canonico mesmo assim
-        # para que o restante do fluxo simule a atualizacao.
-        return canonical
+    def _install_fresh(self, app: dict) -> str | None:
+        """Instala um AppImage ausente (quando installable): baixa a versao mais recente,
+        cria o atalho/icone. Retorna o status de _update_one ou None se nao instalavel."""
+        if not app.get("installable"):
+            return None
+        name = app["name"]
+        canonical = self.ctx.user.home / app["path"]
+        self.ctx.logger.write(f"{badge(name.lower().replace(' ', '-'), Color.INFO)} {name}: nao instalado; instalando.")
+        if self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}[dry-run]{Color.RESET} criaria {canonical.parent} e instalaria {name}"
+            )
+        else:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+        result = self._update_one(app, canonical)
+        if result == "updated":
+            self._install_launcher(app, canonical)
+        return result
 
     def _discover_appimage(self, app: dict) -> Path | None:
         """Procura um AppImage existente referenciado pelos atalhos .desktop conhecidos."""
@@ -208,10 +258,15 @@ class UpdateAppImagesStep(Step):
         else:
             self.ctx.logger.write(f"Baixando {name} versao {latest_tag} (sem versao registrada localmente)")
 
-        was_running = self._kill_if_running(appimage_path, name)
+        # Auto-atualizacao: o AppImage pode ser o proprio app rodando. Nao encerramos o
+        # processo e baixamos para um arquivo .new que substitui o original via mv atomico
+        # (rename cria novo inode; a instancia em execucao mantem o inode antigo ate sair).
+        self_update = bool(app.get("self_update"))
+        download_path = appimage_path.with_name(appimage_path.name + ".new") if self_update else appimage_path
+        was_running = False if self_update else self._kill_if_running(appimage_path, name)
 
         dl = self.ctx.runner.run(
-            ["curl", "-L", url, "-o", str(appimage_path)],
+            ["curl", "-L", url, "-o", str(download_path)],
             check=False,
             action=f"Baixando {name} {latest_tag}",
         )
@@ -223,7 +278,7 @@ class UpdateAppImagesStep(Step):
                 self._relaunch(appimage_path, name)
             return "current"
         chmod_result = self.ctx.runner.run(
-            ["chmod", "+x", str(appimage_path)],
+            ["chmod", "+x", str(download_path)],
             check=False,
             action=f"Tornando {name} executavel",
             show_progress=False,
@@ -236,6 +291,18 @@ class UpdateAppImagesStep(Step):
             if was_running:
                 self._relaunch(appimage_path, name)
             return "current"
+        if self_update:
+            mv_result = self.ctx.runner.run(
+                ["mv", "-f", str(download_path), str(appimage_path)],
+                check=False,
+                action=f"Substituindo {name} pelo novo AppImage",
+                show_progress=False,
+            )
+            if mv_result is not None and mv_result.returncode != 0:
+                self.ctx.logger.write(
+                    f"{Color.RED}ERRO:{Color.RESET} Falha ao instalar o novo {name}. Versao nao registrada."
+                )
+                return "current"
         if not self.ctx.runner.dry_run:
             version_file.write_text(latest_tag + "\n", encoding="utf-8")
         else:
@@ -243,7 +310,11 @@ class UpdateAppImagesStep(Step):
                 f"{Color.YELLOW}[dry-run]{Color.RESET} gravaria versao {latest_tag} em {version_file}"
             )
         self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} atualizado para {latest_tag}.")
-        if was_running:
+        if self_update:
+            self.ctx.logger.write(
+                f"{badge('info', Color.INFO)} A nova versao de {name} sera usada no proximo lancamento."
+            )
+        elif was_running:
             self._relaunch(appimage_path, name)
         return "updated"
 

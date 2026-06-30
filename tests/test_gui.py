@@ -12,10 +12,12 @@ import pytest
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
-from reforja.gui.main_window import _format_line_html  # noqa: E402
+from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
+from reforja.steps import ALL_STEPS  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -53,3 +55,33 @@ def test_format_line_html_colore_badges() -> None:
     assert "color:#5fe1ff" in _format_line_html("$ pacman -Syu")
     # Escapa HTML do conteudo
     assert "&lt;tag&gt;" in _format_line_html("[info] <tag>")
+
+
+def test_batch_executa_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    # Evita iniciar threads de verdade: so queremos inspecionar a fila montada.
+    monkeypatch.setattr(window, "_next_in_queue", lambda: None)
+
+    window._list.item(2).setCheckState(Qt.CheckState.Checked)
+    window._list.item(4).setCheckState(Qt.CheckState.Checked)
+    assert [s.id for s in window._checked_steps()] == [ALL_STEPS[2].id, ALL_STEPS[4].id]
+
+    window._run_batch("dry-run")
+    assert [s.id for s, _ in window._queue] == [ALL_STEPS[2].id, ALL_STEPS[4].id]
+    assert all(action == "dry-run" for _s, action in window._queue)
+
+
+def test_batch_sem_marcacao_roda_todas(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window, "_next_in_queue", lambda: None)
+
+    window._run_batch("status")
+    assert len(window._queue) == len(ALL_STEPS)
+
+
+def test_marcar_todas_e_limpar(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    window._set_all_checked(True)
+    assert len(window._checked_steps()) == len(ALL_STEPS)
+    window._set_all_checked(False)
+    assert window._checked_steps() == []

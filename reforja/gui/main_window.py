@@ -136,17 +136,33 @@ class MainWindow(QMainWindow):
         for _step in ALL_STEPS:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, "desconhecido")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
             self._list.addItem(item)
         self._list.currentRowChanged.connect(self._select_step)
         side_layout.addWidget(self._list, 1)
 
-        # Acoes globais
-        self._btn_apply_all = QPushButton("Aplicar tudo")
-        self._btn_dry_all = QPushButton("Dry-run tudo")
-        self._btn_status_all = QPushButton("Status geral")
-        self._btn_apply_all.clicked.connect(lambda: self._run_all("apply"))
-        self._btn_dry_all.clicked.connect(lambda: self._run_all("dry-run"))
-        self._btn_status_all.clicked.connect(lambda: self._run_all("status"))
+        # Marcar/limpar selecao
+        select_row = QHBoxLayout()
+        self._btn_check_all = QPushButton("Marcar todas")
+        self._btn_check_none = QPushButton("Limpar")
+        self._btn_check_all.clicked.connect(lambda: self._set_all_checked(True))
+        self._btn_check_none.clicked.connect(lambda: self._set_all_checked(False))
+        select_row.addWidget(self._btn_check_all)
+        select_row.addWidget(self._btn_check_none)
+        side_layout.addLayout(select_row)
+
+        # Acoes em lote: rodam nas etapas marcadas (ou em todas se nenhuma marcada).
+        caption = QLabel("Lote: etapas marcadas (ou todas se nenhuma)")
+        caption.setObjectName("statusLine")
+        caption.setWordWrap(True)
+        side_layout.addWidget(caption)
+        self._btn_apply_all = QPushButton("Aplicar")
+        self._btn_dry_all = QPushButton("Dry-run")
+        self._btn_status_all = QPushButton("Status")
+        self._btn_apply_all.clicked.connect(lambda: self._run_batch("apply"))
+        self._btn_dry_all.clicked.connect(lambda: self._run_batch("dry-run"))
+        self._btn_status_all.clicked.connect(lambda: self._run_batch("status"))
         for btn in (self._btn_status_all, self._btn_dry_all, self._btn_apply_all):
             side_layout.addWidget(btn)
         sidebar.setFixedWidth(280)
@@ -236,6 +252,18 @@ class MainWindow(QMainWindow):
             return None
         return ALL_STEPS[row]
 
+    def _checked_steps(self) -> list[type]:
+        return [
+            ALL_STEPS[row]
+            for row in range(self._list.count())
+            if self._list.item(row).checkState() == Qt.CheckState.Checked
+        ]
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for row in range(self._list.count()):
+            self._list.item(row).setCheckState(state)
+
     # --- execucao ----------------------------------------------------------------
     def _set_running(self, running: bool) -> None:
         for btn in (
@@ -246,6 +274,8 @@ class MainWindow(QMainWindow):
             self._btn_apply_all,
             self._btn_dry_all,
             self._btn_status_all,
+            self._btn_check_all,
+            self._btn_check_none,
         ):
             btn.setEnabled(not running)
         if not running:
@@ -265,14 +295,19 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._start_worker(step_cls, action)
 
-    def _run_all(self, action: str) -> None:
-        if self._worker is not None:
+    def _run_batch(self, action: str) -> None:
+        # Roda nas etapas marcadas; se nenhuma estiver marcada, roda em todas.
+        steps = self._checked_steps() or list(ALL_STEPS)
+        self._run_steps(action, steps)
+
+    def _run_steps(self, action: str, steps: list[type]) -> None:
+        if self._worker is not None or not steps:
             return
-        self._queue = [(step, action) for step in ALL_STEPS]
+        self._queue = [(step, action) for step in steps]
         self._queue_total = len(self._queue)
         self._queue_action = action
         self._results = []
-        self._append(f"==== {action.upper()} TODAS AS ETAPAS ({self._queue_total}) ====")
+        self._append(f"==== {action.upper()} EM LOTE ({self._queue_total} etapas) ====")
         self._progress.setValue(0)
         self._next_in_queue()
 

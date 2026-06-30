@@ -894,6 +894,74 @@ def test_update_appimages_keeps_canonical_install(tmp_path: Path) -> None:
     assert step._resolve_and_migrate(app) == canonical
 
 
+def _reforja_entry(step: UpdateAppImagesStep) -> dict:
+    return next(app for app in step._APPIMAGES if app["name"] == "Reforja")
+
+
+def _fake_github_run(tag: str, asset: str):
+    import json as _json
+
+    payload = _json.dumps({"tag_name": tag, "assets": [{"name": asset, "browser_download_url": f"https://x/{asset}"}]})
+
+    class _Proc:
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+            self.returncode = 0
+
+    calls: list[list[str]] = []
+
+    def run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        if cmd[:2] == ["curl", "-fsSL"]:
+            return _Proc(payload)
+        return _Proc("")
+
+    return run, calls
+
+
+def test_reforja_entry_is_installable_and_self_update(tmp_path: Path) -> None:
+    step = UpdateAppImagesStep(make_ctx(tmp_path))
+    app = _reforja_entry(step)
+    assert app["installable"] is True
+    assert app["self_update"] is True
+    assert app["github_repo"] == "victorlcs87/scripts-linux"
+
+
+def test_update_appimages_installs_reforja_when_missing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)  # dry-run
+    step = UpdateAppImagesStep(ctx)
+    fake_run, _calls = _fake_github_run("v1.0.5", "Reforja-1.0.5-x86_64.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+    monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "Reforja: nao instalado; instalando." in log
+    assert "atualizado para v1.0.5" in log
+
+
+def test_reforja_self_update_uses_temp_and_skips_kill(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)  # dry-run: comandos sao apenas ecoados
+    step = UpdateAppImagesStep(ctx)
+    app = _reforja_entry(step)
+    fake_run, calls = _fake_github_run("v1.0.6", "Reforja-1.0.6-x86_64.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+
+    canonical = ctx.user.home / app["path"]
+    result = step._update_one(app, canonical)
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert result == "updated"
+    # Baixa para .new e faz mv atomico, sem encerrar/relancar o processo.
+    assert f"{canonical}.new" in log
+    assert "mv -f" in log
+    assert "proximo lancamento" in log
+    # Nao deve consultar/encerrar processos (pgrep/kill) no modo self_update.
+    assert not any(cmd and cmd[0] in {"pgrep", "kill"} for cmd in calls)
+
+
 def test_gestures_config_includes_up_and_down_swipes(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
     step = GesturesStep(ctx)
