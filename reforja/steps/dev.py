@@ -313,9 +313,7 @@ class AntigravityStep(Step):
     )
     # Endpoint oficial de auto-update (protocolo estilo VS Code): informa a ultima
     # versao estavel do IDE, a URL do tarball e o sha256 para verificacao de integridade.
-    update_api = (
-        "https://antigravity-auto-updater-974169037036.us-central1.run.app/api/update/linux-x64/stable/latest"
-    )
+    update_api = "https://antigravity-auto-updater-974169037036.us-central1.run.app/api/update/linux-x64/stable/latest"
     # Fallback usado apenas se a API estiver indisponivel.
     url = "https://storage.googleapis.com/antigravity-public/antigravity-hub/2.0.6-5413878570549248/linux-x64/Antigravity.tar.gz"
     version = "2.0.6"

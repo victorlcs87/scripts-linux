@@ -1355,9 +1355,7 @@ def _antigravity_distro(family: str = "arch", *, immutable: bool = False):
 
 
 def _patch_antigravity_distro(monkeypatch, family: str = "arch", *, immutable: bool = False) -> None:
-    monkeypatch.setattr(
-        "reforja.steps.dev.current_distro", lambda: _antigravity_distro(family, immutable=immutable)
-    )
+    monkeypatch.setattr("reforja.steps.dev.current_distro", lambda: _antigravity_distro(family, immutable=immutable))
 
 
 def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -> None:
@@ -1413,9 +1411,7 @@ def test_antigravity_status_hints_new_version(tmp_path: Path, monkeypatch) -> No
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
     _patch_antigravity_distro(monkeypatch)
-    monkeypatch.setattr(
-        AntigravityStep, "_fetch_latest", lambda self: {"name": "9.9.9", "url": "u", "sha256": None}
-    )
+    monkeypatch.setattr(AntigravityStep, "_fetch_latest", lambda self: {"name": "9.9.9", "url": "u", "sha256": None})
     home = ctx.user.home
     install_dir = home / "Antigravity IDE"
     install_dir.mkdir(parents=True)
@@ -1477,9 +1473,7 @@ def test_antigravity_tarball_skips_when_up_to_date(tmp_path: Path, monkeypatch) 
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
     _patch_antigravity_distro(monkeypatch)
-    monkeypatch.setattr(
-        AntigravityStep, "_fetch_latest", lambda self: {"name": "2.0.6", "url": "u", "sha256": None}
-    )
+    monkeypatch.setattr(AntigravityStep, "_fetch_latest", lambda self: {"name": "2.0.6", "url": "u", "sha256": None})
     monkeypatch.setattr("reforja.steps.dev.install_system_package", lambda *_a, **_k: None)
     home = ctx.user.home
     install_dir = home / "Antigravity IDE"
