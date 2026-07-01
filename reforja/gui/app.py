@@ -21,6 +21,13 @@ def _default_run_dir() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Modo askpass: quando o sudo -A reinvoca o proprio app como helper de senha,
+    # mostramos so o dialogo (nunca a GUI principal). Cobre AppImage e fonte.
+    if os.environ.get("REFORJA_ASKPASS") == "1":
+        from .askpass import run_askpass_dialog
+
+        return run_askpass_dialog()
+
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError:

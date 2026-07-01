@@ -17,6 +17,7 @@ os.environ["REFORJA_NO_UPDATE_CHECK"] = "1"
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from reforja.gui import askpass as askpass_mod  # noqa: E402
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
 from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
 from reforja.gui.updater import _ssl_context, parse_release, running_appimage  # noqa: E402
@@ -81,6 +82,54 @@ def test_acao_roda_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> N
 def test_gui_nao_tem_botao_dry_run(app, tmp_path: Path) -> None:
     window = MainWindow(tmp_path)
     assert not hasattr(window, "_btn_dry")
+
+
+def test_askpass_prefere_o_do_sistema(monkeypatch) -> None:
+    monkeypatch.delenv("SUDO_ASKPASS", raising=False)
+    monkeypatch.setattr(
+        askpass_mod.shutil, "which", lambda name: "/usr/bin/ksshaskpass" if name == "ksshaskpass" else None
+    )
+    assert askpass_mod.resolve_askpass() == "/usr/bin/ksshaskpass"
+
+
+def test_askpass_self_invocation_nao_reabre_gui(monkeypatch) -> None:
+    # Sem askpass do sistema nem kdialog/zenity -> cai na auto-invocacao.
+    monkeypatch.delenv("SUDO_ASKPASS", raising=False)
+    monkeypatch.setattr(askpass_mod.shutil, "which", lambda _name: None)
+    path = askpass_mod.resolve_askpass()
+    body = Path(path).read_text()
+    assert "REFORJA_ASKPASS=1" in body
+    # frozen: chama sys.executable direto; fonte: chama `-m reforja.gui`.
+    assert "reforja.gui" in body or askpass_mod.sys.executable in body
+
+
+def test_run_askpass_dialog_imprime_senha(app, monkeypatch, capsys) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("minha-senha", True)))
+    rc = askpass_mod.run_askpass_dialog()
+    assert rc == 0
+    assert capsys.readouterr().out == "minha-senha"
+
+
+def test_run_askpass_dialog_cancelado(app, monkeypatch, capsys) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    rc = askpass_mod.run_askpass_dialog()
+    assert rc == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_app_main_askpass_mode_nao_abre_janela(monkeypatch) -> None:
+    from reforja.gui import app as app_mod
+
+    monkeypatch.setenv("REFORJA_ASKPASS", "1")
+    called: list[bool] = []
+    monkeypatch.setattr("reforja.gui.askpass.run_askpass_dialog", lambda: called.append(True) or 0)
+    rc = app_mod.main([])
+    assert rc == 0
+    assert called == [True]
 
 
 def test_selecionar_etapa_mostra_descricao_no_console(app, tmp_path: Path) -> None:
