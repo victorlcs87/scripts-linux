@@ -1339,9 +1339,32 @@ def test_hardware_step_status_applied_with_existing_report(tmp_path: Path) -> No
     assert step.result.compliance == "aplicado"
 
 
+def _antigravity_distro(family: str = "arch", *, immutable: bool = False):
+    return type(
+        "D",
+        (),
+        {
+            "family": family,
+            "immutable": immutable,
+            "is_arch": family == "arch",
+            "is_debian": family == "debian",
+            "is_fedora": family == "fedora",
+            "id": family,
+        },
+    )()
+
+
+def _patch_antigravity_distro(monkeypatch, family: str = "arch", *, immutable: bool = False) -> None:
+    monkeypatch.setattr(
+        "reforja.steps.dev.current_distro", lambda: _antigravity_distro(family, immutable=immutable)
+    )
+
+
 def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(AntigravityStep, "_fetch_latest", lambda self: None)
     monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": "/usr/bin"})
 
     step.status()
@@ -1353,6 +1376,8 @@ def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -
 def test_antigravity_status_applied_when_everything_present(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(AntigravityStep, "_fetch_latest", lambda self: None)
     home = ctx.user.home
     (home / "Antigravity IDE").mkdir(parents=True)
     desktop = home / ".local/share/applications/antigravity-ide.desktop"
@@ -1371,6 +1396,8 @@ def test_antigravity_status_applied_when_everything_present(tmp_path: Path, monk
 def test_antigravity_status_attention_when_path_missing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(AntigravityStep, "_fetch_latest", lambda self: None)
     home = ctx.user.home
     wrapper = home / ".local/bin/antigravity-ide"
     wrapper.parent.mkdir(parents=True)
@@ -1382,10 +1409,122 @@ def test_antigravity_status_attention_when_path_missing(tmp_path: Path, monkeypa
     assert step.result.compliance == "atencao"
 
 
-def test_antigravity_undo_removes_artifacts(tmp_path: Path) -> None:
+def test_antigravity_status_hints_new_version(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(
+        AntigravityStep, "_fetch_latest", lambda self: {"name": "9.9.9", "url": "u", "sha256": None}
+    )
+    home = ctx.user.home
+    install_dir = home / "Antigravity IDE"
+    install_dir.mkdir(parents=True)
+    (install_dir / ".antigravity-version").write_text("2.0.6\n", encoding="utf-8")
+    desktop = home / ".local/share/applications/antigravity-ide.desktop"
+    desktop.parent.mkdir(parents=True)
+    desktop.write_text("[Desktop Entry]\n", encoding="utf-8")
+    wrapper = home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": str(home / ".local/bin")})
+
+    step.status()
+
+    assert any("9.9.9" in hint for hint in step.result.hints)
+
+
+def test_antigravity_tarball_updates_when_marker_differs(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     ctx.runner.dry_run = False
     step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(
+        AntigravityStep,
+        "_fetch_latest",
+        lambda self: {"name": "9.9.9", "url": "https://example/Antigravity.tar.gz", "sha256": None},
+    )
+    monkeypatch.setattr("reforja.steps.dev.install_system_package", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.dev.ensure_owner", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.dev.backup_existing", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": str(ctx.user.home / ".local/bin")})
+
+    install_dir = ctx.user.home / "Antigravity IDE"
+    install_dir.mkdir(parents=True)
+    (install_dir / ".antigravity-version").write_text("1.0.0\n", encoding="utf-8")
+
+    calls: list = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        if isinstance(cmd, list) and cmd[:2] == ["tar", "-xzf"]:
+            dest = Path(cmd[cmd.index("-C") + 1])
+            exe = dest / "antigravity" / "antigravity-ide"
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
+            exe.chmod(0o755)
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(ctx.runner, "run", fake_run)
+
+    step.apply()
+
+    assert step.result.status == "done"
+    assert (install_dir / ".antigravity-version").read_text(encoding="utf-8").strip() == "9.9.9"
+    assert any(isinstance(c, list) and "https://example/Antigravity.tar.gz" in c for c in calls)
+
+
+def test_antigravity_tarball_skips_when_up_to_date(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    monkeypatch.setattr(
+        AntigravityStep, "_fetch_latest", lambda self: {"name": "2.0.6", "url": "u", "sha256": None}
+    )
+    monkeypatch.setattr("reforja.steps.dev.install_system_package", lambda *_a, **_k: None)
+    home = ctx.user.home
+    install_dir = home / "Antigravity IDE"
+    install_dir.mkdir(parents=True)
+    exe = install_dir / "antigravity-ide"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    (install_dir / ".antigravity-version").write_text("2.0.6\n", encoding="utf-8")
+    desktop = home / ".local/share/applications/antigravity-ide.desktop"
+    desktop.parent.mkdir(parents=True)
+    desktop.write_text(f"[Desktop Entry]\nExec={exe}\n", encoding="utf-8")
+    wrapper = home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text(step._wrapper_content(exe), encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.dev.os.environ", {"PATH": str(home / ".local/bin")})
+
+    step.apply()
+
+    assert step.result.status == "skipped"
+
+
+def test_antigravity_apply_native_uses_repo_and_package(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch, "debian")
+    order: list[str] = []
+    monkeypatch.setattr("reforja.steps.dev.ensure_antigravity_repo", lambda _r: order.append("repo"))
+
+    def fake_run(cmd, **_kwargs):
+        if isinstance(cmd, list) and "antigravity" in cmd:
+            order.append("install")
+
+    monkeypatch.setattr(ctx.runner, "run", fake_run)
+
+    step.apply()
+
+    assert order == ["repo", "install"]
+    assert step.result.status == "done"
+
+
+def test_antigravity_undo_removes_artifacts(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
     home = ctx.user.home
     install_dir = home / "Antigravity IDE"
     install_dir.mkdir(parents=True)

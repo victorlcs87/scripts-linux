@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 from ..core import (
@@ -9,6 +12,7 @@ from ..core import (
     PromptInterruptedError,
     backup_existing,
     badge,
+    clean_subprocess_env,
     ensure_owner,
     paint,
     print_lines,
@@ -18,6 +22,11 @@ from ..core import (
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
     install_system_package,
+)
+from ..platform import (
+    current_distro,
+    ensure_antigravity_repo,
+    system_installed,
 )
 from ..steps_base import Step
 from ._common import header
@@ -299,34 +308,170 @@ class AntigravityStep(Step):
     id = "12"
     title = "Google Antigravity IDE"
     description = (
-        "Instala o Google Antigravity IDE, com atalho .desktop no menu e o comando `antigravity-ide` no terminal."
+        "Instala e mantem atualizado o Google Antigravity IDE: tarball oficial com auto-update "
+        "(Arch/imutaveis) ou repositorio nativo apt/dnf (Debian/Fedora)."
     )
-    url = "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.4-6381998290370560/linux-x64/Antigravity%20IDE.tar.gz"
-    version = "2.0.4-6381998290370560"
+    # Endpoint oficial de auto-update (protocolo estilo VS Code): informa a ultima
+    # versao estavel do IDE, a URL do tarball e o sha256 para verificacao de integridade.
+    update_api = (
+        "https://antigravity-auto-updater-974169037036.us-central1.run.app/api/update/linux-x64/stable/latest"
+    )
+    # Fallback usado apenas se a API estiver indisponivel.
+    url = "https://storage.googleapis.com/antigravity-public/antigravity-hub/2.0.6-5413878570549248/linux-x64/Antigravity.tar.gz"
+    version = "2.0.6"
+    package = "antigravity"
+
+    def _use_native(self) -> bool:
+        distro = current_distro()
+        return distro.family in ("debian", "fedora") and not distro.immutable
 
     def apply(self) -> None:
-        header(self, self.title, "Baixando IDE, integrando desktop e comando de terminal")
+        if self._use_native():
+            self._apply_native()
+        else:
+            self._apply_tarball()
+
+    # ---- caminho nativo (Debian/Fedora mutaveis) -----------------------------
+
+    def _apply_native(self) -> None:
+        distro = current_distro()
+        mgr = "apt" if distro.is_debian else "dnf"
+        header(self, self.title, f"Instalando/atualizando via repositorio nativo ({mgr})")
+        ensure_antigravity_repo(self.ctx.runner)
+        if distro.is_debian:
+            self.ctx.runner.run(
+                ["apt-get", "update"],
+                sudo=True,
+                action="Atualizando indice de pacotes apt",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o apt pode pedir senha do sudo.",
+            )
+            self.ctx.runner.run(
+                ["apt-get", "install", "-y", self.package],
+                sudo=True,
+                action="Instalando/atualizando Antigravity via apt",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o apt pode pedir senha do sudo e confirmacoes.",
+            )
+        else:
+            self.ctx.runner.run(
+                ["dnf", "install", "-y", self.package],
+                sudo=True,
+                action="Instalando/atualizando Antigravity via dnf",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o dnf pode pedir senha do sudo e confirmacoes.",
+            )
+        self.mark_done(f"Antigravity instalado/atualizado via {mgr}.")
+
+    # ---- caminho tarball (Arch / imutaveis) ----------------------------------
+
+    @property
+    def _install_dir(self) -> Path:
+        return self.ctx.user.home / "Antigravity IDE"
+
+    @property
+    def _marker(self) -> Path:
+        return self._install_dir / ".antigravity-version"
+
+    def _installed_version(self) -> str | None:
+        marker = self._marker
+        if marker.exists():
+            return marker.read_text(encoding="utf-8", errors="ignore").strip() or None
+        return None
+
+    def _write_marker(self, version: str) -> None:
+        write_text(self._marker, version + "\n", self.ctx.runner)
+
+    def _fetch_latest(self) -> dict | None:
+        """Consulta o endpoint de auto-update. Retorna {name, url, sha256} ou None.
+
+        Leitura pura (roda mesmo em dry-run). Qualquer falha de rede resulta em
+        None, para o chamador cair no fallback (self.version / self.url).
+        """
+        try:
+            proc = subprocess.run(
+                ["curl", "-fsSL", self.update_api],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=clean_subprocess_env(),
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return None
+        name = data.get("productVersion") or data.get("name")
+        url = data.get("url")
+        if not name or not url:
+            return None
+        return {"name": str(name), "url": str(url), "sha256": data.get("sha256hash")}
+
+    def _sha256_ok(self, path: Path, expected: str | None) -> bool:
+        if not expected:
+            return True
+        if not path.exists():
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest().lower() == expected.lower()
+
+    def _apply_tarball(self) -> None:
+        header(self, self.title, "Baixando/atualizando IDE, integrando desktop e comando de terminal")
         for pkg in ("curl", "tar", "desktop-file-utils", "findutils", "coreutils"):
             install_system_package(pkg, self.ctx.runner)
+
+        latest = self._fetch_latest()
+        if latest is None:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui consultar a ultima versao; "
+                f"usando fallback {self.version}."
+            )
+            latest = {"name": self.version, "url": self.url, "sha256": None}
+        target_version = latest["name"]
+
         cache = self.ctx.user.home / ".cache/antigravity-ide"
-        tarball = cache / f"Antigravity-IDE-{self.version}.tar.gz"
-        install_dir = self.ctx.user.home / "Antigravity IDE"
+        tarball = cache / f"Antigravity-IDE-{target_version}.tar.gz"
+        install_dir = self._install_dir
         existing_exe = self._find_executable(install_dir) if install_dir.exists() else None
-        if existing_exe and self._desktop_ready(existing_exe) and self._wrapper_ready(existing_exe):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Antigravity IDE ja instalado e integrado")
+        installed_version = self._installed_version()
+        if (
+            existing_exe
+            and installed_version == target_version
+            and self._desktop_ready(existing_exe)
+            and self._wrapper_ready(existing_exe)
+        ):
+            self.ctx.logger.write(
+                f"{Color.GREEN}OK:{Color.RESET} Antigravity IDE ja esta na versao mais recente ({target_version})"
+            )
             self._path_hint()
-            self.mark_skipped("Antigravity IDE ja estava instalado e integrado.")
+            self.mark_skipped(f"Antigravity IDE ja estava atualizado ({target_version}).")
             return
+
+        if installed_version and installed_version != target_version:
+            self.ctx.logger.write(f"Atualizando Antigravity IDE: {installed_version} -> {target_version}")
+
         if not self.ctx.runner.dry_run:
             cache.mkdir(parents=True, exist_ok=True)
         backup_existing(install_dir, self.ctx.runner)
-        if tarball.exists() and tarball.stat().st_size > 1024 * 1024:
+        if tarball.exists() and tarball.stat().st_size > 1024 * 1024 and self._sha256_ok(tarball, latest["sha256"]):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} pacote Antigravity ja esta em cache: {tarball}")
         else:
             self.ctx.runner.run(
-                ["curl", "-L", "--fail", "-o", str(tarball), self.url], action="Baixando pacote do Antigravity IDE"
+                ["curl", "-L", "--fail", "-o", str(tarball), latest["url"]],
+                action=f"Baixando Antigravity IDE {target_version}",
             )
-        tmp = self.ctx.user.home / ".cache/antigravity-ide/extract"
+            if not self.ctx.runner.dry_run and not self._sha256_ok(tarball, latest["sha256"]):
+                raise RuntimeError("sha256 do pacote baixado do Antigravity nao confere")
+        tmp = cache / "extract"
         if not self.ctx.runner.dry_run:
             shutil.rmtree(tmp, ignore_errors=True)
             tmp.mkdir(parents=True, exist_ok=True)
@@ -346,9 +491,10 @@ class AntigravityStep(Step):
             raise RuntimeError("nao encontrei executavel antigravity-ide")
         self._write_desktop(exe, icon)
         self._write_terminal_wrapper(exe)
+        self._write_marker(target_version)
         ensure_owner(install_dir, self.ctx.user, self.ctx.runner, recursive=True)
         self._path_hint()
-        self.mark_done("Antigravity IDE instalado e integrado.")
+        self.mark_done(f"Antigravity IDE instalado/atualizado ({target_version}).")
 
     def _find_executable(self, install_dir: Path) -> Path | None:
         for name in ("antigravity-ide", "antigravity", "code"):
@@ -404,21 +550,32 @@ disown 2>/dev/null || true
             self.ctx.logger.write(f"fish_add_path {local_bin}")
 
     def status(self) -> None:
+        if self._use_native():
+            self._status_native()
+        else:
+            self._status_tarball()
+
+    def _status_tarball(self) -> None:
         header(self, self.title)
-        install_dir = self.ctx.user.home / "Antigravity IDE"
+        install_dir = self._install_dir
         desktop_file = self.ctx.user.home / ".local/share/applications/antigravity-ide.desktop"
         wrapper_file = self.ctx.user.home / ".local/bin/antigravity-ide"
         local_bin = str(self.ctx.user.home / ".local/bin")
         path_ready = local_bin in os.environ.get("PATH", "").split(":")
+        installed_version = self._installed_version()
         print_lines(
             self.ctx.logger,
             [
                 f"{badge('instalacao', Color.INFO)} {'OK' if install_dir.exists() else 'ausente'} - {install_dir}",
+                f"{badge('versao', Color.INFO)} {installed_version or 'desconhecida'}",
                 f"{badge('desktop', Color.INFO)} {'OK' if desktop_file.exists() else 'ausente'} - {desktop_file}",
                 f"{badge('wrapper', Color.INFO)} {'OK' if wrapper_file.exists() else 'ausente'} - {wrapper_file}",
                 f"{badge('path', Color.SUCCESS if path_ready else Color.WARNING)} {'OK' if path_ready else 'ausente'} - {local_bin}",
             ],
         )
+        latest = self._fetch_latest()
+        if latest and installed_version and latest["name"] != installed_version:
+            self.add_hint(f"ha versao nova disponivel: {latest['name']} (rode Aplicar para atualizar).")
         if install_dir.exists() and desktop_file.exists() and wrapper_file.exists() and path_ready:
             self.mark_applied("Antigravity IDE, desktop, wrapper e PATH estao aplicados.")
         elif wrapper_file.exists() and not path_ready:
@@ -433,11 +590,47 @@ disown 2>/dev/null || true
                 missing.append("wrapper")
             self.mark_pending(f"Antigravity ainda nao esta completo: {', '.join(missing)}.", missing=missing)
 
+    def _status_native(self) -> None:
+        header(self, self.title)
+        distro = current_distro()
+        mgr = "apt" if distro.is_debian else "dnf"
+        installed = system_installed(self.package)
+        print_lines(
+            self.ctx.logger,
+            [f"{badge('pacote', Color.INFO)} {'instalado' if installed else 'ausente'} - {self.package} ({mgr})"],
+        )
+        if not installed:
+            self.mark_pending(f"Antigravity ainda nao esta instalado (repositorio {mgr}).", missing=["pacote"])
+            return
+        if self._native_update_available(distro):
+            self.add_hint(f"ha atualizacao do Antigravity disponivel via {mgr} (rode Aplicar para atualizar).")
+        self.mark_applied(f"Antigravity instalado via {mgr}.")
+
+    def _native_update_available(self, distro) -> bool:
+        if distro.is_debian:
+            cmd = ["apt", "list", "--upgradable", self.package]
+        else:
+            cmd = ["dnf", "check-update", self.package]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=clean_subprocess_env())
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        if distro.is_debian:
+            return self.package in proc.stdout and "upgradable" in proc.stdout
+        # dnf check-update: codigo 100 = ha atualizacoes; 0 = nada a fazer.
+        return proc.returncode == 100 and self.package in proc.stdout
+
     def undo(self) -> None:
+        if self._use_native():
+            self._undo_native()
+        else:
+            self._undo_tarball()
+
+    def _undo_tarball(self) -> None:
         for path in (
             self.ctx.user.home / ".local/share/applications/antigravity-ide.desktop",
             self.ctx.user.home / ".local/bin/antigravity-ide",
-            self.ctx.user.home / "Antigravity IDE",
+            self._install_dir,
         ):
             if self.ctx.runner.dry_run:
                 self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
@@ -445,3 +638,42 @@ disown 2>/dev/null || true
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 path.unlink(missing_ok=True)
+
+    def _undo_native(self) -> None:
+        distro = current_distro()
+        if distro.is_debian:
+            self.ctx.runner.run(
+                ["apt-get", "remove", "-y", self.package],
+                sudo=True,
+                check=False,
+                action="Removendo Antigravity via apt",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o apt pode pedir senha do sudo.",
+            )
+            repo_files = (
+                "/etc/apt/sources.list.d/antigravity.list",
+                "/etc/apt/keyrings/antigravity-repo-key.gpg",
+            )
+        else:
+            self.ctx.runner.run(
+                ["dnf", "remove", "-y", self.package],
+                sudo=True,
+                check=False,
+                action="Removendo Antigravity via dnf",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o dnf pode pedir senha do sudo.",
+            )
+            repo_files = ("/etc/yum.repos.d/antigravity.repo",)
+        for path in repo_files:
+            if self.ctx.runner.dry_run:
+                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+            else:
+                self.ctx.runner.run(
+                    ["rm", "-f", path],
+                    sudo=True,
+                    check=False,
+                    action=f"Removendo {path}",
+                    show_progress=False,
+                )

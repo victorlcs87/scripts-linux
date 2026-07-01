@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import Color, Runner, announce, command_exists
+from .core import Color, Runner, announce, command_exists, write_text_sudo
 
 
 class UnsupportedDistroError(RuntimeError):
@@ -354,3 +355,57 @@ def ensure_rpmfusion(runner: Runner) -> None:
         interactive_tty=True,
         manual_message="Comando interativo: o dnf vai pedir senha do sudo e sua confirmacao para adicionar o RPM Fusion.",
     )
+
+
+# Repositorio oficial do Antigravity no Google Artifact Registry (auto-updater).
+_ANTIGRAVITY_APT_KEY_URL = "https://us-central1-apt.pkg.dev/doc/repo-signing-key.gpg"
+_ANTIGRAVITY_APT_KEYRING = "/etc/apt/keyrings/antigravity-repo-key.gpg"
+_ANTIGRAVITY_APT_LIST = "/etc/apt/sources.list.d/antigravity.list"
+_ANTIGRAVITY_APT_LINE = (
+    "deb [signed-by=/etc/apt/keyrings/antigravity-repo-key.gpg] "
+    "https://us-central1-apt.pkg.dev/projects/antigravity-auto-updater-dev/ antigravity-debian main"
+)
+_ANTIGRAVITY_YUM_REPO = "/etc/yum.repos.d/antigravity.repo"
+_ANTIGRAVITY_YUM_CONTENT = (
+    "[antigravity-rpm]\n"
+    "name=Antigravity RPM Repository\n"
+    "baseurl=https://us-central1-yum.pkg.dev/projects/antigravity-auto-updater-dev/antigravity-rpm\n"
+    "enabled=1\n"
+    "gpgcheck=0\n"
+)
+
+
+def ensure_antigravity_repo(runner: Runner) -> None:
+    """Habilita o repositorio oficial do Antigravity (APT no Debian, YUM no Fedora).
+
+    O repositorio e mantido pelo Google e serve o pacote `antigravity` com
+    auto-atualizacao via apt/dnf. No-op em Arch e em sistemas imutaveis (onde a
+    etapa cai no tarball em $HOME).
+    """
+    distro = current_distro()
+    if distro.immutable:
+        return
+    if distro.is_debian:
+        if Path(_ANTIGRAVITY_APT_LIST).exists() and Path(_ANTIGRAVITY_APT_KEYRING).exists():
+            announce(runner.logger, "skipped", "repositorio APT do Antigravity ja configurado")
+            return
+        announce(runner.logger, "info", "Adicionando o repositorio oficial (APT) do Antigravity.")
+        script = (
+            "set -e\n"
+            "install -d -m 0755 /etc/apt/keyrings\n"
+            f"curl -fsSL {_ANTIGRAVITY_APT_KEY_URL} | gpg --dearmor -o {_ANTIGRAVITY_APT_KEYRING}\n"
+            f"printf '%s\\n' {shlex.quote(_ANTIGRAVITY_APT_LINE)} > {_ANTIGRAVITY_APT_LIST}\n"
+        )
+        runner.run(
+            f"bash -c {shlex.quote(script)}",
+            sudo=True,
+            shell=True,
+            action="Configurando repositorio APT do Antigravity",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o apt/gpg pode pedir senha do sudo para adicionar o repositorio.",
+        )
+        return
+    if distro.is_fedora:
+        write_text_sudo(Path(_ANTIGRAVITY_YUM_REPO), _ANTIGRAVITY_YUM_CONTENT, runner)
+        return

@@ -122,7 +122,7 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 | `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |
 | `10` | Apps / jogos / comunicacao / dev | Instala Steam/Heroic, comunicacao (Discord/ZapZap/TeamSpeak), Solaar/LocalSend/Flatseal, ONLYOFFICE, auto-cpufreq e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
-| `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
+| `12` | Antigravity IDE | Instala e **atualiza** o Antigravity: tarball oficial com auto-update por versao (Arch/imutaveis, com atalho `.desktop` e comando `antigravity-ide`) ou repositorio nativo apt/dnf (Debian/Fedora). |
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
 | `14` | Inventario de Hardware | Coleta CPU, RAM, GPUs, discos, PCI/USB e dmidecode/inxi e salva um relatorio estavel para suporte e para outras etapas consultarem. |
 | `15` | Atualizar AppImages | Instala/atualiza os AppImages geridos (Hydra Launcher e o proprio Reforja) a partir dos GitHub Releases, com atalho e icone. |
