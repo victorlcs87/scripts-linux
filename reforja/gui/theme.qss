@@ -29,17 +29,42 @@ QWidget {
 }
 
 #stepList::item {
-    padding: 9px 10px;
+    padding: 8px 8px;
     border-radius: 8px;
-    margin: 2px 0;
+    margin: 2px 4px;
+    color: #e6e8ee;
 }
 
 #stepList::item:selected {
-    background-color: #1d2230;
+    background-color: #232a3a;
+    border: 1px solid #2b6cff;
 }
 
 #stepList::item:hover {
     background-color: #191d28;
+}
+
+/* Checkbox de cada etapa: visivel no tema escuro (vazio = caixa; marcado = azul). */
+#stepList::indicator {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    border: 2px solid #4a5570;
+    border-radius: 5px;
+    background: #0c0e13;
+}
+
+#stepList::indicator:hover {
+    border-color: #5fd7ff;
+}
+
+#stepList::indicator:checked {
+    background: #2b6cff;
+    border-color: #2b6cff;
+}
+
+#stepList::indicator:checked:hover {
+    background: #3d7bff;
 }
 
 #stepTitle {

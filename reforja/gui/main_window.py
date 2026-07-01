@@ -7,8 +7,8 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -227,12 +227,19 @@ class MainWindow(QMainWindow):
         side_layout.addWidget(title)
         self._list = QListWidget()
         self._list.setObjectName("stepList")
+        self._list.setSpacing(1)
         # Itens agrupados por categoria: cabecalho (sem checkbox) + etapas-filhas.
+        header_font = QFont()
+        header_font.setBold(True)
+        header_font.setPointSize(max(8, header_font.pointSize() - 1))
+        header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
         for group in ALL_GROUPS:
             header = QListWidgetItem(group.title.upper())
             header.setData(_ROLE_STEP, None)
             header.setFlags(Qt.ItemFlag.ItemIsEnabled)  # nao selecionavel/checkavel
-            header.setForeground(QColor("#8a8f98"))
+            header.setForeground(QColor("#6f7788"))
+            header.setFont(header_font)
+            header.setSizeHint(QSize(0, 30))  # respiro acima de cada categoria
             self._list.addItem(header)
             for step in group.children:
                 item = QListWidgetItem()
@@ -240,6 +247,7 @@ class MainWindow(QMainWindow):
                 item.setData(_ROLE_COMPLIANCE, "desconhecido")
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(Qt.CheckState.Unchecked)
+                item.setSizeHint(QSize(0, 32))
                 self._list.addItem(item)
         self._list.currentRowChanged.connect(self._select_step)
         self._list.itemClicked.connect(self._on_item_clicked)

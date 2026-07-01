@@ -61,30 +61,25 @@ class UpdateAppImagesStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Verificando e atualizando AppImages instalados")
-        updated = []
-        skipped = []
-        missing = []
+        updated: list[str] = []
+        skipped: list[str] = []
+        missing: list[str] = []
+        failed: list[str] = []
         for app in self._APPIMAGES:
-            appimage_path = self._resolve_and_migrate(app)
-            if appimage_path is None:
-                if app.get("installable"):
-                    result = self._install_fresh(app)
-                    if result == "updated":
-                        updated.append(app["name"])
-                    elif result == "current":
-                        # Instalacao tentada mas o download nao concluiu.
-                        missing.append(app["name"])
-                    continue
-                self.ctx.logger.write(
-                    f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado, pulando."
-                )
-                missing.append(app["name"])
-                continue
-            result = self._update_one(app, appimage_path)
-            if result == "updated":
-                updated.append(app["name"])
-            elif result == "current":
-                skipped.append(app["name"])
+            # Isola cada AppImage: uma falha (permissao, rede, disco) reporta a causa
+            # e segue para o proximo, sem derrubar a etapa inteira.
+            try:
+                self._process_one(app, updated, skipped, missing)
+            except Exception as exc:  # noqa: BLE001 - reportar e continuar
+                failed.append(app["name"])
+                self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} {app['name']}: {type(exc).__name__}: {exc}")
+                self.add_hint(self._failure_hint(app, exc))
+        if failed:
+            self.mark_attention(
+                f"Falha ao processar: {', '.join(failed)}.",
+                attention=failed,
+            )
+            return
         if not updated and not skipped and missing:
             self.mark_skipped("Nenhum AppImage instalado para atualizar.")
             return
@@ -94,6 +89,37 @@ class UpdateAppImagesStep(Step):
         if skipped:
             parts.append(f"ja atualizados: {', '.join(skipped)}")
         self.mark_done("; ".join(parts) if parts else "Nenhuma atualizacao necessaria.")
+
+    def _process_one(self, app: dict, updated: list[str], skipped: list[str], missing: list[str]) -> None:
+        appimage_path = self._resolve_and_migrate(app)
+        if appimage_path is None:
+            if app.get("installable"):
+                result = self._install_fresh(app)
+                if result == "updated":
+                    updated.append(app["name"])
+                else:  # download nao concluiu
+                    missing.append(app["name"])
+                return
+            self.ctx.logger.write(
+                f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado, pulando."
+            )
+            missing.append(app["name"])
+            return
+        result = self._update_one(app, appimage_path)
+        if result == "updated":
+            updated.append(app["name"])
+        elif result == "current":
+            skipped.append(app["name"])
+
+    def _failure_hint(self, app: dict, exc: Exception) -> str:
+        canonical = self.ctx.user.home / app["path"]
+        if isinstance(exc, PermissionError):
+            return (
+                f"Sem permissao de escrita para {app['name']} (ex.: {canonical} ou "
+                f"{canonical.parent}). Verifique se algum arquivo pertence ao root: "
+                f"`sudo chown -R $USER:$USER {canonical.parent}`."
+            )
+        return f"{app['name']} nao pode ser atualizado agora: {type(exc).__name__}."
 
     def _resolve_and_migrate(self, app: dict) -> Path | None:
         """Resolve o caminho do AppImage. Se houver instalacao em local nao-canonico,

@@ -809,6 +809,34 @@ def test_step15_installs_hydra_when_missing(tmp_path: Path, monkeypatch) -> None
     assert "atualizado para v4.1.0" in log
 
 
+def test_step15_failure_on_one_item_does_not_abort(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = UpdateAppImagesStep(ctx)
+    processed: list[str] = []
+    original = step._process_one
+
+    def flaky(app, updated, skipped, missing):
+        processed.append(app["name"])
+        if app["name"] == "Hydra Launcher":
+            raise PermissionError(13, "Permission denied")
+        return original(app, updated, skipped, missing)
+
+    monkeypatch.setattr(step, "_process_one", flaky)
+    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", _fake_github_run("v1", "Reforja.AppImage")[0])
+    monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    # Ambos os itens foram processados; a falha de um nao abortou a etapa.
+    assert processed == ["Hydra Launcher", "Reforja"]
+    assert step.result.compliance == "atencao"
+    assert "Hydra Launcher" in step.result.summary
+    assert "ERRO:" in log
+    assert any("chown" in hint for hint in step.result.hints)
+
+
 def test_update_appimages_migrates_manual_install(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     ctx.runner = Runner(ctx.logger, dry_run=False)
