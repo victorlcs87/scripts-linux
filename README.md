@@ -87,30 +87,25 @@ python -m reforja step 13 apply
 
 ## Menus
 
-O menu principal e enxuto:
+O menu principal e plano e direto:
 
 - `Aplicar tudo`
-- `Dry-run tudo`
 - `Status geral`
-- `Categorias...`
+- `Executar etapas...`
 - `Sair`
 
-As etapas sao organizadas em **categorias** (Sistema base, Aplicativos, Dev, Jogos e streaming,
-Desktop / KDE, Armazenamento, Hardware / Info). Em `Categorias...` voce escolhe uma categoria e abre
-o menu do grupo, que permite:
+Em `Executar etapas...` voce ve a lista de etapas (so pelo titulo) e **marca uma ou varias** por
+checkbox; em seguida escolhe a acao **uma unica vez**: `Aplicar`, `Status` ou `Undo`. Para atualizar
+apenas os AppImages, por exemplo, marque so "Atualizar AppImages" e escolha `Aplicar` — nada mais roda.
 
-- `Aplicar/Dry-run/Status/Undo do grupo` (todas as etapas da categoria de uma vez);
-- `Selecionar etapas...` (marca varias etapas por checkbox e escolhe a acao);
-- `Abrir uma etapa...` (menu individual da etapa: Apply/Dry-run/Status/Undo).
+Cada wrapper (`scripts/NN-*.sh`) continua abrindo o menu da propria etapa, e
+`python -m reforja step <id> <acao>` segue funcionando (o `id` interno e preservado para scripting).
 
-Cada wrapper numerado (`scripts/NN-*.sh`) continua abrindo o menu da propria etapa, e
-`python -m reforja step <id> <acao>` segue funcionando sem mudancas.
+Na **GUI**, a barra lateral lista as etapas (com checkbox, agrupadas por categoria apenas como
+organizacao visual). Uma unica barra de acoes (`Aplicar` / `Status` / `Undo`) opera nas etapas
+marcadas — ou na etapa destacada quando nenhuma esta marcada.
 
-Na **GUI**, a barra lateral lista as etapas agrupadas por categoria (com checkbox); clicar no titulo
-da categoria marca o grupo inteiro. Uma unica barra de acoes (Aplicar/Dry-run/Status/Undo) opera nas
-etapas marcadas — ou na etapa destacada quando nenhuma esta marcada.
-
-Nos menus interativos, use as setas para navegar, `Enter` para confirmar ou digite o numero da opcao.
+Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar e confirmar.
 
 ## Etapas
 

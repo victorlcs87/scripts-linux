@@ -23,8 +23,8 @@ from .core import (
     progress_bar,
     prompt_user,
 )
-from .steps import ALL_GROUPS, ALL_STEPS
-from .steps_base import Step, StepContext, StepGroup
+from .steps import ALL_STEPS
+from .steps_base import Step, StepContext
 from .tui import TuiDependencyError, choose_multiple, choose_option
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -120,7 +120,7 @@ def run_steps(steps: list[type[Step]], action: str, logger: Logger) -> None:
         logger.write(
             paint(f"Etapa {index:02d}/{total:02d}  |  {int(percent * 100):02d}%  |  modo: {action}", Color.MUTED)
         )
-        logger.write(f"{badge(step_cls.id, Color.TITLE)} {paint(step_cls.title, Color.TITLE)}")
+        logger.write(paint(step_cls.title, Color.TITLE))
         try:
             result = run_action(step_cls, action, logger)
             results.append(result)
@@ -198,8 +198,8 @@ def run_steps(steps: list[type[Step]], action: str, logger: Logger) -> None:
 
 def choose_step(logger: Logger, steps: list[type[Step]] | None = None) -> type[Step] | None:
     steps = list(steps) if steps is not None else list(ALL_STEPS)
-    # key == id da etapa para que o numero digitado no fallback case com o exibido.
-    options = [MenuOption(step_cls.id, step_cls.title) for step_cls in steps]
+    # key == posicao (1..N) para o fallback numerado; exibe so o titulo.
+    options = [MenuOption(str(index + 1), step_cls.title) for index, step_cls in enumerate(steps)]
     clear_screen()
     try:
         index = choose_option(
@@ -219,38 +219,13 @@ def choose_step(logger: Logger, steps: list[type[Step]] | None = None) -> type[S
     return steps[index]
 
 
-def choose_group(logger: Logger) -> StepGroup | None:
-    options = [
-        MenuOption(str(index + 1), f"{group.title} ({len(group.children)} etapa(s))")
-        for index, group in enumerate(ALL_GROUPS)
-    ]
-    clear_screen()
-    try:
-        index = choose_option(
-            title="Categorias",
-            logger=logger,
-            prompt="Escolha uma categoria",
-            options=options,
-            detail="O reforja esta aguardando sua escolha de categoria.",
-            prompt_label="Categoria",
-        )
-    except PromptInterruptedError as exc:
-        logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
-        return None
-    except TuiDependencyError as exc:
-        logger.write(f"{badge('erro', Color.ERROR)} {exc}")
-        return None
-    return ALL_GROUPS[index]
-
-
 def choose_action(logger: Logger) -> str | None:
     options = [
         MenuOption("1", "Aplicar"),
-        MenuOption("2", "Dry-run"),
-        MenuOption("3", "Status"),
-        MenuOption("4", "Undo"),
+        MenuOption("2", "Status"),
+        MenuOption("3", "Undo"),
     ]
-    actions = ["apply", "dry-run", "status", "undo"]
+    actions = ["apply", "status", "undo"]
     try:
         index = choose_option(
             title="Acao",
@@ -265,21 +240,22 @@ def choose_action(logger: Logger) -> str | None:
     return actions[index]
 
 
-def select_and_run_group(group: StepGroup, logger: Logger) -> None:
-    options = [MenuOption(child.id, child.title) for child in group.children]
+def select_and_run(logger: Logger) -> None:
+    # key == posicao (1..N); exibe so o titulo, sem numeracao de etapa.
+    options = [MenuOption(str(index + 1), step_cls.title) for index, step_cls in enumerate(ALL_STEPS)]
     clear_screen()
     try:
         indices = choose_multiple(
-            title=f"{group.title} - selecionar etapas",
+            title="Executar etapas",
             logger=logger,
             prompt="Quais etapas",
             options=options,
-            detail="Marque com espaco; vazio = todas.",
+            detail="Marque com espaco as etapas desejadas; vazio = todas.",
         )
     except (PromptInterruptedError, TuiDependencyError) as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
         return
-    chosen = [group.children[i] for i in indices] if indices else list(group.children)
+    chosen = [ALL_STEPS[i] for i in indices] if indices else list(ALL_STEPS)
     clear_screen()
     action = choose_action(logger)
     if action is None:
@@ -287,64 +263,18 @@ def select_and_run_group(group: StepGroup, logger: Logger) -> None:
     run_steps(chosen, action, logger)
 
 
-def group_menu(group: StepGroup, logger: Logger) -> None:
-    options = [
-        MenuOption("1", "Aplicar grupo inteiro"),
-        MenuOption("2", "Dry-run do grupo"),
-        MenuOption("3", "Status do grupo"),
-        MenuOption("4", "Undo do grupo"),
-        MenuOption("5", "Selecionar etapas..."),
-        MenuOption("6", "Abrir uma etapa..."),
-        MenuOption("7", "Voltar"),
-    ]
-    while True:
-        clear_screen()
-        try:
-            option = choose_option(
-                title=f"Categoria: {group.title} ({len(group.children)} etapa(s))",
-                logger=logger,
-                prompt="Escolha uma acao para esta categoria",
-                options=options,
-                detail="O reforja esta aguardando sua escolha.",
-                prompt_label="Escolha",
-            )
-        except PromptInterruptedError as exc:
-            logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
-            return
-        except TuiDependencyError as exc:
-            logger.write(f"{badge('erro', Color.ERROR)} {exc}")
-            return
-        if option == 0:
-            run_steps(list(group.children), "apply", logger)
-        elif option == 1:
-            run_steps(list(group.children), "dry-run", logger)
-        elif option == 2:
-            run_steps(list(group.children), "status", logger)
-        elif option == 3:
-            run_steps(list(group.children), "undo", logger)
-        elif option == 4:
-            select_and_run_group(group, logger)
-        elif option == 5:
-            step = choose_step(logger, list(group.children))
-            if step:
-                step_menu(step, logger)
-        elif option == 6:
-            return
-
-
 def step_menu(step_cls: type[Step], logger: Logger) -> None:
     options = [
         MenuOption("1", "Apply"),
-        MenuOption("2", "Dry-run"),
-        MenuOption("3", "Status"),
-        MenuOption("4", "Undo"),
-        MenuOption("5", "Sair"),
+        MenuOption("2", "Status"),
+        MenuOption("3", "Undo"),
+        MenuOption("4", "Sair"),
     ]
     while True:
         clear_screen()
         try:
             option = choose_option(
-                title=f"Etapa {step_cls.id} - {step_cls.title}",
+                title=step_cls.title,
                 logger=logger,
                 prompt="Escolha uma acao para esta etapa",
                 options=options,
@@ -361,22 +291,19 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
         if option == 0:
             run_action_safe(step_cls, "apply", logger)
         elif option == 1:
-            run_action_safe(step_cls, "dry-run", logger)
-        elif option == 2:
             run_action_safe(step_cls, "status", logger)
-        elif option == 3:
+        elif option == 2:
             run_action_safe(step_cls, "undo", logger)
-        elif option == 4:
+        elif option == 3:
             return
 
 
 def main_menu(logger: Logger) -> None:
     options = [
         MenuOption("1", "Aplicar tudo"),
-        MenuOption("2", "Dry-run tudo"),
-        MenuOption("3", "Status geral"),
-        MenuOption("4", "Categorias..."),
-        MenuOption("5", "Sair"),
+        MenuOption("2", "Status geral"),
+        MenuOption("3", "Executar etapas..."),
+        MenuOption("4", "Sair"),
     ]
     while True:
         clear_screen()
@@ -399,14 +326,10 @@ def main_menu(logger: Logger) -> None:
         if option == 0:
             run_all("apply", logger)
         elif option == 1:
-            run_all("dry-run", logger)
-        elif option == 2:
             run_all("status", logger)
+        elif option == 2:
+            select_and_run(logger)
         elif option == 3:
-            group = choose_group(logger)
-            if group:
-                group_menu(group, logger)
-        elif option == 4:
             return
 
 
@@ -421,11 +344,11 @@ def main(argv: list[str] | None = None) -> int:
     if no_new_privs_enabled():
         logger.write(f"{badge('aviso', Color.WARNING)} este terminal bloqueia sudo (NoNewPrivs=1).")
         logger.write(
-            "Status e dry-run continuam funcionando, mas Apply de etapas privilegiadas precisa ser executado em uma sessao normal do sistema."
+            "Status continua funcionando, mas Apply de etapas privilegiadas precisa ser executado em uma sessao normal do sistema."
         )
     if argv and argv[0] == "step":
         if len(argv) < 2:
-            logger.write("Uso: python -m reforja.cli step ID [apply|dry-run|status|undo|menu]")
+            logger.write("Uso: python -m reforja.cli step ID [apply|status|undo|menu]")
             return 1
         step_cls = step_by_id(argv[1])
         if not step_cls:
@@ -493,7 +416,7 @@ def render_step_summary(logger: Logger, action: str, result: StepRunResult) -> N
     logger.write(paint("Resumo da etapa", Color.TITLE))
     logger.write(
         paint(
-            f"Modo: {action}  |  Etapa: [{result.step_id}] {result.title}  |  Duracao: {format_elapsed(result.duration_seconds)}",
+            f"Modo: {action}  |  Etapa: {result.title}  |  Duracao: {format_elapsed(result.duration_seconds)}",
             Color.MUTED,
         )
     )
@@ -527,7 +450,7 @@ def render_status_overview(
     logger.write(divider(char="-", tone=Color.BOX))
     for item, compliance in classified:
         tone = {"aplicado": Color.SUCCESS, "pendente": Color.WARNING, "atencao": Color.ERROR}[compliance]
-        logger.write(f"{badge(compliance, tone)} [{item.step_id}] {item.title}")
+        logger.write(f"{badge(compliance, tone)} {item.title}")
         logger.write(paint(item.message, Color.MUTED))
     logger.write(divider(char="#", tone=Color.TITLE))
 
@@ -583,7 +506,7 @@ def render_run_summary(
             "blocked": Color.ERROR,
         }.get(item.status, Color.INFO)
         logger.write(
-            f"{badge(item.status, tone)} [{item.step_id}] {item.title}  "
+            f"{badge(item.status, tone)} {item.title}  "
             f"{paint(f'({format_elapsed(item.duration_seconds)})', Color.MUTED)}"
         )
         if item.message:

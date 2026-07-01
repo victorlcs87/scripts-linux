@@ -4,7 +4,15 @@ from subprocess import CompletedProcess
 import pytest
 
 from reforja import hardware
-from reforja.cli import choose_step, main_menu, render_run_summary, render_status_overview, run_all, step_menu
+from reforja.cli import (
+    choose_step,
+    main_menu,
+    render_run_summary,
+    render_status_overview,
+    run_all,
+    select_and_run,
+    step_menu,
+)
 from reforja.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from reforja.steps import (
     ALL_STEPS,
@@ -1120,8 +1128,8 @@ def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None
 
 def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    # opcao 0 = Aplicar tudo; opcao 4 = Sair (menu consolidado de 5 itens)
-    choices = iter([0, 4])
+    # opcao 0 = Aplicar tudo; opcao 3 = Sair (menu plano de 4 itens)
+    choices = iter([0, 3])
     called: list[str] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
@@ -1133,45 +1141,44 @@ def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> Non
     assert called == ["apply"]
 
 
-def test_main_menu_opens_category(tmp_path: Path, monkeypatch) -> None:
-    from reforja.cli import ALL_GROUPS
-
+def test_main_menu_opens_executar_etapas(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    # opcao 3 = Categorias...; depois opcao 4 = Sair
-    choices = iter([3, 4])
-    opened: list[str] = []
+    # opcao 2 = Executar etapas...; depois opcao 3 = Sair
+    choices = iter([2, 3])
+    opened: list[bool] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
     monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
-    monkeypatch.setattr("reforja.cli.choose_group", lambda _logger: ALL_GROUPS[1])
-    monkeypatch.setattr("reforja.cli.group_menu", lambda group, _logger: opened.append(group.id))
+    monkeypatch.setattr("reforja.cli.select_and_run", lambda _logger: opened.append(True))
 
     main_menu(logger)
 
-    assert opened == ["apps"]
+    assert opened == [True]
 
 
-def test_group_menu_runs_action_on_children(tmp_path: Path, monkeypatch) -> None:
-    from reforja.cli import ALL_GROUPS, group_menu
-
+def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    group = next(g for g in ALL_GROUPS if g.id == "apps")
-    # opcao 1 = Dry-run do grupo; opcao 6 = Voltar
-    choices = iter([1, 6])
-    ran: list[tuple[int, str]] = []
+    ran: list[tuple[list[type], str]] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
-    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
-    monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger: ran.append((len(steps), action)))
+    # marca apenas a etapa 15 (Atualizar AppImages) pela posicao na lista
+    target_index = next(i for i, s in enumerate(ALL_STEPS) if s.id == "15")
+    monkeypatch.setattr("reforja.cli.choose_multiple", lambda **_kwargs: [target_index])
+    monkeypatch.setattr("reforja.cli.choose_action", lambda _logger: "apply")
+    monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger: ran.append((steps, action)))
 
-    group_menu(group, logger)
+    select_and_run(logger)
 
-    assert ran == [(len(group.children), "dry-run")]
+    assert len(ran) == 1
+    steps, action = ran[0]
+    assert [s.id for s in steps] == ["15"]
+    assert action == "apply"
 
 
 def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:
+    # opcao 1 = Status; opcao 3 = Sair (menu da etapa sem Dry-run)
     logger = Logger(tmp_path, "test")
-    choices = iter([2, 4])
+    choices = iter([1, 3])
     called: list[str] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)

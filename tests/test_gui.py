@@ -73,9 +73,14 @@ def test_acao_roda_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> N
     _check(window, "10")
     assert sorted(s.id for s in window._checked_steps()) == ["03", "10"]
 
-    window._run_action("dry-run")
+    window._run_action("status")
     assert sorted(s.id for s, _ in window._queue) == ["03", "10"]
-    assert all(action == "dry-run" for _s, action in window._queue)
+    assert all(action == "status" for _s, action in window._queue)
+
+
+def test_gui_nao_tem_botao_dry_run(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    assert not hasattr(window, "_btn_dry")
 
 
 def test_acao_sem_marcacao_usa_destacada(app, tmp_path: Path, monkeypatch) -> None:

@@ -275,14 +275,12 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         self._btn_apply = QPushButton("Aplicar")
         self._btn_apply.setObjectName("primary")
-        self._btn_dry = QPushButton("Dry-run")
         self._btn_status = QPushButton("Status")
         self._btn_undo = QPushButton("Undo")
         self._btn_apply.clicked.connect(lambda: self._run_action("apply"))
-        self._btn_dry.clicked.connect(lambda: self._run_action("dry-run"))
         self._btn_status.clicked.connect(lambda: self._run_action("status"))
         self._btn_undo.clicked.connect(lambda: self._run_action("undo"))
-        for btn in (self._btn_apply, self._btn_dry, self._btn_status, self._btn_undo):
+        for btn in (self._btn_apply, self._btn_status, self._btn_undo):
             actions.addWidget(btn)
         actions.addStretch(1)
         main_layout.addLayout(actions)
@@ -345,7 +343,7 @@ class MainWindow(QMainWindow):
         for item, step in self._step_items():
             compliance = item.data(_ROLE_COMPLIANCE) or "desconhecido"
             glyph, color = _COMPLIANCE.get(compliance, _COMPLIANCE["desconhecido"])
-            item.setText(f"{glyph}  {step.id}. {step.title}")
+            item.setText(f"{glyph}  {step.title}")
             item.setForeground(QColor(color))
 
     def _select_step(self, row: int) -> None:
@@ -354,7 +352,7 @@ class MainWindow(QMainWindow):
         step = self._list.item(row).data(_ROLE_STEP)
         if step is None:  # cabecalho de grupo
             return
-        self._step_title.setText(f"{step.id}. {step.title}")
+        self._step_title.setText(step.title)
         # Undo so e oferecido quando o step de fato implementa o metodo.
         self._btn_undo.setEnabled("undo" in step.__dict__)
 
@@ -389,7 +387,6 @@ class MainWindow(QMainWindow):
     def _set_running(self, running: bool) -> None:
         for btn in (
             self._btn_apply,
-            self._btn_dry,
             self._btn_status,
             self._btn_undo,
             self._btn_check_all,
@@ -419,7 +416,7 @@ class MainWindow(QMainWindow):
         self._queue_action = action
         self._results = []
         if len(steps) == 1:
-            self._append(f"==== {action.upper()} -> {steps[0].id}. {steps[0].title} ====")
+            self._append(f"==== {action.upper()} -> {steps[0].title} ====")
         else:
             self._append(f"==== {action.upper()} EM LOTE ({self._queue_total} etapas) ====")
         self._progress.setValue(0)
@@ -432,7 +429,7 @@ class MainWindow(QMainWindow):
         step_cls, action = self._queue.pop(0)
         done = self._queue_total - len(self._queue) - 1
         self._progress.setValue(int(done / self._queue_total * 100))
-        self._append(f"---- {step_cls.id}. {step_cls.title} ----")
+        self._append(f"---- {step_cls.title} ----")
         self._start_worker(step_cls, action)
 
     def _start_worker(self, step_cls: type, action: str) -> None:
