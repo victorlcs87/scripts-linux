@@ -36,6 +36,10 @@ from ._common import ProbeResult, header
 class NvidiaSteamStep(Step):
     id = "05"
     title = "Validar NVIDIA / jogos / Steam"
+    description = (
+        "Apenas diagnostico (nao instala nada): checa a sessao grafica, as GPUs (Intel/NVIDIA), "
+        "o driver NVIDIA e a presenca de Steam e Heroic, apontando o que precisa de atencao."
+    )
 
     def apply(self) -> None:
         results = self._collect_gpu_results()
@@ -246,6 +250,11 @@ class NvidiaSteamStep(Step):
 class AppsStep(Step):
     id = "10"
     title = "Apps / jogos / comunicacao / dev"
+    description = (
+        "Instala os apps principais: Steam e Heroic (jogos), comunicacao (Discord, ZapZap, TeamSpeak), "
+        "utilitarios (Solaar, LocalSend, Flatseal), ONLYOFFICE, auto-cpufreq e o Codex CLI. "
+        "Usa pacote nativo/AUR quando possivel, com fallback para Flatpak."
+    )
     apps = {
         "Steam": {
             "system_aliases": ("steam", "steam-installer", "steam-launcher"),
@@ -552,6 +561,10 @@ class AppsStep(Step):
 class SunshineStep(Step):
     id = "13"
     title = "Sunshine / Moonlight"
+    description = (
+        "Instala e configura o Sunshine (game streaming p/ Moonlight): permissoes (grupo input/udev), "
+        "autostart no KDE, regras de firewall (UFW) e um launcher no menu."
+    )
     udev_rule_file = Path("/etc/udev/rules.d/85-sunshine-input.rules")
     udev_rule_content = 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\n'
     ufw_rules = (

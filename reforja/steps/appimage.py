@@ -20,6 +20,10 @@ from ._common import header
 class UpdateAppImagesStep(Step):
     id = "15"
     title = "Atualizar AppImages"
+    description = (
+        "Instala e atualiza os AppImages geridos (Hydra Launcher e o proprio Reforja) a partir dos "
+        "GitHub Releases, criando o atalho .desktop e o icone. Instala o que estiver ausente."
+    )
 
     # Cada entrada: nome exibivel, caminho relativo ao home, função que retorna (url_download, tag_versao)
     # Flags opcionais por entrada:

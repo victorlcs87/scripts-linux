@@ -19,6 +19,10 @@ from ._common import header
 class HardwareStep(Step):
     id = "14"
     title = "Inventario de Hardware"
+    description = (
+        "Coleta um relatorio de hardware (CPU, RAM, GPUs, discos, PCI/USB, dmidecode/inxi) e salva "
+        "em arquivo, para suporte e para outras etapas consultarem. Nao altera o sistema."
+    )
 
     @property
     def report_file(self) -> Path:

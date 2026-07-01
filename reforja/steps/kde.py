@@ -25,6 +25,10 @@ from ._common import header
 class GesturesStep(Step):
     id = "09"
     title = "Gestos KDE"
+    description = (
+        "Configura gestos de 3 dedos (abre o Overview com swipe) via libinput-gestures no KDE. "
+        "Pulada automaticamente em maquinas sem touchpad (desktops)."
+    )
 
     def apply(self) -> None:
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
@@ -198,6 +202,7 @@ exit 1
 class NumLockStep(Step):
     id = "11"
     title = "Fixar Num Lock"
+    description = "Ativa o Num Lock por padrao no KDE Plasma e na tela de login (SDDM)."
     sddm_file = Path("/etc/sddm.conf.d/10-numlock.conf")
 
     def apply(self) -> None:

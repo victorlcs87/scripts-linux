@@ -8,11 +8,10 @@ from .gaming import AppsStep, NvidiaSteamStep, SunshineStep
 from .inventory import HardwareStep
 from .kde import GesturesStep, NumLockStep
 from .storage import FstabStep, RcloneStep
-from .system import LinuxToysStep, ShellyStep, UpdateSystemStep
+from .system import LinuxToysStep, ShellyStep
 
 ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
-    UpdateSystemStep,
     LinuxToysStep,
     BrowserStep,
     WebAppsStep,
@@ -32,7 +31,7 @@ ALL_STEPS: tuple[type[Step], ...] = (
 # Camada de categorias para navegacao (CLI/GUI). Orthogonal a ALL_STEPS, que
 # permanece a lista canonica sequencial (IDs 00..15 inalterados).
 ALL_GROUPS: tuple[StepGroup, ...] = (
-    StepGroup("sistema", "Sistema base", (ShellyStep, UpdateSystemStep)),
+    StepGroup("sistema", "Sistema base", (ShellyStep,)),
     StepGroup("apps", "Aplicativos", (LinuxToysStep, BrowserStep, WebAppsStep, AppsStep, UpdateAppImagesStep)),
     StepGroup("dev", "Dev", (GitStep, AntigravityStep)),
     StepGroup("jogos", "Jogos e streaming", (NvidiaSteamStep, SunshineStep)),
@@ -43,7 +42,6 @@ ALL_GROUPS: tuple[StepGroup, ...] = (
 
 __all__ = [
     "ShellyStep",
-    "UpdateSystemStep",
     "LinuxToysStep",
     "BrowserStep",
     "WebAppsStep",

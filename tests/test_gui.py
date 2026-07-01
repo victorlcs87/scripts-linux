@@ -83,6 +83,18 @@ def test_gui_nao_tem_botao_dry_run(app, tmp_path: Path) -> None:
     assert not hasattr(window, "_btn_dry")
 
 
+def test_selecionar_etapa_mostra_descricao_no_console(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    item = window._item_for_step("15")
+    window._list.setCurrentItem(item)
+    texto = window._console.toPlainText()
+    # O console mostra o titulo e a descricao da etapa selecionada.
+    assert "Atualizar AppImages" in texto
+    assert "GitHub Releases" in texto
+    # o tooltip do item tambem tem a descricao
+    assert "GitHub Releases" in item.toolTip()
+
+
 def test_acao_sem_marcacao_usa_destacada(app, tmp_path: Path, monkeypatch) -> None:
     window = MainWindow(tmp_path)
     monkeypatch.setattr(window, "_next_in_queue", lambda: None)

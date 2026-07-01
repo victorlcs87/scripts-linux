@@ -26,6 +26,10 @@ from ._common import header
 class GitStep(Step):
     id = "06"
     title = "Git / GitHub"
+    description = (
+        "Instala o Git, clona/atualiza o repositorio base e configura uma ou mais contas GitHub "
+        "com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro)."
+    )
 
     @property
     def ssh_dir(self) -> Path:
@@ -294,6 +298,9 @@ class GitStep(Step):
 class AntigravityStep(Step):
     id = "12"
     title = "Google Antigravity IDE"
+    description = (
+        "Instala o Google Antigravity IDE, com atalho .desktop no menu e o comando `antigravity-ide` no terminal."
+    )
     url = "https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/2.0.4-6381998290370560/linux-x64/Antigravity%20IDE.tar.gz"
     version = "2.0.4-6381998290370560"
 

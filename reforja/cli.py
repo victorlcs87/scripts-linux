@@ -279,7 +279,7 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
                 prompt="Escolha uma acao para esta etapa",
                 options=options,
                 footer="Durante comandos longos, o reforja mostra atividade viva para voce saber que nao travou.",
-                detail="O reforja esta aguardando sua escolha.",
+                detail=step_cls.description or "O reforja esta aguardando sua escolha.",
                 prompt_label="Escolha",
             )
         except PromptInterruptedError as exc:

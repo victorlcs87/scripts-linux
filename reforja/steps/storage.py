@@ -23,6 +23,10 @@ from ._common import header
 class RcloneStep(Step):
     id = "07"
     title = "Google Drive / rclone"
+    description = (
+        "Instala e configura o rclone e um servico systemd de usuario que monta o Google Drive "
+        "em ~/GoogleDrive automaticamente."
+    )
     remote = "Google Drive:"
 
     def _rclone_env(self) -> dict[str, str]:
@@ -243,6 +247,10 @@ ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao mon
 class FstabStep(Step):
     id = "08"
     title = "Montagem de discos / fstab"
+    description = (
+        "Configura montagens de disco no /etc/fstab por label (WINDOWS, DADOS WINDOWS, JOGOS LINUX, "
+        "BACKUP), com backup do arquivo e confirmacao digitada. Labels ausentes na maquina sao ignoradas."
+    )
     labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX", "BACKUP")
     begin = "# BEGIN pos-formatacao-cachyos"
     end = "# END pos-formatacao-cachyos"

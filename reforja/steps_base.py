@@ -43,6 +43,7 @@ class StepGroup:
 class Step:
     id = "00"
     title = "Etapa"
+    description = ""
 
     def __init__(self, ctx: StepContext) -> None:
         self.ctx = ctx

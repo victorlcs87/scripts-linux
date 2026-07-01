@@ -56,11 +56,52 @@ def test_numlock_ini_value_is_updated(tmp_path: Path) -> None:
     assert "RepeatDelay=600" in updated
 
 
-def test_all_steps_use_sequential_ids() -> None:
+def test_all_steps_use_unique_ids() -> None:
+    # Os ids sao internos (nao exibidos) e servem para `reforja step <id>` e wrappers.
+    # Precisam ser unicos e no formato NN; podem ter lacunas (etapas fundidas/removidas).
     ids = [step.id for step in ALL_STEPS]
 
-    assert ids == [f"{index:02d}" for index in range(len(ALL_STEPS))]
-    assert all("." not in step_id for step_id in ids)
+    assert len(ids) == len(set(ids)), "ids de etapas devem ser unicos"
+    assert all(step_id.isdigit() and len(step_id) == 2 for step_id in ids)
+
+
+def test_every_step_has_description() -> None:
+    for step in ALL_STEPS:
+        assert step.description.strip(), f"etapa {step.title} sem description"
+
+
+def test_shelly_step_updates_system_before_preparing(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = ShellyStep(ctx)
+    order: list[str] = []
+    monkeypatch.setattr("reforja.steps.system.update_system", lambda _runner: order.append("update"))
+    monkeypatch.setattr("reforja.steps.system.ensure_flatpak", lambda _runner: order.append("prepare"))
+    monkeypatch.setattr("reforja.steps.system.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.system.aur_helper", lambda: "paru")
+    monkeypatch.setattr("reforja.steps.system.system_installed", lambda pkg: True)
+    monkeypatch.setattr("reforja.steps.system.install_first_available", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "reforja.steps.system.current_distro",
+        lambda: type(
+            "D",
+            (),
+            {
+                "is_arch": True,
+                "is_debian": False,
+                "is_fedora": False,
+                "immutable": False,
+                "id": "cachyos",
+                "family": "arch",
+            },
+        )(),
+    )
+    monkeypatch.setattr(ctx.runner, "run", lambda *_a, **_k: None)
+
+    step.apply()
+
+    # A atualizacao do sistema roda ANTES da preparacao (ensure_flatpak).
+    assert order[0] == "update"
+    assert "prepare" in order
 
 
 def test_sunshine_dry_run_mentions_udev_autostart_ufw_and_desktop(tmp_path: Path, monkeypatch) -> None:

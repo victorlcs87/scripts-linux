@@ -17,17 +17,23 @@ from ..installers import (
     pacman_exists,
     system_installed,
 )
-from ..platform import current_distro, pending_updates_command, system_query_command, update_system
+from ..platform import current_distro, system_query_command, update_system
 from ..steps_base import Step
 from ._common import header
 
 
 class ShellyStep(Step):
     id = "00"
-    title = "Preparar ecossistema"
+    title = "Atualizar e preparar o sistema"
+    description = (
+        "Primeiro atualiza todos os pacotes do sistema (pacman/apt/dnf) e depois prepara a base: "
+        "Flatpak + Flathub, suporte a AppImage (FUSE) e um helper AUR quando aplicavel. "
+        "Rode antes das demais etapas."
+    )
 
     def apply(self) -> None:
         distro = current_distro()
+        self._update_system_first(distro)
         header(self, self.title, "Preparando base de pacotes, Flatpak e suporte AppImage")
         ready_before = self._basic_support_ready()
         if distro.immutable:
@@ -121,6 +127,20 @@ class ShellyStep(Step):
         )
         self.mark_manual("Etapa dependeu de revisao manual no Shelly.")
         self.mark_attention("Ecossistema dependeu de revisao manual no Shelly.")
+
+    def _update_system_first(self, distro) -> None:
+        header(self, "Atualizar sistema", "Atualizando a base do sistema e pacotes instalados")
+        update_system(self.ctx.runner)
+        if distro.is_arch and distro.immutable:
+            self.ctx.logger.write(
+                f"{badge('info', Color.INFO)} SteamOS usa imagem read-only: atualize pela interface do sistema (steamos-update)."
+            )
+        elif distro.immutable:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} Atualizacao via rpm-ostree so vale apos reiniciar."
+            )
+        else:
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
 
     def status(self) -> None:
         header(self, "Status do ecossistema", "Resumo do que ja esta pronto antes das proximas etapas")
@@ -227,52 +247,10 @@ class ShellyStep(Step):
         )
 
 
-class UpdateSystemStep(Step):
-    id = "01"
-    title = "Atualizar sistema"
-
-    def apply(self) -> None:
-        header(self, self.title, "Atualizando a base do sistema e pacotes instalados")
-        distro = current_distro()
-        update_system(self.ctx.runner)
-        if distro.is_arch and distro.immutable:
-            self.mark_manual("SteamOS usa imagem read-only: atualize pela interface do sistema (steamos-update).")
-            return
-        if distro.immutable:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Atualizacao via rpm-ostree so vale apos reiniciar."
-            )
-        else:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
-        self.mark_done("Atualizacao do sistema executada.")
-
-    def status(self) -> None:
-        header(self, "Status sistema")
-        self.ctx.runner.run(["uname", "-r"], check=False)
-        updates_cmd = pending_updates_command()
-        updates = self.ctx.runner.run(
-            updates_cmd,
-            shell=True,
-            check=False,
-            action="Verificando atualizacoes pendentes",
-            quiet_success=True,
-        )
-        if updates and updates.stdout.strip():
-            self.ctx.logger.write(updates.stdout.rstrip())
-            self.mark_attention("Existem atualizacoes pendentes no sistema.")
-        else:
-            self.ctx.logger.write("Nenhuma atualizacao pendente detectada.")
-            self.mark_applied("Sistema sem atualizacoes pendentes.")
-
-    def undo(self) -> None:
-        self.ctx.logger.write(
-            "Nao ha undo seguro para uma atualizacao completa. Use snapshots se estiverem configurados."
-        )
-
-
 class LinuxToysStep(Step):
     id = "02"
     title = "Instalar Linux Toys"
+    description = "Instala o Linux Toys pelo script oficial (colecao de utilitarios e tweaks para o sistema)."
 
     def apply(self) -> None:
         header(self, self.title, "Instalando utilitarios do Linux Toys")

@@ -111,21 +111,21 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 
 | ID | Etapa | Objetivo |
 | --- | --- | --- |
-| `00` | Preparar ecossistema | Detecta a distro, prepara Flatpak/Flathub, suporte AppImage/FUSE e helper AUR quando aplicavel. |
-| `01` | Atualizar sistema | Atualiza pacotes via `pacman` ou `apt`. |
+| `00` | Atualizar e preparar o sistema | Primeiro atualiza os pacotes (pacman/apt/dnf) e depois prepara a base: Flatpak/Flathub, suporte AppImage/FUSE e helper AUR quando aplicavel. |
 | `02` | Linux Toys | Instala Linux Toys pelo script oficial. |
-| `03` | Navegador | Instala Firefox, FirefoxPWA e Bitwarden. |
+| `03` | Navegador e extensoes | Instala Firefox, FirefoxPWA e Bitwarden. |
 | `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
-| `05` | NVIDIA / jogos | Diagnostica sessao grafica, GPUs, Steam e Heroic. |
+| `05` | Validar NVIDIA / jogos / Steam | Diagnostica (nao instala) sessao grafica, GPUs, driver NVIDIA e Steam/Heroic. |
 | `06` | Git / GitHub | Instala Git, clona/atualiza o repositorio base e configura uma ou varias contas GitHub com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro). |
-| `07` | Google Drive | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
+| `07` | Google Drive / rclone | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
 | `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |
-| `10` | Apps | Instala Steam/Heroic, Flatpaks, Hydra AppImage, auto-cpufreq e Codex CLI. |
+| `10` | Apps / jogos / comunicacao / dev | Instala Steam/Heroic, comunicacao (Discord/ZapZap/TeamSpeak), Solaar/LocalSend/Flatseal, ONLYOFFICE, auto-cpufreq e Codex CLI. |
 | `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
 | `12` | Antigravity IDE | Instala Antigravity, atalho `.desktop` e comando `antigravity-ide`. |
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
 | `14` | Inventario de Hardware | Coleta CPU, RAM, GPUs, discos, PCI/USB e dmidecode/inxi e salva um relatorio estavel para suporte e para outras etapas consultarem. |
+| `15` | Atualizar AppImages | Instala/atualiza os AppImages geridos (Hydra Launcher e o proprio Reforja) a partir dos GitHub Releases, com atalho e icone. |
 
 ## Detalhes Importantes
 

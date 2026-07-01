@@ -248,6 +248,7 @@ class MainWindow(QMainWindow):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(Qt.CheckState.Unchecked)
                 item.setSizeHint(QSize(0, 32))
+                item.setToolTip(getattr(step, "description", ""))
                 self._list.addItem(item)
         self._list.currentRowChanged.connect(self._select_step)
         self._list.itemClicked.connect(self._on_item_clicked)
@@ -363,6 +364,22 @@ class MainWindow(QMainWindow):
         self._step_title.setText(step.title)
         # Undo so e oferecido quando o step de fato implementa o metodo.
         self._btn_undo.setEnabled("undo" in step.__dict__)
+        # Mostra a descricao da etapa no console (preview), sem perturbar execucao.
+        if self._worker is None:
+            self._show_step_info(step)
+
+    def _show_step_info(self, step) -> None:
+        self._stack.setCurrentWidget(self._console)
+        self._console.clear()
+        self._append(f"[info] {step.title}")
+        desc = getattr(step, "description", "") or "Sem descricao disponivel para esta etapa."
+        self._append(desc)
+        self._append("")
+        acoes = "Aplicar executa a etapa. Status apenas verifica o estado."
+        if "undo" in step.__dict__:
+            acoes += " Undo desfaz o que a etapa criou."
+        self._append(acoes)
+        self._append("Marque a(s) etapa(s) e clique em Aplicar / Status / Undo.")
 
     def _current_step(self) -> type | None:
         item = self._list.currentItem()
@@ -419,6 +436,7 @@ class MainWindow(QMainWindow):
     def _run_steps(self, action: str, steps: list[type]) -> None:
         if self._worker is not None or not steps:
             return
+        self._console.clear()  # descarta o preview da descricao antes de streamar a execucao
         self._queue = [(step, action) for step in steps]
         self._queue_total = len(self._queue)
         self._queue_action = action

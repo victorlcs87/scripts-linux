@@ -24,6 +24,7 @@ from ._common import header
 class BrowserStep(Step):
     id = "03"
     title = "Navegador e extensoes"
+    description = "Instala o Firefox, o FirefoxPWA (base para os WebApps) e o Bitwarden (Flatpak)."
 
     def apply(self) -> None:
         header(self, "Firefox sistema + FirefoxPWA + Bitwarden", "Preparando navegador principal e base para PWAs")
@@ -74,6 +75,10 @@ WEBAPPS = (
 class WebAppsStep(Step):
     id = "04"
     title = "WebApps"
+    description = (
+        "Cria atalhos de WebApp (ChatGPT e GSV Calendar) via FirefoxPWA, "
+        "com fallback para WebApp Manager ou atalho .desktop."
+    )
 
     def apply(self) -> None:
         header(self, "WebApps com FirefoxPWA, WebApp Manager ou fallback", "Criando atalhos e PWAs para uso diario")
