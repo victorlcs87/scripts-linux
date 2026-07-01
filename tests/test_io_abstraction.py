@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from reforja.core import Logger, Runner, confirm_phrase, prompt_user
+from reforja.core import Logger, Runner, clean_subprocess_env, confirm_phrase, prompt_user
 
 
 class FakeInteraction:
@@ -64,3 +64,19 @@ def test_interactive_executor_e_chamado(tmp_path: Path) -> None:
     assert result is not None
     assert result.returncode == 0
     assert chamadas == [["echo", "oi"]]
+
+
+def test_clean_subprocess_env_restaura_ld_library_path(monkeypatch) -> None:
+    # PyInstaller salva o valor original em LD_LIBRARY_PATH_ORIG.
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle/libs")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/usr/lib")
+    env = clean_subprocess_env()
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib"
+
+
+def test_clean_subprocess_env_noop_quando_nao_congelado(monkeypatch) -> None:
+    # Sem _ORIG e sem sys.frozen: nao altera nada (execucao normal do fonte).
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/qualquer")
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+    env = clean_subprocess_env()
+    assert env["LD_LIBRARY_PATH"] == "/qualquer"

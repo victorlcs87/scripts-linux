@@ -77,6 +77,24 @@ class MenuOption:
     display_key: str | None = None
 
 
+def clean_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Ambiente para lançar programas EXTERNOS (nao o proprio app).
+
+    Quando empacotado com PyInstaller, o app injeta LD_LIBRARY_PATH apontando para
+    as libs embutidas; se um subprocesso (Shelly, kdialog, flatpak...) herdar isso,
+    carrega a glib/gtk erradas e quebra. O PyInstaller salva o valor original em
+    <VAR>_ORIG — restauramos para os subprocessos usarem as libs do sistema.
+    """
+    env = dict(os.environ if base is None else base)
+    for var in ("LD_LIBRARY_PATH", "LD_PRELOAD", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"):
+        original = env.get(f"{var}_ORIG")
+        if original is not None:
+            env[var] = original
+        elif getattr(sys, "frozen", False):
+            env.pop(var, None)
+    return env
+
+
 def detect_user() -> UserInfo:
     name = os.environ.get("SUDO_USER") or os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
     entry = pwd.getpwnam(name)
@@ -315,7 +333,9 @@ class Runner:
                 "este ambiente bloqueia sudo porque NoNewPrivs=1. "
                 "Execute o reforja em uma sessao normal do seu sistema, fora de contêiner, sandbox ou terminal restrito."
             )
-        env = os.environ.copy()
+        # Ambiente limpo para subprocessos externos (evita quebrar apps do sistema
+        # ao vazar o LD_LIBRARY_PATH do AppImage/PyInstaller).
+        env = clean_subprocess_env()
         if env_extra:
             env.update(env_extra)
         sudo_flag = ""

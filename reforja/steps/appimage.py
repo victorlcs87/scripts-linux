@@ -8,6 +8,7 @@ from pathlib import Path
 from ..core import (
     Color,
     badge,
+    clean_subprocess_env,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
@@ -241,6 +242,7 @@ class UpdateAppImagesStep(Step):
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=clean_subprocess_env(),
             )
             api_stdout = api_proc.stdout
         except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -387,6 +389,7 @@ class UpdateAppImagesStep(Step):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            env=clean_subprocess_env(),
         )
         self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} relancado em segundo plano.")
 
