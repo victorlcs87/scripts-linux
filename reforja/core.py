@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -68,6 +68,10 @@ class StepRunResult:
     message: str
     compliance: str
     duration_seconds: float
+    applied_items: list[str] = field(default_factory=list)
+    missing_items: list[str] = field(default_factory=list)
+    attention_items: list[str] = field(default_factory=list)
+    hints: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

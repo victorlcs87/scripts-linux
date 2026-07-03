@@ -629,6 +629,71 @@ def test_render_status_overview_groups_applied_pending_attention(tmp_path: Path)
     assert "[atencao] 1" in log
 
 
+def test_render_status_overview_shows_items_hints_and_next_steps(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    results = [
+        StepRunResult(
+            "00",
+            "Ecossistema",
+            "done",
+            "Flatpak, flathub e AUR helper estao prontos.",
+            "aplicado",
+            0.1,
+            applied_items=["flatpak", "flathub", "yay"],
+        ),
+        StepRunResult(
+            "06",
+            "Fstab",
+            "done",
+            "Bloco esperado ainda nao esta presente no /etc/fstab.",
+            "pendente",
+            0.1,
+            missing_items=["bloco de montagem no fstab"],
+            hints=["rode Aplicar para gravar o bloco no fstab"],
+        ),
+        StepRunResult(
+            "12",
+            "Antigravity",
+            "done",
+            "Antigravity esta instalado, mas ~/.local/bin nao esta no PATH.",
+            "atencao",
+            0.1,
+            attention_items=["PATH sem ~/.local/bin"],
+        ),
+    ]
+
+    render_status_overview(logger, results, 13, 1.2)
+    log = logger.path.read_text(encoding="utf-8")
+
+    # Acionaveis primeiro: atencao antes de aplicado no corpo.
+    assert log.index("Antigravity") < log.index("Ecossistema")
+    # O que foi feito, o que falta e a sugestao aparecem.
+    assert "feito: flatpak, flathub, yay" in log
+    assert "falta: bloco de montagem no fstab" in log
+    assert "atencao: PATH sem ~/.local/bin" in log
+    assert "sugestao: rode Aplicar para gravar o bloco no fstab" in log
+    # Secao de proximos passos lista so o que nao esta aplicado.
+    assert "Proximos passos" in log
+    proximos = log[log.index("Proximos passos") :]
+    assert "Fstab" in proximos
+    assert "Antigravity" in proximos
+    assert "Ecossistema" not in proximos
+
+
+def test_render_status_overview_all_applied_reports_nothing_pending(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    results = [
+        StepRunResult("00", "Ecossistema", "done", "Tudo pronto.", "aplicado", 0.1),
+        StepRunResult("01", "Atualizacao", "done", "Sistema atualizado.", "aplicado", 0.1),
+    ]
+
+    render_status_overview(logger, results, 13, 0.5)
+    log = logger.path.read_text(encoding="utf-8")
+
+    assert "Tudo aplicado" in log
+    assert "Proximos passos" not in log
+
+
 def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = GpuStep(ctx)

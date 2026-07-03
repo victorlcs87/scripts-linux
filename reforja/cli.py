@@ -82,6 +82,10 @@ def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResu
         message=step.result.summary,
         compliance=step.result.compliance,
         duration_seconds=time.monotonic() - started,
+        applied_items=list(step.result.applied_items),
+        missing_items=list(step.result.missing_items),
+        attention_items=list(step.result.attention_items),
+        hints=list(step.result.hints),
     )
 
 
@@ -442,6 +446,11 @@ def render_status_overview(
         counts[compliance] += 1
         classified.append((item, compliance))
 
+    # Acionaveis primeiro: atencao > pendente > aplicado (ordem original dentro do grupo).
+    priority = {"atencao": 0, "pendente": 1, "aplicado": 2}
+    ordered = sorted(enumerate(classified), key=lambda pair: (priority[pair[1][1]], pair[0]))
+    tones = {"aplicado": Color.SUCCESS, "pendente": Color.WARNING, "atencao": Color.ERROR}
+
     logger.write("")
     logger.write(divider(char="#", tone=Color.TITLE))
     logger.write(paint("Resumo inteligente do status", Color.TITLE))
@@ -452,10 +461,40 @@ def render_status_overview(
     logger.write(f"{badge('atencao', Color.ERROR)} {counts['atencao']} etapa(s) com atencao")
     logger.write(paint(f"Executadas: {len(results)}/{total_steps}", Color.ACCENT))
     logger.write(divider(char="-", tone=Color.BOX))
-    for item, compliance in classified:
-        tone = {"aplicado": Color.SUCCESS, "pendente": Color.WARNING, "atencao": Color.ERROR}[compliance]
+
+    for _, (item, compliance) in ordered:
+        tone = tones[compliance]
         logger.write(f"{badge(compliance, tone)} {item.title}")
-        logger.write(paint(item.message, Color.MUTED))
+        logger.write(paint(f"  {item.message}", Color.MUTED))
+        if compliance == "aplicado":
+            if item.applied_items:
+                logger.write(paint(f"  feito: {', '.join(item.applied_items)}", Color.SUCCESS))
+        else:
+            for missing in item.missing_items:
+                logger.write(paint(f"  - falta: {missing}", Color.WARNING))
+            for attention in item.attention_items:
+                logger.write(paint(f"  - atencao: {attention}", Color.ERROR))
+        for hint in item.hints:
+            logger.write(f"  {paint('->', Color.ACCENT)} {paint(f'sugestao: {hint}', Color.ACCENT)}")
+
+    # Proximos passos: checklist do que ainda nao esta aplicado.
+    pending = [(item, compliance) for _, (item, compliance) in ordered if compliance != "aplicado"]
+    logger.write(divider(char="-", tone=Color.BOX))
+    if not pending:
+        logger.write(f"{badge('ok', Color.SUCCESS)} Tudo aplicado — nada pendente.")
+    else:
+        logger.write(paint("Proximos passos", Color.TITLE))
+        for item, compliance in pending:
+            if item.hints:
+                acao = item.hints[0]
+            elif item.missing_items:
+                acao = f"resolver: {', '.join(item.missing_items)}"
+            elif item.attention_items:
+                acao = f"revisar: {', '.join(item.attention_items)}"
+            else:
+                acao = "rode Aplicar nesta etapa"
+            logger.write(f"{badge(compliance, tones[compliance])} {item.title}")
+            logger.write(paint(f"  {acao}", Color.MUTED))
     logger.write(divider(char="#", tone=Color.TITLE))
 
 
