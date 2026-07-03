@@ -78,14 +78,14 @@ _NVIDIA_INSTALL: dict[str, list[str]] = {
 }
 
 
-class GpuGamingStep(Step):
+class GpuStep(Step):
     id = "05"
-    title = "Configurar GPU / jogos / Steam"
+    title = "Configurar GPU / drivers"
     description = (
         "Detecta o fabricante da GPU e instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; "
-        "NVIDIA: driver proprietario) e valida a sessao grafica, o Vulkan/OpenGL e a presenca de "
-        "Steam e Heroic. Em desktop de GPU unica ainda remove os residuos do fabricante ausente; "
-        "em laptop/hibrido nunca remove driver."
+        "NVIDIA: driver proprietario) e valida a sessao grafica, o OpenGL e o Vulkan. Em desktop de "
+        "GPU unica ainda remove os residuos do fabricante ausente; em laptop/hibrido nunca remove "
+        "driver. (Steam, Heroic e demais apps ficam no passo 10.)"
     )
 
     # Arquivos de sistema tocados na limpeza de residuos NVIDIA (somente Arch).
@@ -94,7 +94,7 @@ class GpuGamingStep(Step):
     _ENVIRONMENT = Path("/etc/environment")
 
     def apply(self) -> None:
-        header(self, self.title, "Configura os drivers da GPU e valida jogos/Steam")
+        header(self, self.title, "Instala e valida os drivers da GPU")
         vendors = hardware.gpu_vendors(self._list_gpus())
         distro = current_distro()
         present = vendors & {"amd", "nvidia"}
@@ -170,13 +170,13 @@ class GpuGamingStep(Step):
             if done:
                 self.mark_done(f"Concluido: {ok_count} OK e {warn_count} alerta(s).")
             if warn_count == 0:
-                self.mark_applied("GPU, sessao grafica e launchers estao conforme esperado.")
+                self.mark_applied("GPU e sessao grafica estao conforme esperado.")
             else:
                 self.mark_attention(f"Concluido com {warn_count} alerta(s), sem falhas criticas.")
         else:
             if done:
                 self.mark_done(f"Concluido com problemas: {problem_count} item(ns) exigem revisao.")
-            self.mark_attention(f"Ha {problem_count} item(ns) que exigem revisao na validacao de GPU/jogos.")
+            self.mark_attention(f"Ha {problem_count} item(ns) que exigem revisao na validacao de GPU.")
 
     # -- instalacao / remocao de drivers -------------------------------------
 
@@ -310,7 +310,6 @@ class GpuGamingStep(Step):
         if "amd" in vendors:
             results.append(self._probe_amdgpu())
             results.append(self._probe_radv())
-        results.extend(self._probe_launchers())
         return results
 
     def _probe_amdgpu(self) -> ProbeResult:
@@ -430,28 +429,6 @@ class GpuGamingStep(Step):
             self._truncate_probe_output(result),
         )
 
-    def _probe_launchers(self) -> list[ProbeResult]:
-        steam_system = any(system_installed(pkg) for pkg in ("steam", "steam-installer", "steam-launcher"))
-        heroic_system = any(system_installed(pkg) for pkg in ("heroic-games-launcher", "heroic-games-launcher-bin"))
-        heroic_flatpak = flatpak_installed("com.heroicgameslauncher.hgl")
-        probes: list[ProbeResult] = []
-        probes.append(
-            ProbeResult(
-                "Steam",
-                "ok" if steam_system else "warn",
-                "instalado." if steam_system else "ausente.",
-            )
-        )
-        heroic_installed = heroic_system or heroic_flatpak
-        probes.append(
-            ProbeResult(
-                "Heroic",
-                "ok" if heroic_installed else "warn",
-                "instalado." if heroic_installed else "ausente.",
-            )
-        )
-        return probes
-
     def _run_probe(self, cmd: list[str], action: str) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
@@ -466,7 +443,7 @@ class GpuGamingStep(Step):
             return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=str(exc))
 
     def _render_gpu_summary(self, results: list[ProbeResult]) -> None:
-        header(self, self.title, "Diagnostico amigavel de sessao grafica, GPUs e launchers")
+        header(self, self.title, "Diagnostico amigavel de sessao grafica e GPUs")
         tone_map = {
             "ok": Color.SUCCESS,
             "warn": Color.WARNING,
@@ -486,7 +463,7 @@ class GpuGamingStep(Step):
         problem_count = sum(1 for item in results if item.status == "problem")
         warn_count = sum(1 for item in results if item.status == "warn")
         if problem_count == 0 and warn_count == 0:
-            announce(self.ctx.logger, "done", "Tudo certo com sessao grafica, GPUs e launchers avaliados.")
+            announce(self.ctx.logger, "done", "Tudo certo com sessao grafica e GPUs avaliados.")
         elif problem_count == 0:
             announce(
                 self.ctx.logger,

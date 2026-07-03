@@ -115,7 +115,7 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 | `02` | Linux Toys | Instala Linux Toys pelo script oficial. |
 | `03` | Navegador e extensoes | Instala Firefox, FirefoxPWA e Bitwarden. |
 | `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
-| `05` | Configurar GPU / jogos / Steam | Detecta o fabricante (AMD/NVIDIA), instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; NVIDIA: proprietario) e valida sessao grafica, Vulkan/OpenGL e Steam/Heroic. Em desktop de GPU unica ainda remove os residuos do fabricante ausente (com confirmacao e backup); em laptop/hibrido nunca remove driver. |
+| `05` | Configurar GPU / drivers | Detecta o fabricante (AMD/NVIDIA), instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; NVIDIA: proprietario) e valida sessao grafica, OpenGL e Vulkan. Em desktop de GPU unica ainda remove os residuos do fabricante ausente (com confirmacao e backup); em laptop/hibrido nunca remove driver. (Steam/Heroic e demais apps sao do passo 10.) |
 | `06` | Git / GitHub | Instala Git, clona/atualiza o repositorio base e configura uma ou varias contas GitHub com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro). |
 | `07` | Google Drive / rclone | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |

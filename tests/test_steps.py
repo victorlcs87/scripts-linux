@@ -21,7 +21,7 @@ from reforja.steps import (
     FstabStep,
     GesturesStep,
     GitStep,
-    GpuGamingStep,
+    GpuStep,
     HardwareStep,
     NumLockStep,
     ShellyStep,
@@ -631,7 +631,7 @@ def test_render_status_overview_groups_applied_pending_attention(tmp_path: Path)
 
 def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
@@ -671,59 +671,14 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
     assert "OpenGL (GPU primaria): renderer detectado: Mesa Intel(R) Graphics." in log
     assert "GPU NVIDIA dedicada: renderer detectado: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2." in log
     assert "Driver NVIDIA: nvidia-smi respondeu corretamente" in log
-    assert "Tudo certo com sessao grafica, GPUs e launchers avaliados." in log
+    assert "Tudo certo com sessao grafica e GPUs avaliados." in log
+    assert "Steam" not in log  # launchers agora sao responsabilidade do passo 10
     assert "direct rendering: Yes" not in log
-
-
-def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
-
-    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
-    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "x11"})
-
-    def fake_run(cmd, *_args, **_kwargs):
-        if cmd == ["lspci"]:
-            return CompletedProcess(
-                cmd,
-                0,
-                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
-                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
-            )
-        if cmd == ["glxinfo", "-B"]:
-            return CompletedProcess(
-                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
-            )
-        if cmd == ["prime-run", "glxinfo", "-B"]:
-            return CompletedProcess(
-                cmd,
-                0,
-                stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 5050 Laptop GPU/PCIe/SSE2\n",
-            )
-        if cmd == ["nvidia-smi"]:
-            return CompletedProcess(cmd, 0, stdout="NVIDIA-SMI 610.43.02\n| 0 NVIDIA GeForce RTX 5050 Laptop GPU |\n")
-        if cmd == ["pacman", "-Q", "steam", "heroic-games-launcher"]:
-            return CompletedProcess(
-                cmd, 1, stdout="steam 1.0.0.85-7\nerror: package 'heroic-games-launcher' was not found\n"
-            )
-        raise AssertionError(cmd)
-
-    monkeypatch.setattr(step, "_run_probe", fake_run)
-    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: pkg == "steam")
-    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
-
-    step.status()
-    log = ctx.logger.path.read_text(encoding="utf-8")
-
-    assert "Steam: instalado." in log
-    assert "Heroic: ausente." in log
-    assert "Validacao parcialmente pronta" in log
-    assert "Problema(s) detectado(s)" not in log
 
 
 def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
@@ -762,7 +717,7 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
 
 def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
@@ -804,7 +759,7 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
 
 def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     def fake_exists(name: str) -> bool:
         return name != "nvidia-smi"
@@ -1196,7 +1151,7 @@ def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeyp
 
 def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 1)
@@ -1209,7 +1164,7 @@ def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path:
 
 def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 2)
@@ -1357,7 +1312,7 @@ def test_gpu_apply_installs_amd_and_removes_nvidia_residue(tmp_path: Path, monke
     from reforja.platform import Distro
 
     ctx = make_ctx(tmp_path)  # runner dry-run: confirm_phrase e pulado
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr(
         "reforja.steps.gaming.current_distro",
@@ -1418,7 +1373,7 @@ def test_gpu_apply_on_hybrid_laptop_keeps_both_drivers(tmp_path: Path, monkeypat
     from reforja.platform import Distro
 
     ctx = make_ctx(tmp_path)
-    step = GpuGamingStep(ctx)
+    step = GpuStep(ctx)
 
     monkeypatch.setattr(
         "reforja.steps.gaming.current_distro",
