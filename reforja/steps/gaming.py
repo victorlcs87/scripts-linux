@@ -83,8 +83,9 @@ class GpuGamingStep(Step):
     title = "Configurar GPU / jogos / Steam"
     description = (
         "Detecta o fabricante da GPU e instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; "
-        "NVIDIA: driver proprietario), remove os residuos do fabricante ausente e valida a sessao "
-        "grafica, o Vulkan/OpenGL e a presenca de Steam e Heroic."
+        "NVIDIA: driver proprietario) e valida a sessao grafica, o Vulkan/OpenGL e a presenca de "
+        "Steam e Heroic. Em desktop de GPU unica ainda remove os residuos do fabricante ausente; "
+        "em laptop/hibrido nunca remove driver."
     )
 
     # Arquivos de sistema tocados na limpeza de residuos NVIDIA (somente Arch).
@@ -109,12 +110,33 @@ class GpuGamingStep(Step):
             )
         for vendor in sorted(present):
             self._install_vendor(vendor, distro)
-        for vendor in sorted(absent):
-            self._remove_absent_vendor(vendor, distro)
+        if self._should_cleanup_absent(vendors):
+            for vendor in sorted(absent):
+                self._remove_absent_vendor(vendor, distro)
+        elif absent:
+            announce(
+                self.ctx.logger,
+                "info",
+                "Laptop/hibrido detectado: mantendo os drivers do outro fabricante (nao removo nada automaticamente).",
+            )
+            self.add_hint(
+                "Maquina hibrida (ou laptop): a limpeza automatica de driver so roda em desktop de GPU unica. "
+                "Se tiver certeza de que quer remover o driver do fabricante ausente, faca manualmente."
+            )
 
         results = self._collect_gpu_results(vendors)
         self._render_gpu_summary(results)
         self._finalize(results, done=True)
+
+    def _should_cleanup_absent(self, vendors: set[str]) -> bool:
+        """A remocao do fabricante ausente so e segura em desktop de GPU unica.
+
+        Em laptop (ou qualquer maquina com mais de um fabricante dedicado) nunca
+        removemos driver: hibridos precisam dos dois e a troca de GPU e rara.
+        """
+        if hardware.is_laptop():
+            return False
+        return len(vendors & {"amd", "nvidia"}) == 1
 
     def status(self) -> None:
         vendors = hardware.gpu_vendors(self._list_gpus())

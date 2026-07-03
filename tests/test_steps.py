@@ -1366,6 +1366,7 @@ def test_gpu_apply_installs_amd_and_removes_nvidia_residue(tmp_path: Path, monke
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
     monkeypatch.setattr("reforja.hardware.amdgpu_active", lambda: True)
+    monkeypatch.setattr("reforja.hardware.is_laptop", lambda: False)  # desktop de GPU unica: limpeza permitida
     monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: True)
     monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
@@ -1411,6 +1412,68 @@ def test_gpu_apply_installs_amd_and_removes_nvidia_residue(tmp_path: Path, monke
     assert "Fabricante(s) de GPU detectado(s): AMD." in log
     assert "Vulkan AMD (RADV): driver Vulkan RADV ativo." in log
     assert step.result.status == "done"
+
+
+def test_gpu_apply_on_hybrid_laptop_keeps_both_drivers(tmp_path: Path, monkeypatch) -> None:
+    from reforja.platform import Distro
+
+    ctx = make_ctx(tmp_path)
+    step = GpuGamingStep(ctx)
+
+    monkeypatch.setattr(
+        "reforja.steps.gaming.current_distro",
+        lambda: Distro(id="cachyos", id_like=("arch",), family="arch"),
+    )
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.hardware.is_laptop", lambda: True)  # laptop hibrido: nunca remove driver
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: True)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+
+    installed: list[str] = []
+    removed: list[list[str]] = []
+    cleaned: list[bool] = []
+    monkeypatch.setattr("reforja.steps.gaming.install_system_package", lambda pkg, runner: installed.append(pkg))
+    monkeypatch.setattr(
+        "reforja.steps.gaming.installed_packages_matching",
+        lambda needle: ["nvidia-utils"] if needle == "nvidia" else [],
+    )
+    monkeypatch.setattr(
+        "reforja.steps.gaming.remove_system_packages",
+        lambda pkgs, runner, **_kw: removed.append(list(pkgs)) or list(pkgs),
+    )
+    monkeypatch.setattr(step, "_clean_nvidia_system_files", lambda: cleaned.append(True))
+
+    def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
+        if cmd == ["glxinfo", "-B"]:
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
+            )
+        if cmd == ["prime-run", "glxinfo", "-B"]:
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: NVIDIA GeForce RTX 3050\n"
+            )
+        if cmd == ["nvidia-smi"]:
+            return CompletedProcess(cmd, 0, stdout="NVIDIA-SMI 610.43.02\n| 0 NVIDIA GeForce RTX 3050 |\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(step, "_run_probe", fake_run)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    # Instala o driver do fabricante presente (NVIDIA), mas NUNCA remove nada nem limpa initramfs.
+    assert "nvidia-utils" in installed
+    assert removed == []
+    assert cleaned == []
+    assert "Laptop/hibrido detectado" in log
 
 
 def test_hardware_has_touchpad_reads_input_devices(monkeypatch) -> None:
