@@ -219,7 +219,7 @@ def choose_step(logger: Logger, steps: list[type[Step]] | None = None) -> type[S
     return steps[index]
 
 
-def choose_action(logger: Logger) -> str | None:
+def choose_action(logger: Logger, steps: list[type[Step]]) -> str | None:
     options = [
         MenuOption("1", "Aplicar"),
         MenuOption("2", "Status"),
@@ -228,10 +228,11 @@ def choose_action(logger: Logger) -> str | None:
     actions = ["apply", "status", "undo"]
     try:
         index = choose_option(
-            title="Acao",
+            title=f"Acao para {len(steps)} etapa(s) selecionada(s)",
             logger=logger,
             prompt="Qual acao aplicar nas etapas selecionadas",
             options=options,
+            detail="Etapas selecionadas: " + ", ".join(step_cls.title for step_cls in steps),
             prompt_label="Acao",
         )
     except (PromptInterruptedError, TuiDependencyError) as exc:
@@ -250,14 +251,17 @@ def select_and_run(logger: Logger) -> None:
             logger=logger,
             prompt="Quais etapas",
             options=options,
-            detail="Marque com espaco as etapas desejadas; vazio = todas.",
+            detail="Marque com espaco as etapas desejadas. Sem nada marcado, nada sera executado.",
         )
     except (PromptInterruptedError, TuiDependencyError) as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
         return
-    chosen = [ALL_STEPS[i] for i in indices] if indices else list(ALL_STEPS)
+    chosen = [ALL_STEPS[i] for i in indices]
+    if not chosen:
+        logger.write(f"{badge('aviso', Color.WARNING)} Nenhuma etapa marcada; nada a executar.")
+        return
     clear_screen()
-    action = choose_action(logger)
+    action = choose_action(logger, chosen)
     if action is None:
         return
     run_steps(chosen, action, logger)

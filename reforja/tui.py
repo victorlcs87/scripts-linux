@@ -121,10 +121,10 @@ def _choose_multiple_tty(
         selected = inquirer.checkbox(
             message=prompt,
             choices=[
-                {"name": f"{option.display_key or option.key}. {option.label}", "value": index, "enabled": True}
+                {"name": f"{option.display_key or option.key}. {option.label}", "value": index, "enabled": False}
                 for index, option in enumerate(options)
             ],
-            instruction="espaco marca/desmarca | Enter confirma",
+            instruction="espaco marca/desmarca | Enter confirma | nada marcado = nada",
             style=style,
             cycle=True,
         ).execute()
@@ -146,14 +146,14 @@ def _choose_multiple_fallback(
     print(render_menu(title, logger, options, footer=footer))
     while True:
         answer = prompt_user(
-            f"{prompt} (numeros separados por virgula; vazio = todas)",
+            f"{prompt} (numeros separados por virgula; vazio = nenhuma)",
             logger,
             detail=detail,
             prompt_label=prompt_label,
             allow_empty=True,
         ).strip()
         if not answer:
-            return list(range(len(options)))
+            return []
         keys = [piece.strip() for piece in answer.split(",") if piece.strip()]
         indices: list[int] = []
         valid = True

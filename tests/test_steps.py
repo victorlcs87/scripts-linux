@@ -13,7 +13,7 @@ from reforja.cli import (
     select_and_run,
     step_menu,
 )
-from reforja.core import Logger, PromptInterruptedError, Runner, StepRunResult, UserInfo
+from reforja.core import Logger, MenuOption, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from reforja.steps import (
     ALL_STEPS,
     AntigravityStep,
@@ -1223,7 +1223,7 @@ def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> N
     # marca apenas a etapa 15 (Atualizar AppImages) pela posicao na lista
     target_index = next(i for i, s in enumerate(ALL_STEPS) if s.id == "15")
     monkeypatch.setattr("reforja.cli.choose_multiple", lambda **_kwargs: [target_index])
-    monkeypatch.setattr("reforja.cli.choose_action", lambda _logger: "apply")
+    monkeypatch.setattr("reforja.cli.choose_action", lambda *_a, **_k: "apply")
     monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger: ran.append((steps, action)))
 
     select_and_run(logger)
@@ -1232,6 +1232,39 @@ def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> N
     steps, action = ran[0]
     assert [s.id for s in steps] == ["15"]
     assert action == "apply"
+
+
+def test_select_and_run_does_nothing_when_no_step_selected(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    ran: list[tuple] = []
+
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_multiple", lambda **_kwargs: [])  # nada marcado
+    monkeypatch.setattr("reforja.cli.run_steps", lambda *_a, **_k: ran.append(_a))
+
+    select_and_run(logger)
+
+    assert ran == []  # nada foi executado
+    assert "Nenhuma etapa marcada" in logger.path.read_text(encoding="utf-8")
+
+
+def test_choose_multiple_fallback_empty_answer_selects_none(tmp_path: Path, monkeypatch) -> None:
+    from reforja import tui
+
+    logger = Logger(tmp_path, "test")
+    monkeypatch.setattr("reforja.tui.prompt_user", lambda *_a, **_k: "")  # Enter sem digitar nada
+
+    result = tui._choose_multiple_fallback(
+        title="Executar etapas",
+        logger=logger,
+        prompt="Quais etapas",
+        options=[MenuOption("1", "A"), MenuOption("2", "B")],
+        footer=None,
+        detail=None,
+        prompt_label="Selecione",
+    )
+
+    assert result == []
 
 
 def test_step_menu_runs_selected_action(tmp_path: Path, monkeypatch) -> None:
