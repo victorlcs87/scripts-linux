@@ -13,6 +13,7 @@ from ..core import (
     backup_existing,
     badge,
     command_exists,
+    confirm_phrase,
     paint,
     print_lines,
     write_text,
@@ -25,59 +26,306 @@ from ..installers import (
     install_flatpak,
     install_system_or_aur,
     install_system_package,
+    installed_packages_matching,
     npm_global_installed,
+    remove_system_packages,
     system_installed,
 )
 from ..platform import current_distro
 from ..steps_base import Step
 from ._common import ProbeResult, header
 
+# Pacotes de driver por fabricante e familia de distro. Em Arch, os `lib32-*`
+# dependem do repositorio [multilib] habilitado (padrao no CachyOS).
+_AMD_INSTALL: dict[str, list[str]] = {
+    "arch": [
+        "mesa",
+        "lib32-mesa",
+        "vulkan-radeon",
+        "lib32-vulkan-radeon",
+        "libva-mesa-driver",
+        "lib32-libva-mesa-driver",
+        "mesa-vdpau",
+        "lib32-mesa-vdpau",
+        "vulkan-tools",
+        "mesa-utils",
+    ],
+    "fedora": [
+        "mesa-vulkan-drivers",
+        "mesa-vulkan-drivers.i686",
+        "mesa-va-drivers",
+        "mesa-vdpau-drivers",
+        "vulkan-tools",
+        "glx-utils",
+    ],
+    "debian": [
+        "mesa-vulkan-drivers",
+        "mesa-va-drivers",
+        "mesa-vdpau-drivers",
+        "vulkan-tools",
+        "mesa-utils",
+    ],
+}
 
-class NvidiaSteamStep(Step):
+# Pacotes AMD-especificos que o step gerencia/remove. Nao inclui `mesa` (generico,
+# tambem usado por Intel): removê-lo quebraria a GPU integrada.
+_AMD_SPECIFIC: list[str] = ["vulkan-radeon", "lib32-vulkan-radeon"]
+
+_NVIDIA_INSTALL: dict[str, list[str]] = {
+    "arch": ["nvidia-utils", "lib32-nvidia-utils", "opencl-nvidia", "nvidia-settings"],
+    "fedora": ["akmod-nvidia", "xorg-x11-drv-nvidia-cuda"],
+    "debian": ["nvidia-driver"],
+}
+
+
+class GpuGamingStep(Step):
     id = "05"
-    title = "Validar NVIDIA / jogos / Steam"
+    title = "Configurar GPU / jogos / Steam"
     description = (
-        "Apenas diagnostico (nao instala nada): checa a sessao grafica, as GPUs (Intel/NVIDIA), "
-        "o driver NVIDIA e a presenca de Steam e Heroic, apontando o que precisa de atencao."
+        "Detecta o fabricante da GPU e instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; "
+        "NVIDIA: driver proprietario), remove os residuos do fabricante ausente e valida a sessao "
+        "grafica, o Vulkan/OpenGL e a presenca de Steam e Heroic."
     )
 
+    # Arquivos de sistema tocados na limpeza de residuos NVIDIA (somente Arch).
+    _MKINITCPIO = Path("/etc/mkinitcpio.conf")
+    _NVIDIA_MODPROBE = Path("/etc/modprobe.d/nvidia-drm.conf")
+    _ENVIRONMENT = Path("/etc/environment")
+
     def apply(self) -> None:
-        results = self._collect_gpu_results()
+        header(self, self.title, "Configura os drivers da GPU e valida jogos/Steam")
+        vendors = hardware.gpu_vendors(self._list_gpus())
+        distro = current_distro()
+        present = vendors & {"amd", "nvidia"}
+        absent = {"amd", "nvidia"} - vendors
+        self.ctx.logger.write(
+            f"Fabricante(s) de GPU detectado(s): {', '.join(sorted(present)).upper() or 'nenhum dedicado (apenas integrada?)'}."
+        )
+        if not present:
+            announce(
+                self.ctx.logger,
+                "warning",
+                "Nenhuma GPU dedicada AMD/NVIDIA detectada; pulando instalacao de driver dedicado.",
+            )
+        for vendor in sorted(present):
+            self._install_vendor(vendor, distro)
+        for vendor in sorted(absent):
+            self._remove_absent_vendor(vendor, distro)
+
+        results = self._collect_gpu_results(vendors)
         self._render_gpu_summary(results)
+        self._finalize(results, done=True)
+
+    def status(self) -> None:
+        vendors = hardware.gpu_vendors(self._list_gpus())
+        results = self._collect_gpu_results(vendors)
+        self._render_gpu_summary(results)
+        self._finalize(results, done=False)
+
+    def undo(self) -> None:
+        self.ctx.logger.write(
+            "Undo remove os pacotes Vulkan AMD adicionados pelo apply. NAO reinstala drivers de um "
+            "fabricante removido nem reverte o initramfs (os backups .backup-pos-formatacao-* ficam em /etc)."
+        )
+        distro = current_distro()
+        if distro.is_arch:
+            targets = [pkg for pkg in _AMD_SPECIFIC if system_installed(pkg)]
+            if targets:
+                remove_system_packages(targets, self.ctx.runner)
+            else:
+                announce(self.ctx.logger, "skipped", "nenhum pacote Vulkan AMD para remover")
+        else:
+            announce(
+                self.ctx.logger, "skipped", "undo automatico so cobre Arch; ajuste manualmente nas outras familias"
+            )
+        self.add_hint("Trocou de GPU? Reinstale o driver do hardware atual manualmente (ex.: rode este step de novo).")
+
+    def _finalize(self, results: list[ProbeResult], *, done: bool) -> None:
         ok_count = sum(1 for item in results if item.status == "ok")
         warn_count = sum(1 for item in results if item.status == "warn")
         problem_count = sum(1 for item in results if item.status == "problem")
         if problem_count == 0:
-            self.mark_done(f"Validacao concluida: {ok_count} OK e {warn_count} alerta(s).")
+            if done:
+                self.mark_done(f"Concluido: {ok_count} OK e {warn_count} alerta(s).")
             if warn_count == 0:
-                self.mark_applied("Sessao grafica, GPUs e launchers estao conforme esperado.")
+                self.mark_applied("GPU, sessao grafica e launchers estao conforme esperado.")
             else:
-                self.mark_attention(f"Validacao concluida com {warn_count} alerta(s), sem falhas criticas.")
+                self.mark_attention(f"Concluido com {warn_count} alerta(s), sem falhas criticas.")
         else:
-            self.mark_done(f"Validacao concluida com problemas: {problem_count} item(ns) exigem revisao.")
+            if done:
+                self.mark_done(f"Concluido com problemas: {problem_count} item(ns) exigem revisao.")
             self.mark_attention(f"Ha {problem_count} item(ns) que exigem revisao na validacao de GPU/jogos.")
 
-    def status(self) -> None:
-        results = self._collect_gpu_results()
-        self._render_gpu_summary(results)
-        warn_count = sum(1 for item in results if item.status == "warn")
-        problem_count = sum(1 for item in results if item.status == "problem")
-        if problem_count == 0:
-            if warn_count == 0:
-                self.mark_applied("Sessao grafica, GPUs e launchers estao conforme esperado.")
-            else:
-                self.mark_attention(f"Validacao concluida com {warn_count} alerta(s), sem falhas criticas.")
-        else:
-            self.mark_attention(f"Ha {problem_count} item(ns) que exigem revisao na validacao de GPU/jogos.")
+    # -- instalacao / remocao de drivers -------------------------------------
 
-    def _collect_gpu_results(self) -> list[ProbeResult]:
-        return [
-            self._probe_session_type(),
-            self._probe_integrated_gl(),
-            self._probe_prime_gl(),
-            self._probe_nvidia_smi(),
-            *self._probe_launchers(),
-        ]
+    def _install_vendor(self, vendor: str, distro) -> None:
+        announce(self.ctx.logger, "info", f"Instalando drivers para GPU {vendor.upper()}.")
+        if distro.immutable:
+            announce(
+                self.ctx.logger,
+                "warning",
+                "Sistema imutavel: drivers nativos sao pulados (use a imagem base/Flatpak).",
+            )
+            return
+        if vendor == "amd":
+            for pkg in _AMD_INSTALL.get(distro.family, []):
+                install_system_package(pkg, self.ctx.runner)
+        elif vendor == "nvidia":
+            self._install_nvidia(distro)
+
+    def _install_nvidia(self, distro) -> None:
+        if distro.is_fedora:
+            ensure_rpmfusion(self.ctx.runner)
+        for pkg in _NVIDIA_INSTALL.get(distro.family, []):
+            install_system_package(pkg, self.ctx.runner)
+        if distro.is_arch:
+            # Modulo do kernel: a variante -open-dkms funciona em qualquer kernel.
+            install_system_or_aur("nvidia-open-dkms", "nvidia-open-dkms", self.ctx.runner)
+            self.add_hint(
+                "No CachyOS o modulo NVIDIA ideal e o casado com o kernel "
+                "(ex.: linux-cachyos-nvidia-open). Se preferir, instale-o no lugar do -dkms."
+            )
+
+    def _remove_absent_vendor(self, vendor: str, distro) -> None:
+        if vendor == "amd":
+            targets = [pkg for pkg in _AMD_SPECIFIC if system_installed(pkg)]
+        else:  # nvidia: varre todos os residuos, nao so uma lista fixa.
+            targets = installed_packages_matching("nvidia")
+        if not targets:
+            return
+        announce(
+            self.ctx.logger,
+            "warning",
+            f"GPU {vendor.upper()} nao esta presente, mas ha {len(targets)} pacote(s) residual(is): {', '.join(targets)}.",
+        )
+        phrase = f"REMOVER-{vendor.upper()}"
+        if not self.ctx.runner.dry_run and not confirm_phrase(phrase, self.ctx.logger):
+            self.add_hint(f"Remocao dos residuos {vendor.upper()} cancelada; rode de novo quando quiser limpar.")
+            return
+        remove_system_packages(targets, self.ctx.runner)
+        if vendor == "nvidia" and distro.is_arch:
+            self._clean_nvidia_system_files()
+
+    def _clean_nvidia_system_files(self) -> None:
+        self._clean_mkinitcpio_modules()
+        self._remove_nvidia_modprobe()
+        self._clean_environment_gl()
+        self._regenerate_initramfs()
+
+    def _clean_mkinitcpio_modules(self) -> None:
+        try:
+            text = self._MKINITCPIO.read_text(encoding="utf-8")
+        except OSError:
+            return
+        match = re.search(r"^MODULES=\((.*?)\)", text, re.MULTILINE | re.DOTALL)
+        if not match:
+            return
+        tokens = match.group(1).split()
+        kept = [tok for tok in tokens if not tok.lower().startswith("nvidia")]
+        if len(kept) == len(tokens):
+            announce(self.ctx.logger, "skipped", "mkinitcpio.conf ja esta sem modulos NVIDIA")
+            return
+        new_line = "MODULES=(" + " ".join(kept) + ")"
+        new_text = text[: match.start()] + new_line + text[match.end() :]
+        backup_existing(self._MKINITCPIO, self.ctx.runner, sudo=True)
+        write_text_sudo(self._MKINITCPIO, new_text, self.ctx.runner)
+
+    def _remove_nvidia_modprobe(self) -> None:
+        if not self._NVIDIA_MODPROBE.exists():
+            return
+        backup_existing(self._NVIDIA_MODPROBE, self.ctx.runner, sudo=True)
+        self.ctx.runner.run(
+            ["rm", "-f", str(self._NVIDIA_MODPROBE)],
+            sudo=True,
+            check=False,
+            action="Removendo nvidia-drm.conf",
+            show_progress=False,
+        )
+
+    def _clean_environment_gl(self) -> None:
+        try:
+            text = self._ENVIRONMENT.read_text(encoding="utf-8")
+        except OSError:
+            return
+        lines = text.splitlines()
+        kept = [ln for ln in lines if "__gl_" not in ln.lower() and "nvidia shader cache" not in ln.lower()]
+        if len(kept) == len(lines):
+            return
+        backup_existing(self._ENVIRONMENT, self.ctx.runner, sudo=True)
+        new_text = "\n".join(kept)
+        if text.endswith("\n"):
+            new_text += "\n"
+        write_text_sudo(self._ENVIRONMENT, new_text, self.ctx.runner)
+
+    def _regenerate_initramfs(self) -> None:
+        if not command_exists("mkinitcpio"):
+            self.add_hint("mkinitcpio nao encontrado; regenere o initramfs manualmente apos a limpeza.")
+            return
+        self.ctx.runner.run(
+            ["mkinitcpio", "-P"],
+            sudo=True,
+            action="Regenerando initramfs",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o mkinitcpio pode pedir senha do sudo. Isso nao e travamento.",
+        )
+
+    # -- validacao ------------------------------------------------------------
+
+    def _list_gpus(self) -> list[str]:
+        if not command_exists("lspci"):
+            return []
+        result = self._run_probe(["lspci"], "Listando dispositivos PCI")
+        if result.returncode != 0:
+            return []
+        return hardware.list_gpus(result.stdout)
+
+    def _collect_gpu_results(self, vendors: set[str]) -> list[ProbeResult]:
+        results = [self._probe_session_type(), self._probe_integrated_gl()]
+        if "nvidia" in vendors:
+            results.append(self._probe_prime_gl())
+            results.append(self._probe_nvidia_smi())
+        if "amd" in vendors:
+            results.append(self._probe_amdgpu())
+            results.append(self._probe_radv())
+        results.extend(self._probe_launchers())
+        return results
+
+    def _probe_amdgpu(self) -> ProbeResult:
+        if hardware.amdgpu_active():
+            return ProbeResult("Driver AMD (amdgpu)", "ok", "modulo amdgpu carregado.")
+        return ProbeResult(
+            "Driver AMD (amdgpu)",
+            "problem",
+            "modulo amdgpu nao esta carregado.",
+            "Verifique dmesg e se o firmware amdgpu (linux-firmware) esta instalado.",
+        )
+
+    def _probe_radv(self) -> ProbeResult:
+        if not system_installed("vulkan-radeon"):
+            return ProbeResult(
+                "Vulkan AMD (RADV)",
+                "problem",
+                "pacote vulkan-radeon ausente.",
+                "Instale vulkan-radeon (e lib32-vulkan-radeon) para Vulkan em jogos/Proton.",
+            )
+        if not command_exists("vulkaninfo"):
+            return ProbeResult(
+                "Vulkan AMD (RADV)",
+                "warn",
+                "vulkan-radeon instalado, mas vulkaninfo ausente para confirmar.",
+                "Instale vulkan-tools para validar o Vulkan.",
+            )
+        result = self._run_probe(["vulkaninfo", "--summary"], "Consultando Vulkan (RADV)")
+        output = self._combined_output(result).lower()
+        if result.returncode == 0 and ("radv" in output or "amd radeon" in output):
+            return ProbeResult("Vulkan AMD (RADV)", "ok", "driver Vulkan RADV ativo.")
+        return ProbeResult(
+            "Vulkan AMD (RADV)",
+            "warn",
+            "vulkaninfo nao confirmou o RADV.",
+            self._truncate_probe_output(result),
+        )
 
     def _probe_session_type(self) -> ProbeResult:
         session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()

@@ -10,6 +10,8 @@ from .platform import (
     install_first_available,
     install_system_or_aur,
     install_system_package,
+    installed_packages_matching,
+    remove_system_packages,
     system_installed,
     system_package_exists,
 )
@@ -89,7 +91,9 @@ __all__ = [
     "install_pacman",
     "install_system_or_aur",
     "install_system_package",
+    "installed_packages_matching",
     "npm_global_installed",
+    "remove_system_packages",
     "pacman_exists",
     "pacman_installed",
     "remove_flatpak",

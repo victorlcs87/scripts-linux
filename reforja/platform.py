@@ -236,6 +236,96 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
     return False
 
 
+def installed_packages_matching(needle: str) -> list[str]:
+    """Lista pacotes instalados cujo nome contem `needle` (somente leitura).
+
+    Usado para varrer residuos de driver (ex.: todos os pacotes 'nvidia') sem
+    depender de uma lista fixa. Degrada para lista vazia se faltar o gerenciador.
+    """
+    distro = current_distro()
+    needle = needle.lower()
+    if distro.is_arch:
+        if shutil.which("pacman") is None:
+            return []
+        cmd = ["pacman", "-Qq"]
+    elif distro.is_fedora:
+        if shutil.which("rpm") is None:
+            return []
+        cmd = ["rpm", "-qa", "--qf", "%{NAME}\n"]
+    elif distro.is_debian:
+        if shutil.which("dpkg-query") is None:
+            return []
+        cmd = ["dpkg-query", "-W", "-f=${Package}\n"]
+    else:
+        return []
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, check=False)
+    if result.returncode != 0:
+        return []
+    return sorted({line.strip() for line in result.stdout.splitlines() if needle in line.strip().lower()})
+
+
+def remove_system_packages(pkgs: list[str], runner: Runner, *, purge_deps: bool = True) -> list[str]:
+    """Remove pacotes nativos (filtrando os que estao instalados). Retorna os removidos.
+
+    No-op em sistemas imutaveis. No Arch usa `-Rns` (remove deps orfaos e configs)
+    quando purge_deps; caso contrario `-R`.
+    """
+    installed = [pkg for pkg in pkgs if system_installed(pkg)]
+    if not installed:
+        announce(runner.logger, "skipped", "nenhum pacote a remover (ja ausentes)")
+        return []
+    distro = current_distro()
+    if distro.immutable:
+        announce(
+            runner.logger,
+            "warning",
+            f"sistema imutavel: pulando remocao nativa de {', '.join(installed)}. Ajuste via rpm-ostree se necessario.",
+        )
+        return []
+    if distro.is_arch:
+        flag = "-Rns" if purge_deps else "-R"
+        runner.run(
+            ["pacman", flag, *installed],
+            sudo=True,
+            action=f"Removendo {len(installed)} pacote(s) com pacman",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o pacman pode pedir senha do sudo e confirmacao da remocao.",
+        )
+        return installed
+    if distro.is_fedora:
+        runner.run(
+            ["dnf", "remove", "-y", *installed],
+            sudo=True,
+            action=f"Removendo {len(installed)} pacote(s) com dnf",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o dnf pode pedir senha do sudo e confirmacao da remocao.",
+        )
+        return installed
+    if distro.is_debian:
+        runner.run(
+            ["apt-get", "remove", "-y", *installed],
+            sudo=True,
+            action=f"Removendo {len(installed)} pacote(s) com apt",
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Comando interativo: o apt pode pedir senha do sudo e confirmacao da remocao.",
+        )
+        if purge_deps:
+            runner.run(
+                ["apt-get", "autoremove", "-y"],
+                sudo=True,
+                check=False,
+                action="Removendo dependencias orfas com apt",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o apt pode pedir senha do sudo.",
+            )
+        return installed
+    raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")
+
+
 def update_system(runner: Runner) -> None:
     distro = current_distro()
     if distro.is_fedora and distro.immutable:

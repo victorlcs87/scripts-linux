@@ -21,9 +21,9 @@ from reforja.steps import (
     FstabStep,
     GesturesStep,
     GitStep,
+    GpuGamingStep,
     HardwareStep,
     NumLockStep,
-    NvidiaSteamStep,
     ShellyStep,
     SunshineStep,
     UpdateAppImagesStep,
@@ -631,12 +631,19 @@ def test_render_status_overview_groups_applied_pending_attention(tmp_path: Path)
 
 def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
         if cmd == ["glxinfo", "-B"]:
             return CompletedProcess(
                 cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
@@ -670,12 +677,19 @@ def test_gpu_status_renders_friendly_summary_when_everything_is_ok(tmp_path: Pat
 
 def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "x11"})
 
     def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
         if cmd == ["glxinfo", "-B"]:
             return CompletedProcess(
                 cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
@@ -709,12 +723,19 @@ def test_gpu_status_marks_missing_heroic_as_warning_only(tmp_path: Path, monkeyp
 
 def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
         if cmd == ["glxinfo", "-B"]:
             return CompletedProcess(
                 cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
@@ -741,12 +762,19 @@ def test_gpu_status_shows_short_details_when_prime_run_fails(tmp_path: Path, mon
 
 def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
         if cmd == ["glxinfo", "-B"]:
             return CompletedProcess(
                 cmd, 0, stdout="direct rendering: No\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
@@ -776,7 +804,7 @@ def test_gpu_status_flags_missing_direct_rendering(tmp_path: Path, monkeypatch) 
 
 def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     def fake_exists(name: str) -> bool:
         return name != "nvidia-smi"
@@ -785,6 +813,13 @@ def test_gpu_status_marks_missing_nvidia_smi_as_problem(tmp_path: Path, monkeypa
     monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
 
     def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="00:02.0 VGA compatible controller: Intel UHD Graphics 630\n"
+                "01:00.0 3D controller: NVIDIA Corporation GA107M [GeForce RTX 3050]\n",
+            )
         if cmd == ["glxinfo", "-B"]:
             return CompletedProcess(
                 cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: Mesa Intel(R) Graphics\n"
@@ -1161,7 +1196,7 @@ def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeyp
 
 def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 1)
@@ -1174,7 +1209,7 @@ def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path:
 
 def test_gpu_prime_probe_warns_on_hybrid_machine_without_prime_run(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = NvidiaSteamStep(ctx)
+    step = GpuGamingStep(ctx)
 
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: name != "prime-run")
     monkeypatch.setattr(step, "_gpu_count", lambda: 2)
@@ -1296,6 +1331,86 @@ def test_hardware_nvidia_gpu_name_extracts_from_smi() -> None:
 
     assert hardware.nvidia_gpu_name(smi) == "0 NVIDIA GeForce RTX 3050 Off | 00000000:01:00.0"
     assert hardware.nvidia_gpu_name("nada aqui") is None
+
+
+def test_hardware_gpu_vendors_classifies_amd_nvidia_intel() -> None:
+    assert hardware.gpu_vendors(["Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 [Radeon RX 9070 XT]"]) == {"amd"}
+    assert hardware.gpu_vendors(["NVIDIA Corporation GA107M [GeForce RTX 3050]"]) == {"nvidia"}
+    assert hardware.gpu_vendors(["Intel UHD Graphics 630"]) == {"intel"}
+    assert hardware.gpu_vendors(["Intel UHD Graphics 630", "NVIDIA Corporation GA107M [GeForce RTX 3050]"]) == {
+        "intel",
+        "nvidia",
+    }
+    assert hardware.gpu_vendors([]) == set()
+
+
+def test_hardware_amd_gpu_name_extracts_from_lspci() -> None:
+    lspci = (
+        "00:1f.3 Audio device: Intel Cannon Lake PCH cAVS\n"
+        "0c:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 [Radeon RX 9070 XT]\n"
+    )
+    assert hardware.amd_gpu_name(lspci) == "Advanced Micro Devices, Inc. [AMD/ATI] Navi 48 [Radeon RX 9070 XT]"
+    assert hardware.amd_gpu_name("Intel UHD Graphics 630") is None
+
+
+def test_gpu_apply_installs_amd_and_removes_nvidia_residue(tmp_path: Path, monkeypatch) -> None:
+    from reforja.platform import Distro
+
+    ctx = make_ctx(tmp_path)  # runner dry-run: confirm_phrase e pulado
+    step = GpuGamingStep(ctx)
+
+    monkeypatch.setattr(
+        "reforja.steps.gaming.current_distro",
+        lambda: Distro(id="cachyos", id_like=("arch",), family="arch"),
+    )
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.gaming.os.environ", {"XDG_SESSION_TYPE": "wayland"})
+    monkeypatch.setattr("reforja.hardware.amdgpu_active", lambda: True)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: True)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+
+    installed: list[str] = []
+    removed: list[list[str]] = []
+    cleaned: list[bool] = []
+    monkeypatch.setattr("reforja.steps.gaming.install_system_package", lambda pkg, runner: installed.append(pkg))
+    monkeypatch.setattr(
+        "reforja.steps.gaming.installed_packages_matching",
+        lambda needle: ["nvidia-utils", "linux-cachyos-nvidia-open"] if needle == "nvidia" else [],
+    )
+    monkeypatch.setattr(
+        "reforja.steps.gaming.remove_system_packages",
+        lambda pkgs, runner, **_kw: removed.append(list(pkgs)) or list(pkgs),
+    )
+    monkeypatch.setattr(step, "_clean_nvidia_system_files", lambda: cleaned.append(True))
+
+    def fake_run(cmd, *_args, **_kwargs):
+        if cmd == ["lspci"]:
+            return CompletedProcess(
+                cmd,
+                0,
+                stdout="0c:00.0 VGA compatible controller: Advanced Micro Devices, Inc. [AMD/ATI] "
+                "Navi 48 [Radeon RX 9070 XT]\n",
+            )
+        if cmd == ["glxinfo", "-B"]:
+            return CompletedProcess(
+                cmd, 0, stdout="direct rendering: Yes\nOpenGL renderer string: AMD Radeon RX 9070 XT (radeonsi)\n"
+            )
+        if cmd == ["vulkaninfo", "--summary"]:
+            return CompletedProcess(cmd, 0, stdout="driverName = radv\ndeviceName = AMD Radeon RX 9070 XT\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(step, "_run_probe", fake_run)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "vulkan-radeon" in installed
+    assert "lib32-vulkan-radeon" in installed
+    assert removed == [["nvidia-utils", "linux-cachyos-nvidia-open"]]
+    assert cleaned == [True]
+    assert "Fabricante(s) de GPU detectado(s): AMD." in log
+    assert "Vulkan AMD (RADV): driver Vulkan RADV ativo." in log
+    assert step.result.status == "done"
 
 
 def test_hardware_has_touchpad_reads_input_devices(monkeypatch) -> None:

@@ -15,6 +15,12 @@ from .steps_base import StepContext
 # Tipos de chassi do DMI que indicam notebook/portatil (SMBIOS spec).
 _LAPTOP_CHASSIS = {8, 9, 10, 11, 14, 30, 31, 32}
 
+# Marcadores de fabricante nas linhas do lspci. `amd`/`ati` usam limite de palavra
+# para nao casar dentro de "Corporation" (ati) ou nomes soltos.
+_AMD_RE = re.compile(r"\bamd\b|\bati\b|radeon|navi|vega|\brx\b", re.IGNORECASE)
+_NVIDIA_RE = re.compile(r"nvidia|geforce|\brtx\b|\bgtx\b|quadro|tesla", re.IGNORECASE)
+_INTEL_RE = re.compile(r"\bintel\b", re.IGNORECASE)
+
 
 def report_path(user: UserInfo) -> Path:
     """Caminho estavel do inventario, consumivel por outras etapas."""
@@ -29,6 +35,8 @@ class HardwareFacts:
     has_nvidia: bool = False
     nvidia_gpu_name: str | None = None
     nvidia_driver_version: str = ""
+    has_amd: bool = False
+    amd_gpu_name: str | None = None
     has_touchpad: bool = False
     is_laptop: bool = False
     hostname: str = ""
@@ -77,6 +85,38 @@ def list_gpus(output: str | None = None) -> list[str]:
             description = line.split(":", 2)[-1].strip() if ":" in line else line.strip()
             gpus.append(description or line.strip())
     return gpus
+
+
+def gpu_vendors(gpus: list[str] | None = None) -> set[str]:
+    """Classifica as GPUs por fabricante: subconjunto de {amd, nvidia, intel}.
+
+    Trabalha sobre as strings do `list_gpus()` (linhas do lspci). E a base para
+    decidir quais drivers instalar/remover.
+    """
+    items = gpus if gpus is not None else list_gpus()
+    vendors: set[str] = set()
+    for gpu in items:
+        if _NVIDIA_RE.search(gpu):
+            vendors.add("nvidia")
+        if _AMD_RE.search(gpu):
+            vendors.add("amd")
+        if _INTEL_RE.search(gpu):
+            vendors.add("intel")
+    return vendors
+
+
+def amd_gpu_name(output: str | None = None) -> str | None:
+    """Extrai o nome da GPU AMD a partir do `lspci` (ou None se ausente)."""
+    text = output if output is not None else _capture(["lspci"])
+    for gpu in list_gpus(text):
+        if _AMD_RE.search(gpu):
+            return " ".join(gpu.split())
+    return None
+
+
+def amdgpu_active() -> bool:
+    """True se o modulo amdgpu esta carregado (driver AMD em uso)."""
+    return Path("/sys/module/amdgpu").exists()
 
 
 def nvidia_gpu_name(output: str | None = None) -> str | None:
@@ -168,8 +208,11 @@ def _desktop_env() -> str:
 def read_facts() -> HardwareFacts:
     """Fonte unica de fatos de hardware para qualquer etapa que precise."""
     gpus = list_gpus()
+    vendors = gpu_vendors(gpus)
     nvidia_name = nvidia_gpu_name()
-    has_nvidia = bool(nvidia_name) or any("nvidia" in gpu.lower() for gpu in gpus)
+    has_nvidia = bool(nvidia_name) or "nvidia" in vendors
+    amd_name = amd_gpu_name()
+    has_amd = bool(amd_name) or "amd" in vendors
     return HardwareFacts(
         cpu_model=_cpu_model(),
         ram_total=_ram_total(),
@@ -177,6 +220,8 @@ def read_facts() -> HardwareFacts:
         has_nvidia=has_nvidia,
         nvidia_gpu_name=nvidia_name,
         nvidia_driver_version=_nvidia_driver_version() if has_nvidia else "",
+        has_amd=has_amd,
+        amd_gpu_name=amd_name,
         has_touchpad=has_touchpad(),
         is_laptop=is_laptop(),
         hostname=_hostname(),
@@ -194,6 +239,7 @@ def facts_summary(facts: HardwareFacts) -> list[str]:
         f"RAM total: {facts.ram_total or 'desconhecida'}",
         f"GPUs: {', '.join(facts.gpus) if facts.gpus else 'nenhuma detectada'}",
         f"NVIDIA: {facts.nvidia_gpu_name if facts.has_nvidia else 'nao detectada'}",
+        f"AMD: {facts.amd_gpu_name if facts.has_amd else 'nao detectada'}",
         f"Touchpad: {'sim' if facts.has_touchpad else 'nao'}",
         f"Tipo: {'notebook' if facts.is_laptop else 'desktop'}",
     ]
@@ -211,8 +257,14 @@ def render_summary(facts: HardwareFacts) -> list[str]:
         ("ram", facts.ram_total or "desconhecida", Color.ACCENT),
     ]
     for gpu in facts.gpus or []:
-        is_nvidia = "nvidia" in gpu.lower()
-        display = (facts.nvidia_gpu_name or gpu) if is_nvidia else gpu
+        is_nvidia = bool(_NVIDIA_RE.search(gpu))
+        is_amd = bool(_AMD_RE.search(gpu))
+        if is_nvidia:
+            display = facts.nvidia_gpu_name or gpu
+        elif is_amd:
+            display = facts.amd_gpu_name or gpu
+        else:
+            display = gpu
         tone = Color.WARNING if is_nvidia else Color.SUCCESS
         rows.append(("gpu", display, tone))
         if is_nvidia and facts.nvidia_driver_version:

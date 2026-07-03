@@ -4,7 +4,7 @@ from ..steps_base import Step, StepGroup
 from .appimage import UpdateAppImagesStep
 from .browser import BrowserStep, WebAppsStep
 from .dev import AntigravityStep, GitStep
-from .gaming import AppsStep, NvidiaSteamStep, SunshineStep
+from .gaming import AppsStep, GpuGamingStep, SunshineStep
 from .inventory import HardwareStep
 from .kde import GesturesStep, NumLockStep
 from .storage import FstabStep, RcloneStep
@@ -15,7 +15,7 @@ ALL_STEPS: tuple[type[Step], ...] = (
     LinuxToysStep,
     BrowserStep,
     WebAppsStep,
-    NvidiaSteamStep,
+    GpuGamingStep,
     GitStep,
     RcloneStep,
     FstabStep,
@@ -34,7 +34,7 @@ ALL_GROUPS: tuple[StepGroup, ...] = (
     StepGroup("sistema", "Sistema base", (ShellyStep,)),
     StepGroup("apps", "Aplicativos", (LinuxToysStep, BrowserStep, WebAppsStep, AppsStep, UpdateAppImagesStep)),
     StepGroup("dev", "Dev", (GitStep, AntigravityStep)),
-    StepGroup("jogos", "Jogos e streaming", (NvidiaSteamStep, SunshineStep)),
+    StepGroup("jogos", "Jogos e streaming", (GpuGamingStep, SunshineStep)),
     StepGroup("kde", "Desktop / KDE", (GesturesStep, NumLockStep)),
     StepGroup("armazenamento", "Armazenamento", (RcloneStep, FstabStep)),
     StepGroup("info", "Hardware / Info", (HardwareStep,)),
@@ -45,7 +45,7 @@ __all__ = [
     "LinuxToysStep",
     "BrowserStep",
     "WebAppsStep",
-    "NvidiaSteamStep",
+    "GpuGamingStep",
     "GitStep",
     "RcloneStep",
     "FstabStep",

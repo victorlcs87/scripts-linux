@@ -12,7 +12,7 @@ O projeto substitui scripts shell longos por um CLI Python modular, com `apply`,
 - Suporte a Arch/CachyOS/SteamOS, Debian/Ubuntu e Fedora/Bazzite.
 - Sistemas imutaveis (Bazzite/SteamOS) sao detectados automaticamente: pacotes nativos sao priorizados via Flatpak e os passos que dependeriam deles viram aviso/manual.
 - Preparacao de Flatpak, Flathub, AppImage/FUSE, RPM Fusion (Fedora) e helper AUR quando aplicavel.
-- Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, NVIDIA/jogos, Sunshine/Moonlight, gestos KDE e Num Lock.
+- Instalacao/configuracao de apps, webapps, Git/GitHub, rclone, fstab, drivers de GPU (AMD/NVIDIA)/jogos, Sunshine/Moonlight, gestos KDE e Num Lock.
 - Integracao desktop para AppImages, incluindo Hydra Launcher com `StartupWMClass` correto no KDE Wayland.
 - Gestos KDE com `libinput-gestures` para abrir o Overview com swipe de 3 dedos para cima ou para baixo.
 - Execucao segura com dry-run, backups, confirmacoes para operacoes sensiveis e logs locais.
@@ -115,7 +115,7 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 | `02` | Linux Toys | Instala Linux Toys pelo script oficial. |
 | `03` | Navegador e extensoes | Instala Firefox, FirefoxPWA e Bitwarden. |
 | `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
-| `05` | Validar NVIDIA / jogos / Steam | Diagnostica (nao instala) sessao grafica, GPUs, driver NVIDIA e Steam/Heroic. |
+| `05` | Configurar GPU / jogos / Steam | Detecta o fabricante (AMD/NVIDIA), instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; NVIDIA: proprietario), remove os residuos do fabricante ausente (com confirmacao e backup) e valida sessao grafica, Vulkan/OpenGL e Steam/Heroic. |
 | `06` | Git / GitHub | Instala Git, clona/atualiza o repositorio base e configura uma ou varias contas GitHub com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro). |
 | `07` | Google Drive / rclone | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
@@ -218,7 +218,7 @@ A etapa `14` coleta um retrato do hardware (CPU, RAM, GPUs, discos, PCI/USB e, q
 ~/.cache/scripts-linux/hardware/hardware-info.txt
 ```
 
-Esse mesmo modulo (`reforja/hardware.py`) e a fonte unica de deteccao de hardware do sistema: a etapa de gestos (`09`) e a validacao de GPU (`05`) consultam-no para decidir touchpad e GPUs. O `dry-run` apenas lista o que seria coletado, e o `undo` remove o relatorio salvo.
+Esse mesmo modulo (`reforja/hardware.py`) e a fonte unica de deteccao de hardware do sistema: a etapa de gestos (`09`) e a configuracao de GPU (`05`) consultam-no para decidir touchpad e o fabricante da GPU (AMD/NVIDIA/Intel via `gpu_vendors`). O `dry-run` apenas lista o que seria coletado, e o `undo` remove o relatorio salvo.
 
 ## Seguranca E Confiabilidade
 
