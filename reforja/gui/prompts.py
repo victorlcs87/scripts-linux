@@ -101,9 +101,7 @@ class GuiInteraction(QObject):
             item.setCheckState(Qt.CheckState.Unchecked)  # nada marcado por padrao
             listing.addItem(item)
         layout.addWidget(listing)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
@@ -112,9 +110,7 @@ class GuiInteraction(QObject):
             req["result"] = []
             return
         req["result"] = [
-            index
-            for index in range(listing.count())
-            if listing.item(index).checkState() == Qt.CheckState.Checked
+            index for index in range(listing.count()) if listing.item(index).checkState() == Qt.CheckState.Checked
         ]
 
     # --- chamado na thread de trabalho (InteractionProvider) ---------------------
