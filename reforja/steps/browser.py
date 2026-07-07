@@ -5,6 +5,7 @@ import re
 from ..core import (
     Color,
     command_exists,
+    select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
@@ -82,7 +83,18 @@ class WebAppsStep(Step):
 
     def apply(self) -> None:
         header(self, "WebApps com FirefoxPWA, WebApp Manager ou fallback", "Criando atalhos e PWAs para uso diario")
-        if self._all_webapps_present():
+        labels = [self._choice_label(name, slug) for name, slug, _url, _manifest in WEBAPPS]
+        indices = select_many(
+            "Quais WebApps criar",
+            labels,
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = nada a fazer.",
+        )
+        if not indices:
+            self.mark_skipped("Nenhum WebApp selecionado.")
+            return
+        chosen = [WEBAPPS[i] for i in indices]
+        if all(self._webapp_present(name, slug) for name, slug, _url, _manifest in chosen):
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} WebApps/atalhos ja encontrados. Pulando criacao.")
             self.mark_skipped("WebApps/atalhos ja existentes.")
             return
@@ -90,21 +102,25 @@ class WebAppsStep(Step):
         if system_package_exists("firefoxpwa"):
             install_system_package("firefoxpwa", self.ctx.runner)
         if command_exists("firefoxpwa") or self.ctx.runner.dry_run:
-            created = self._try_firefoxpwa()
+            created = self._try_firefoxpwa(chosen)
         if not created:
             created = self._try_webapp_manager()
         if not created:
-            self._create_desktop_fallbacks()
+            self._create_desktop_fallbacks(chosen)
             self.ctx.logger.write(
                 f"{Color.YELLOW}AVISO:{Color.RESET} Fallback criado. Estes atalhos nao sao PWAs reais."
             )
             self.mark_manual("Fallback .desktop criado; PWAs reais podem exigir ajuste manual.")
             return
         self.mark_done("WebApps processados.")
+        self.result.applied_items = [name for name, _slug, _url, _manifest in chosen]
 
-    def _try_firefoxpwa(self) -> bool:
+    def _choice_label(self, name: str, slug: str) -> str:
+        return f"{name} (ja existe)" if self._webapp_present(name, slug) else f"{name} (nao criado)"
+
+    def _try_firefoxpwa(self, webapps=WEBAPPS) -> bool:
         ok_all = True
-        for name, slug, _url, manifest in WEBAPPS:
+        for name, slug, _url, manifest in webapps:
             if self._webapp_present(name, slug):
                 self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
                 continue
@@ -149,9 +165,9 @@ class WebAppsStep(Step):
             return True
         return False
 
-    def _create_desktop_fallbacks(self) -> None:
+    def _create_desktop_fallbacks(self, webapps=WEBAPPS) -> None:
         app_dir = self.ctx.user.home / ".local/share/applications"
-        for name, slug, url, _manifest in WEBAPPS:
+        for name, slug, url, _manifest in webapps:
             if self._webapp_present(name, slug):
                 self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
                 continue

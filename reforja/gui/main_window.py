@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..cli import render_run_summary, render_status_overview
 from ..core import StepRunResult
 from ..steps import ALL_GROUPS
 from .askpass import resolve_askpass
@@ -43,6 +44,10 @@ _COMPLIANCE = {
 
 _BADGE_COLORS = {
     "done": "#2ee06a",
+    "aplicado": "#2ee06a",
+    "pendente": "#f2c14e",
+    "atencao": "#ff7043",
+    "ok": "#2ee06a",
     "summary": "#ff8fd8",
     "info": "#5fd7ff",
     "action": "#5fd7ff",
@@ -495,16 +500,19 @@ class MainWindow(QMainWindow):
     def _finish_queue(self) -> None:
         self._set_running(False)
         self._progress.setValue(100)
-        if self._queue_total > 1:
-            self._render_summary()
+        self._render_summary()
         self._stack.setCurrentWidget(self._console)
 
     def _render_summary(self) -> None:
-        counts: dict[str, int] = {}
-        for result in self._results:
-            counts[result.status] = counts.get(result.status, 0) + 1
-        resumo = "  ".join(f"{status}: {count}" for status, count in sorted(counts.items()))
-        self._append(f"[summary] {self._queue_action} concluido. {resumo}")
+        # Reusa os paineis ricos do CLI (mesma saida do terminal), escrevendo pelo
+        # GuiLogger para que o resumo apareca no console. Vale para 1 ou N etapas.
+        if not self._results:
+            return
+        duration = sum(result.duration_seconds for result in self._results)
+        if self._queue_action == "status":
+            render_status_overview(self._logger, self._results, self._queue_total, duration)
+        else:
+            render_run_summary(self._logger, self._queue_action, self._results, self._queue_total, duration)
 
     # --- saida -------------------------------------------------------------------
     def _append(self, line: str) -> None:

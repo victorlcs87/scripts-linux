@@ -9,6 +9,7 @@ from ..core import (
     Color,
     badge,
     clean_subprocess_env,
+    select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
@@ -66,11 +67,22 @@ class UpdateAppImagesStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Verificando e atualizando AppImages instalados")
+        labels = [self._choice_label(app) for app in self._APPIMAGES]
+        indices = select_many(
+            "Quais AppImages instalar/atualizar",
+            labels,
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = nada a fazer.",
+        )
+        if not indices:
+            self.mark_skipped("Nenhum AppImage selecionado.")
+            return
+        selected = [self._APPIMAGES[i] for i in indices]
         updated: list[str] = []
         skipped: list[str] = []
         missing: list[str] = []
         failed: list[str] = []
-        for app in self._APPIMAGES:
+        for app in selected:
             # Isola cada AppImage: uma falha (permissao, rede, disco) reporta a causa
             # e segue para o proximo, sem derrubar a etapa inteira.
             try:
@@ -94,6 +106,23 @@ class UpdateAppImagesStep(Step):
         if skipped:
             parts.append(f"ja atualizados: {', '.join(skipped)}")
         self.mark_done("; ".join(parts) if parts else "Nenhuma atualizacao necessaria.")
+        self.result.applied_items = updated + skipped
+
+    def _installed_version(self, app: dict) -> str | None:
+        """Retorna a versao registrada do AppImage instalado, ou None se ausente."""
+        appimage_path = self.ctx.user.home / app["path"]
+        if not appimage_path.exists():
+            return None
+        version_file = appimage_path.with_suffix(".version")
+        if version_file.exists():
+            return version_file.read_text(encoding="utf-8").strip() or "versao desconhecida"
+        return "versao desconhecida"
+
+    def _choice_label(self, app: dict) -> str:
+        version = self._installed_version(app)
+        if version is None:
+            return f"{app['name']} (nao instalado)"
+        return f"{app['name']} (instalado: {version})"
 
     def _process_one(self, app: dict, updated: list[str], skipped: list[str], missing: list[str]) -> None:
         appimage_path = self._resolve_and_migrate(app)
@@ -395,26 +424,30 @@ class UpdateAppImagesStep(Step):
 
     def status(self) -> None:
         header(self, self.title, "Versoes instaladas de AppImages")
-        any_installed = False
+        installed: list[str] = []
+        missing: list[str] = []
         for app in self._APPIMAGES:
             appimage_path = self.ctx.user.home / app["path"]
-            version_file = appimage_path.with_suffix(".version")
-            if not appimage_path.exists():
+            version = self._installed_version(app)
+            if version is None:
+                missing.append(app["name"])
                 self.ctx.logger.write(
                     f"{badge(app['name'].lower().replace(' ', '-'), Color.WARNING)} {app['name']}: nao instalado"
                 )
                 continue
-            any_installed = True
-            version = (
-                version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "versao desconhecida"
-            )
+            installed.append(f"{app['name']} {version}")
             self.ctx.logger.write(
                 f"{badge(app['name'].lower().replace(' ', '-'), Color.SUCCESS)} {app['name']}: {version} ({appimage_path})"
             )
-        if any_installed:
-            self.mark_applied("AppImages instalados detectados.")
+        if not missing:
+            self.mark_applied(f"AppImages instalados: {', '.join(installed)}.", items=installed)
+        elif installed:
+            self.mark_pending(
+                f"Instalados: {', '.join(installed)}. Faltando: {', '.join(missing)}.",
+                missing=missing,
+            )
         else:
-            self.mark_pending("Nenhum AppImage instalado.")
+            self.mark_pending("Nenhum AppImage instalado.", missing=missing)
 
     def undo(self) -> None:
         self.ctx.logger.write(

@@ -111,4 +111,8 @@ class StepWorker(QThread):
             message=step.result.summary,
             compliance=step.result.compliance,
             duration_seconds=time.monotonic() - started,
+            applied_items=step.result.applied_items,
+            missing_items=step.result.missing_items,
+            attention_items=step.result.attention_items,
+            hints=step.result.hints,
         )

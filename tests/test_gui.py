@@ -259,3 +259,48 @@ def test_offer_update_sem_appimage_abre_pagina(app, tmp_path: Path, monkeypatch)
 
     assert opened, "deveria abrir a pagina de download como fallback"
     assert window._updating is False
+
+
+# --- seletor multi-item (choose_many) ---------------------------------------------
+def _multi_req(options):
+    import threading
+
+    return {
+        "kind": "multi",
+        "prompt": "Quais itens",
+        "options": options,
+        "detail": None,
+        "result": [],
+        "event": threading.Event(),
+    }
+
+
+def test_choose_many_retorna_indices_marcados(app, monkeypatch) -> None:
+    from PySide6.QtWidgets import QDialog, QListWidget, QWidget
+
+    from reforja.gui.prompts import GuiInteraction
+
+    gi = GuiInteraction(QWidget())
+
+    def fake_exec(dialog):
+        listing = dialog.findChild(QListWidget)
+        listing.item(0).setCheckState(Qt.CheckState.Checked)
+        listing.item(2).setCheckState(Qt.CheckState.Checked)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    req = _multi_req(["a", "b", "c"])
+    gi._handle_multi(req)
+    assert req["result"] == [0, 2]
+
+
+def test_choose_many_cancelar_retorna_vazio(app, monkeypatch) -> None:
+    from PySide6.QtWidgets import QDialog, QWidget
+
+    from reforja.gui.prompts import GuiInteraction
+
+    gi = GuiInteraction(QWidget())
+    monkeypatch.setattr(QDialog, "exec", lambda dialog: QDialog.DialogCode.Rejected)
+    req = _multi_req(["a", "b"])
+    gi._handle_multi(req)
+    assert req["result"] == []

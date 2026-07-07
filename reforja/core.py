@@ -127,6 +127,14 @@ class InteractionProvider(Protocol):
 
     def confirm_phrase(self, phrase: str, *, detail: str | None = None) -> bool: ...
 
+    def choose_many(
+        self,
+        prompt: str,
+        options: Sequence[str],
+        *,
+        detail: str | None = None,
+    ) -> list[int]: ...
+
 
 @runtime_checkable
 class InteractiveExecutor(Protocol):
@@ -282,6 +290,38 @@ def prompt_user(
         return answer
     announce(logger, "waiting", "Entrada vazia. Tente novamente.")
     return prompt_user(prompt, logger, detail=detail, prompt_label=prompt_label, allow_empty=allow_empty)
+
+
+def select_many(
+    prompt: str,
+    options: Sequence[str],
+    logger: Logger,
+    *,
+    detail: str | None = None,
+) -> list[int]:
+    """Selecao multipla (checkbox) abstraida da apresentacao. Retorna os indices
+    escolhidos; lista vazia = nada marcado.
+
+    Quando ha um InteractionProvider grafico com choose_many (GUI), delega a ele.
+    Caso contrario (CLI) cai no checkbox de terminal (tui.choose_multiple). O
+    import de tui e tardio para evitar ciclo de import no carregamento do modulo.
+    """
+    options = list(options)
+    if not options:
+        return []
+    interaction = logger.interaction
+    if interaction is not None and hasattr(interaction, "choose_many"):
+        return list(interaction.choose_many(prompt, options, detail=detail))
+    from .tui import choose_multiple
+
+    menu_options = [MenuOption(str(index + 1), label) for index, label in enumerate(options)]
+    return choose_multiple(
+        title=prompt,
+        logger=logger,
+        prompt=prompt,
+        options=menu_options,
+        detail=detail,
+    )
 
 
 class Runner:

@@ -16,6 +16,7 @@ from ..core import (
     confirm_phrase,
     paint,
     print_lines,
+    select_many,
     write_text,
     write_text_sudo,
 )
@@ -598,40 +599,58 @@ class AppsStep(Step):
 
     def apply(self) -> None:
         header(self, self.title, "Instalando apps principais e Codex CLI")
-        if self._detect_install_source("Steam"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} Steam ja detectado via {self._detect_install_source('Steam')}"
-            )
-        else:
-            self._install_steam()
-        if self._detect_install_source("Heroic"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} Heroic ja detectado via {self._detect_install_source('Heroic')}"
-            )
-        else:
-            self._install_system_or_flatpak(
-                "heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl"
-            )
-        if self._detect_install_source("ZapZap"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} ZapZap ja detectado via {self._detect_install_source('ZapZap')}"
-            )
-        else:
-            self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
-        if self._detect_install_source("Solaar"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} Solaar ja detectado via {self._detect_install_source('Solaar')}"
-            )
-        else:
-            self._install_solaar()
-        if self._detect_install_source("LocalSend"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
-            )
-        else:
-            self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
+        names = list(self.apps.keys())
+        labels = [self._choice_label(name) for name in names]
+        indices = select_many(
+            "Quais apps instalar/atualizar",
+            labels,
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = nada a fazer.",
+        )
+        if not indices:
+            self.mark_skipped("Nenhum app selecionado.")
+            return
+        selected = {names[i] for i in indices}
+
+        if "Steam" in selected:
+            if self._detect_install_source("Steam"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} Steam ja detectado via {self._detect_install_source('Steam')}"
+                )
+            else:
+                self._install_steam()
+        if "Heroic" in selected:
+            if self._detect_install_source("Heroic"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} Heroic ja detectado via {self._detect_install_source('Heroic')}"
+                )
+            else:
+                self._install_system_or_flatpak(
+                    "heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl"
+                )
+        if "ZapZap" in selected:
+            if self._detect_install_source("ZapZap"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} ZapZap ja detectado via {self._detect_install_source('ZapZap')}"
+                )
+            else:
+                self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
+        if "Solaar" in selected:
+            if self._detect_install_source("Solaar"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} Solaar ja detectado via {self._detect_install_source('Solaar')}"
+                )
+            else:
+                self._install_solaar()
+        if "LocalSend" in selected:
+            if self._detect_install_source("LocalSend"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
+                )
+            else:
+                self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
         for name, definition in self.apps.items():
-            if definition["kind"] != "flatpak":
+            if definition["kind"] != "flatpak" or name not in selected:
                 continue
             source = self._detect_install_source(name)
             if source:
@@ -639,22 +658,29 @@ class AppsStep(Step):
                 continue
             header(self, f"{name} - Flatpak")
             install_flatpak(str(definition["flatpak_id"]), self.ctx.runner)
-        header(self, "Codex CLI")
-        if self._detect_install_source("Codex CLI"):
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}"
-            )
-        else:
-            install_system_package("nodejs", self.ctx.runner)
-            install_system_package("npm", self.ctx.runner)
-            if npm_global_installed("@openai/codex"):
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} @openai/codex ja instalado globalmente")
-            else:
-                self.ctx.runner.run(
-                    ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
+        if "Codex CLI" in selected:
+            header(self, "Codex CLI")
+            if self._detect_install_source("Codex CLI"):
+                self.ctx.logger.write(
+                    f"{Color.GREEN}OK:{Color.RESET} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}"
                 )
-        self._install_auto_cpufreq()
-        self.mark_done("Apps principais, Codex CLI e auto-cpufreq processados.")
+            else:
+                install_system_package("nodejs", self.ctx.runner)
+                install_system_package("npm", self.ctx.runner)
+                if npm_global_installed("@openai/codex"):
+                    self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} @openai/codex ja instalado globalmente")
+                else:
+                    self.ctx.runner.run(
+                        ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
+                    )
+        if "auto-cpufreq" in selected:
+            self._install_auto_cpufreq()
+        self.mark_done(f"Processados: {', '.join(sorted(selected))}.")
+        self.result.applied_items = sorted(selected)
+
+    def _choice_label(self, name: str) -> str:
+        source = self._detect_install_source(name)
+        return f"{name} (instalado via {source})" if source else f"{name} (nao instalado)"
 
     def _install_auto_cpufreq(self) -> None:
         source = self._detect_install_source("auto-cpufreq")

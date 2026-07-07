@@ -31,6 +31,19 @@ from reforja.steps import (
 from reforja.steps_base import StepContext
 
 
+@pytest.fixture(autouse=True)
+def _select_all(monkeypatch):
+    """Por padrao, o seletor multi-item (select_many) marca TODOS os itens, para
+    preservar as assercoes de "instala tudo" dos testes existentes. Testes que
+    querem uma selecao especifica podem sobrescrever o patch."""
+
+    def _all(prompt, options, logger, *, detail=None):
+        return list(range(len(list(options))))
+
+    for module in ("gaming", "appimage", "browser"):
+        monkeypatch.setattr(f"reforja.steps.{module}.select_many", _all)
+
+
 def make_ctx(tmp_path: Path) -> StepContext:
     user_home = tmp_path / "home"
     user_home.mkdir()
@@ -875,6 +888,40 @@ def test_apps_detect_install_source_prefers_existing_flatpak(tmp_path: Path, mon
     monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
 
     assert step._detect_install_source("Discord") == "flatpak (com.discordapp.Discord)"
+
+
+def test_apps_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    monkeypatch.setattr("reforja.steps.gaming.select_many", lambda *a, **k: [])
+    step.apply()
+    assert step.result.status == "skipped"
+    assert "@openai/codex" not in ctx.logger.path.read_text(encoding="utf-8")
+
+
+def test_apps_apply_respeita_selecao_parcial(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    # Seleciona apenas o "Codex CLI" (indice na ordem de step.apps).
+    codex_index = list(step.apps).index("Codex CLI")
+    monkeypatch.setattr("reforja.steps.gaming.select_many", lambda *a, **k: [codex_index])
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+    assert "@openai/codex" in log  # Codex foi processado
+    assert "com.discordapp.Discord" not in log  # Discord (nao selecionado) foi ignorado
+    assert step.result.applied_items == ["Codex CLI"]
+
+
+def test_appimages_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = UpdateAppImagesStep(ctx)
+    monkeypatch.setattr("reforja.steps.appimage.select_many", lambda *a, **k: [])
+    step.apply()
+    assert step.result.status == "skipped"
 
 
 def test_apps_does_not_manage_hydra_or_bitwarden(tmp_path: Path) -> None:

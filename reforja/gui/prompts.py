@@ -11,7 +11,17 @@ import threading
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import QInputDialog, QLineEdit, QWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..core import PromptInterruptedError
 
@@ -33,6 +43,8 @@ class GuiInteraction(QObject):
                 self._handle_text(req)
             elif req["kind"] == "confirm":
                 self._handle_confirm(req)
+            elif req["kind"] == "multi":
+                self._handle_multi(req)
         finally:
             req["event"].set()
 
@@ -70,6 +82,41 @@ class GuiInteraction(QObject):
         )
         req["result"] = bool(ok) and text.strip() == phrase
 
+    def _handle_multi(self, req: dict[str, Any]) -> None:
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Reforja - selecione")
+        layout = QVBoxLayout(dialog)
+        label = QLabel(req["prompt"])
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        if req.get("detail"):
+            detail = QLabel(req["detail"])
+            detail.setWordWrap(True)
+            detail.setObjectName("statusLine")
+            layout.addWidget(detail)
+        listing = QListWidget()
+        for text in req["options"]:
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)  # nada marcado por padrao
+            listing.addItem(item)
+        layout.addWidget(listing)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(420, 360)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            req["result"] = []
+            return
+        req["result"] = [
+            index
+            for index in range(listing.count())
+            if listing.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
     # --- chamado na thread de trabalho (InteractionProvider) ---------------------
     def ask_text(
         self,
@@ -105,3 +152,22 @@ class GuiInteraction(QObject):
         self._request.emit(req)
         req["event"].wait()
         return bool(req["result"])
+
+    def choose_many(
+        self,
+        prompt: str,
+        options: list[str],
+        *,
+        detail: str | None = None,
+    ) -> list[int]:
+        req: dict[str, Any] = {
+            "kind": "multi",
+            "prompt": prompt,
+            "options": list(options),
+            "detail": detail,
+            "result": [],
+            "event": threading.Event(),
+        }
+        self._request.emit(req)
+        req["event"].wait()
+        return list(req["result"])
