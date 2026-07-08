@@ -30,6 +30,21 @@ from .tui import TuiDependencyError, choose_multiple, choose_option
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Mapa unico status->cor (execucao) e compliance->cor (status), usado por todos
+# os renderizadores de resumo (CLI e GUI importam daqui).
+STATUS_TONES = {
+    "done": Color.SUCCESS,
+    "skipped": Color.WARNING,
+    "manual": Color.WARNING,
+    "failed": Color.ERROR,
+    "blocked": Color.ERROR,
+}
+COMPLIANCE_TONES = {
+    "aplicado": Color.SUCCESS,
+    "pendente": Color.WARNING,
+    "atencao": Color.ERROR,
+}
+
 
 def clear_screen() -> None:
     if sys.stdout.isatty():
@@ -66,22 +81,36 @@ def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResu
 
 
 def run_action_safe(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult | None:
+    # A pausa "ENTER para voltar" acontece UMA vez, no finally, para todo desfecho.
     try:
         clear_screen()
         result = run_action(step_cls, action, logger)
         render_step_summary(logger, action, result)
-        prompt_return_to_menu(logger)
         return result
-    except PrivilegeEscalationBlockedError as exc:
-        logger.write(f"{badge('erro', Color.ERROR)} {exc}")
-    except CommandInterruptedError as exc:
+    except (PrivilegeEscalationBlockedError, CommandInterruptedError) as exc:
         logger.write(f"{badge('erro', Color.ERROR)} {exc}")
     except PromptInterruptedError as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
     except Exception as exc:
         logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
+    finally:
         prompt_return_to_menu(logger)
     return None
+
+
+def synthetic_result(step_cls: type[Step], status: str, exc: Exception) -> StepRunResult:
+    """Resultado sintetico para etapa que falhou/foi bloqueada antes de concluir.
+
+    Tambem usado pela GUI para registrar falhas no resumo final.
+    """
+    return StepRunResult(
+        step_id=step_cls.id,
+        title=step_cls.title,
+        status=status,
+        message=str(exc),
+        compliance="atencao",
+        duration_seconds=0.0,
+    )
 
 
 def run_all(action: str, logger: Logger) -> None:
@@ -109,55 +138,19 @@ def run_steps(steps: list[type[Step]], action: str, logger: Logger) -> None:
             logger.write(
                 f"{badge('dica', Color.WARNING)} etapas que precisam de sudo nao podem continuar neste ambiente."
             )
-            results.append(
-                StepRunResult(
-                    step_id=step_cls.id,
-                    title=step_cls.title,
-                    status="blocked",
-                    message=str(exc),
-                    compliance="atencao",
-                    duration_seconds=0.0,
-                )
-            )
+            results.append(synthetic_result(step_cls, "blocked", exc))
             break
         except CommandInterruptedError as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
-            results.append(
-                StepRunResult(
-                    step_id=step_cls.id,
-                    title=step_cls.title,
-                    status="blocked",
-                    message=str(exc),
-                    compliance="atencao",
-                    duration_seconds=0.0,
-                )
-            )
+            results.append(synthetic_result(step_cls, "blocked", exc))
             break
         except PromptInterruptedError as exc:
             logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
-            results.append(
-                StepRunResult(
-                    step_id=step_cls.id,
-                    title=step_cls.title,
-                    status="manual",
-                    message=str(exc),
-                    compliance="atencao",
-                    duration_seconds=0.0,
-                )
-            )
+            results.append(synthetic_result(step_cls, "manual", exc))
             break
         except Exception as exc:
             logger.write(f"{badge('erro', Color.ERROR)} etapa falhou: {exc}")
-            results.append(
-                StepRunResult(
-                    step_id=step_cls.id,
-                    title=step_cls.title,
-                    status="failed",
-                    message=str(exc),
-                    compliance="atencao",
-                    duration_seconds=0.0,
-                )
-            )
+            results.append(synthetic_result(step_cls, "failed", exc))
             if action in {"apply", "dry-run"}:
                 try:
                     prompt_user(
@@ -200,19 +193,20 @@ def choose_step(logger: Logger, steps: list[type[Step]] | None = None) -> type[S
 
 
 def choose_action(logger: Logger, steps: list[type[Step]]) -> str | None:
+    # Prompt compacto na MESMA tela da selecao: Enter = Aplicar (default).
     options = [
-        MenuOption("1", "Aplicar"),
+        MenuOption("1", "Aplicar (padrao)"),
         MenuOption("2", "Status"),
         MenuOption("3", "Undo"),
+        MenuOption("4", "Cancelar"),
     ]
-    actions = ["apply", "status", "undo"]
+    actions = ["apply", "status", "undo", None]
     try:
         index = choose_option(
-            title=f"Acao para {len(steps)} etapa(s) selecionada(s)",
+            title=f"Acao para: {', '.join(step_cls.title for step_cls in steps)}",
             logger=logger,
-            prompt="Qual acao aplicar nas etapas selecionadas",
+            prompt="Qual acao executar (Enter = Aplicar)",
             options=options,
-            detail="Etapas selecionadas: " + ", ".join(step_cls.title for step_cls in steps),
             prompt_label="Acao",
         )
     except (PromptInterruptedError, TuiDependencyError) as exc:
@@ -231,7 +225,7 @@ def select_and_run(logger: Logger) -> None:
             logger=logger,
             prompt="Quais etapas",
             options=options,
-            detail="Marque com espaco as etapas desejadas. Sem nada marcado, nada sera executado.",
+            detail="Marque com espaco as etapas desejadas. Em seguida escolha a acao (Enter = Aplicar).",
         )
     except (PromptInterruptedError, TuiDependencyError) as exc:
         logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
@@ -240,7 +234,7 @@ def select_and_run(logger: Logger) -> None:
     if not chosen:
         logger.write(f"{badge('aviso', Color.WARNING)} Nenhuma etapa marcada; nada a executar.")
         return
-    clear_screen()
+    # Sem limpar a tela: a escolha da acao acontece logo abaixo da selecao.
     action = choose_action(logger, chosen)
     if action is None:
         return
@@ -358,13 +352,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def render_step_summary(logger: Logger, action: str, result: StepRunResult) -> None:
-    tone = {
-        "done": Color.SUCCESS,
-        "skipped": Color.WARNING,
-        "manual": Color.WARNING,
-        "failed": Color.ERROR,
-        "blocked": Color.ERROR,
-    }.get(result.status, Color.INFO)
+    tone = STATUS_TONES.get(result.status, Color.INFO)
     logger.write("")
     logger.write(divider(char="#", tone=Color.TITLE))
     logger.write(paint("Resumo da etapa", Color.TITLE))
@@ -395,7 +383,7 @@ def render_status_overview(
     # Acionaveis primeiro: atencao > pendente > aplicado (ordem original dentro do grupo).
     priority = {"atencao": 0, "pendente": 1, "aplicado": 2}
     ordered = sorted(enumerate(classified), key=lambda pair: (priority[pair[1][1]], pair[0]))
-    tones = {"aplicado": Color.SUCCESS, "pendente": Color.WARNING, "atencao": Color.ERROR}
+    tones = COMPLIANCE_TONES
 
     logger.write("")
     logger.write(divider(char="#", tone=Color.TITLE))
@@ -487,13 +475,7 @@ def render_run_summary(
     logger.write(paint(f"Executadas: {len(results)}/{total_steps}", Color.ACCENT))
     logger.write(divider(char="-", tone=Color.BOX))
     for item in results:
-        tone = {
-            "done": Color.SUCCESS,
-            "skipped": Color.WARNING,
-            "manual": Color.WARNING,
-            "failed": Color.ERROR,
-            "blocked": Color.ERROR,
-        }.get(item.status, Color.INFO)
+        tone = STATUS_TONES.get(item.status, Color.INFO)
         logger.write(
             f"{badge(item.status, tone)} {item.title}  "
             f"{paint(f'({format_elapsed(item.duration_seconds)})', Color.MUTED)}"

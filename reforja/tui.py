@@ -10,6 +10,18 @@ class TuiDependencyError(RuntimeError):
     pass
 
 
+# Tema unico dos menus InquirerPy (checkbox e select).
+_INQUIRER_STYLE = {
+    "questionmark": "#5fd7ff bold",
+    "question": "#ff8fd8 bold",
+    "pointer": "#7dff7d bold",
+    "checkbox": "#7dff7d",
+    "instruction": "#87afff",
+    "answer": "#7dff7d bold",
+    "separator": "#5f87ff",
+}
+
+
 def load_tui_deps():
     try:
         from InquirerPy import inquirer  # type: ignore
@@ -105,18 +117,7 @@ def _choose_multiple_tty(
 ) -> list[int]:
     inquirer, get_style = load_tui_deps()
     print(_build_prompt_message(title, logger, footer=footer, detail=detail))
-    style = get_style(
-        {
-            "questionmark": "#5fd7ff bold",
-            "question": "#ff8fd8 bold",
-            "pointer": "#7dff7d bold",
-            "checkbox": "#7dff7d",
-            "instruction": "#87afff",
-            "answer": "#7dff7d bold",
-            "separator": "#5f87ff",
-        },
-        style_override=False,
-    )
+    style = get_style(_INQUIRER_STYLE, style_override=False)
     try:
         selected = inquirer.checkbox(
             message=prompt,
@@ -183,7 +184,6 @@ def _menu_frame(title: str, logger: Logger, *, footer: str | None = None) -> lis
     body = [
         divider(char="#", tone=Color.TITLE),
         paint(title, Color.TITLE),
-        paint("Visual impactante ativo  |  estados vivos  |  prompts explicitamente sinalizados", Color.ACCENT),
         paint(f"Log: {logger.path}", Color.MUTED),
         divider(char="-", tone=Color.BOX),
     ]
@@ -220,17 +220,7 @@ def _choose_option_tty(
     inquirer, get_style = load_tui_deps()
     clear_render = _build_prompt_message(title, logger, footer=footer, detail=detail)
     print(clear_render)
-    style = get_style(
-        {
-            "questionmark": "#5fd7ff bold",
-            "question": "#ff8fd8 bold",
-            "pointer": "#7dff7d bold",
-            "instruction": "#87afff",
-            "answer": "#7dff7d bold",
-            "separator": "#5f87ff",
-        },
-        style_override=False,
-    )
+    style = get_style(_INQUIRER_STYLE, style_override=False)
     try:
         selected = inquirer.select(
             message=prompt,

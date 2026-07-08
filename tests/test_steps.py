@@ -1482,6 +1482,28 @@ def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> N
     assert action == "apply"
 
 
+def test_select_and_run_cancel_action_runs_nothing(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    ran: list[tuple] = []
+
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_multiple", lambda **_kwargs: [0])
+    # Opcao "Cancelar" (indice 3) devolve None -> nada roda.
+    monkeypatch.setattr("reforja.cli.choose_option", lambda **_kwargs: 3)
+    monkeypatch.setattr("reforja.cli.run_steps", lambda *_a, **_k: ran.append(_a))
+
+    select_and_run(logger)
+
+    assert ran == []
+
+
+def test_status_tones_cover_all_known_statuses() -> None:
+    from reforja.cli import COMPLIANCE_TONES, STATUS_TONES
+
+    assert set(STATUS_TONES) == {"done", "skipped", "manual", "failed", "blocked"}
+    assert set(COMPLIANCE_TONES) == {"aplicado", "pendente", "atencao"}
+
+
 def test_select_and_run_does_nothing_when_no_step_selected(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
     ran: list[tuple] = []
