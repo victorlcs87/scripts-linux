@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from .platform import UnsupportedDistroError, detect_distro
-
-BOOTSTRAP_VERSION = 1
 
 
 class BootstrapError(RuntimeError):
@@ -42,10 +37,9 @@ class BootstrapRequirement:
         return self.pip_package or self.module_name
 
 
-REQUIREMENTS = (
-    BootstrapRequirement("InquirerPy", None, None, "python-inquirerpy", "InquirerPy"),
-    BootstrapRequirement("pytest", "python-pytest", "python3-pytest", None, "pytest", fedora_package="python3-pytest"),
-)
+# Somente dependencias de RUNTIME do CLI. Dependencias de desenvolvimento
+# (pytest, ruff) vem de `pip install -e .[dev]` e nao sao impostas ao usuario.
+REQUIREMENTS = (BootstrapRequirement("InquirerPy", None, None, "python-inquirerpy", "InquirerPy"),)
 
 # Dependencia adicional, instalada sob demanda apenas quando a GUI e solicitada
 # (PySide6 e pesado para impor a todos os usuarios do CLI).
@@ -62,39 +56,9 @@ def ensure_gui_bootstrap(project_root: Path) -> None:
 
 
 def ensure_bootstrap(project_root: Path) -> None:
-    state_path = bootstrap_state_path()
     missing = missing_requirements()
-    state = load_bootstrap_state(state_path)
-    if not missing:
-        if state.get("version") != BOOTSTRAP_VERSION:
-            write_bootstrap_state(state_path)
-        return
-    install_missing_requirements(missing, project_root)
-    write_bootstrap_state(state_path)
-
-
-def bootstrap_state_path() -> Path:
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return cache_home / "reforja" / "bootstrap-state.json"
-
-
-def load_bootstrap_state(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def write_bootstrap_state(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": BOOTSTRAP_VERSION,
-        "updated_at": datetime.now(UTC).isoformat(),
-        "requirements": [requirement.module_name for requirement in REQUIREMENTS],
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if missing:
+        install_missing_requirements(missing, project_root)
 
 
 def missing_requirements() -> list[BootstrapRequirement]:

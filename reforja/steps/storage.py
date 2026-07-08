@@ -8,12 +8,13 @@ from ..core import (
     Color,
     announce,
     backup_existing,
+    badge,
     confirm_phrase,
     load_env_file,
     write_text,
     write_text_sudo,
 )
-from ..installers import (
+from ..platform import (
     install_system_package,
 )
 from ..steps_base import Step
@@ -163,7 +164,7 @@ ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao mon
             "rclone-google-drive.service"
         ):
             self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} rclone-google-drive.service ja esta habilitado e ativo"
+                f"{badge('ok', Color.SUCCESS)} rclone-google-drive.service ja esta habilitado e ativo"
             )
         else:
             self.ctx.runner.run(
@@ -237,8 +238,8 @@ ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao mon
         notify_service_file = service_dir / "rclone-google-drive-notify.service"
         self.ctx.runner.run(["systemctl", "--user", "disable", "--now", "rclone-google-drive.service"], check=False)
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {service_file}")
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {notify_service_file}")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {service_file}")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {notify_service_file}")
         else:
             service_file.unlink(missing_ok=True)
             notify_service_file.unlink(missing_ok=True)
@@ -265,7 +266,7 @@ class FstabStep(Step):
         cleaned = self._without_block(current)
         content = cleaned.rstrip() + "\n\n" + "\n".join([self.begin, *lines, self.end]) + "\n"
         if current == content:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} /etc/fstab ja contem o bloco esperado")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} /etc/fstab ja contem o bloco esperado")
             self._ensure_mountpoints()
             self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
             self.mark_skipped("/etc/fstab ja continha o bloco esperado.")
@@ -290,7 +291,7 @@ class FstabStep(Step):
             if not device:
                 if self.ctx.runner.dry_run:
                     self._found_labels.append(label)
-                self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Label nao encontrado: {label}")
+                self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Label nao encontrado: {label}")
                 continue
             self._found_labels.append(label)
             uuid = self._blkid_value(device, "UUID")
@@ -326,7 +327,7 @@ class FstabStep(Step):
         for label in getattr(self, "_found_labels", self.labels):
             mountpoint = self._mountpoint(label)
             if Path(mountpoint).exists():
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {mountpoint} ja existe")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {mountpoint} ja existe")
             else:
                 self.ctx.runner.run(["mkdir", "-p", mountpoint], sudo=True)
 

@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 from ..core import (
@@ -13,7 +12,7 @@ from ..core import (
     PromptInterruptedError,
     backup_existing,
     badge,
-    clean_subprocess_env,
+    capture,
     command_exists,
     ensure_owner,
     paint,
@@ -23,13 +22,12 @@ from ..core import (
     write_text,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
-from ..installers import (
-    install_system_package,
-)
+from ..installers import fetch_json
 from ..platform import (
     current_distro,
     ensure_antigravity_repo,
     ensure_github_cli,
+    install_system_package,
     system_installed,
 )
 from ..steps_base import Step
@@ -104,7 +102,7 @@ class GitStep(Step):
             self.mark_skipped("Nenhuma acao concluida.")
 
     def _report_failure(self, acao: str, exc: Exception) -> None:
-        self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} ao {acao}: {type(exc).__name__}: {exc}")
+        self.ctx.logger.write(f"{badge('erro', Color.ERROR)} ao {acao}: {type(exc).__name__}: {exc}")
         self.add_hint(f"Falha ao {acao}: {exc}")
 
     # ------------------------------------------------------------------ gh helpers
@@ -112,22 +110,12 @@ class GitStep(Step):
     def _gh_query(self, args: list[str], *, merge_stderr: bool = False) -> str:
         """Roda um comando `gh` de leitura pura e devolve a saida (ou "").
 
-        Nao passa pelo Runner porque e leitura (roda mesmo em dry-run) e precisa
-        capturar stdout. `gh auth status` escreve em stderr em algumas versoes,
-        por isso o merge opcional.
+        Usa capture() (fora do Runner) porque e leitura, roda mesmo em dry-run.
+        `gh auth status` escreve em stderr em algumas versoes, dai o merge opcional.
         """
         if not command_exists("gh"):
             return ""
-        try:
-            proc = subprocess.run(
-                ["gh", *args],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=clean_subprocess_env(),
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return ""
+        proc = capture(["gh", *args])
         out = proc.stdout or ""
         if merge_stderr:
             out = out + "\n" + (proc.stderr or "")
@@ -168,7 +156,7 @@ class GitStep(Step):
     def _login_account(self) -> str:
         if not command_exists("gh") and not self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} gh nao encontrado. Rode antes 'Instalar Git + GitHub CLI'."
+                f"{badge('aviso', Color.WARNING)} gh nao encontrado. Rode antes 'Instalar Git + GitHub CLI'."
             )
             self.add_hint("Instale o GitHub CLI antes de conectar a conta.")
             return ""
@@ -193,7 +181,7 @@ class GitStep(Step):
         conta = self._gh_user_field("login")
         if not conta:
             return "Login do GitHub executado."
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} conta ativa: {conta}")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} conta ativa: {conta}")
         # No mesmo fluxo, ja cria o alias SSH dedicado dessa conta (chave + bloco Host).
         alias = self._ensure_account_alias(conta)
         if alias:
@@ -296,7 +284,7 @@ class GitStep(Step):
         owner, repo = self._parse_owner_repo(spec)
         target = base / (repo or self._repo_dir_name(spec))
         if (target / ".git").exists():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {target} ja existe; atualizando")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {target} ja existe; atualizando")
             self.ctx.runner.run(
                 ["git", "-C", str(target), "pull", "--ff-only"],
                 check=False,
@@ -422,7 +410,7 @@ class GitStep(Step):
     def _write_host_block(self, alias: str, key: Path) -> None:
         existing = self.config_file.read_text(encoding="utf-8") if self.config_file.exists() else ""
         if f"Host {alias}" in existing:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} bloco 'Host {alias}' ja existe no ~/.ssh/config")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} bloco 'Host {alias}' ja existe no ~/.ssh/config")
             return
         backup_existing(self.config_file, self.ctx.runner)
         write_text(self.config_file, existing + self._account_block(alias, key), self.ctx.runner, mode=0o600)
@@ -484,7 +472,7 @@ class GitStep(Step):
         self._ensure_ssh_dir()
         key = self._key_path(alias)
         if key.exists():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} chave {key.name} ja existe; reaproveitando")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} chave {key.name} ja existe; reaproveitando")
         else:
             email = self._gh_user_field("email")
             if not email:
@@ -606,7 +594,7 @@ class GitStep(Step):
             self.ctx.runner.run(["gh", "--version"], check=False, show_progress=False)
             self.ctx.runner.run(["gh", "auth", "status"], check=False, action="Contas GitHub conectadas")
         else:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} GitHub CLI (gh) nao instalado.")
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} GitHub CLI (gh) nao instalado.")
         contas = self._logged_accounts() if gh_ok else []
 
         repos = self._load_state().get("repos", [])
@@ -792,21 +780,8 @@ class AntigravityStep(Step):
         Leitura pura (roda mesmo em dry-run). Qualquer falha de rede resulta em
         None, para o chamador cair no fallback (self.version / self.url).
         """
-        try:
-            proc = subprocess.run(
-                ["curl", "-fsSL", self.update_api],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=clean_subprocess_env(),
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return None
-        if proc.returncode != 0 or not proc.stdout.strip():
-            return None
-        try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError:
+        data = fetch_json(self.update_api)
+        if not isinstance(data, dict):
             return None
         name = data.get("productVersion") or data.get("name")
         url = data.get("url")
@@ -833,7 +808,7 @@ class AntigravityStep(Step):
         latest = self._fetch_latest()
         if latest is None:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui consultar a ultima versao; "
+                f"{badge('aviso', Color.WARNING)} nao consegui consultar a ultima versao; "
                 f"usando fallback {self.version}."
             )
             latest = {"name": self.version, "url": self.url, "sha256": None}
@@ -851,7 +826,7 @@ class AntigravityStep(Step):
             and self._wrapper_ready(existing_exe)
         ):
             self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} Antigravity IDE ja esta na versao mais recente ({target_version})"
+                f"{badge('ok', Color.SUCCESS)} Antigravity IDE ja esta na versao mais recente ({target_version})"
             )
             self._path_hint()
             self.mark_skipped(f"Antigravity IDE ja estava atualizado ({target_version}).")
@@ -864,7 +839,7 @@ class AntigravityStep(Step):
             cache.mkdir(parents=True, exist_ok=True)
         backup_existing(install_dir, self.ctx.runner)
         if tarball.exists() and tarball.stat().st_size > 1024 * 1024 and self._sha256_ok(tarball, latest["sha256"]):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} pacote Antigravity ja esta em cache: {tarball}")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} pacote Antigravity ja esta em cache: {tarball}")
         else:
             self.ctx.runner.run(
                 ["curl", "-L", "--fail", "-o", str(tarball), latest["url"]],
@@ -944,8 +919,6 @@ disown 2>/dev/null || true
 
     def _path_hint(self) -> None:
         local_bin = str(self.ctx.user.home / ".local/bin")
-        import os
-
         if local_bin not in os.environ.get("PATH", "").split(":"):
             self.ctx.logger.write("Comando para fish, se ~/.local/bin nao estiver no PATH:")
             self.ctx.logger.write(f"fish_add_path {local_bin}")
@@ -1012,10 +985,7 @@ disown 2>/dev/null || true
             cmd = ["apt", "list", "--upgradable", self.package]
         else:
             cmd = ["dnf", "check-update", self.package]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=clean_subprocess_env())
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+        proc = capture(cmd)
         if distro.is_debian:
             return self.package in proc.stdout and "upgradable" in proc.stdout
         # dnf check-update: codigo 100 = ha atualizacoes; 0 = nada a fazer.
@@ -1034,7 +1004,7 @@ disown 2>/dev/null || true
             self._install_dir,
         ):
             if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
             elif path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
             else:
@@ -1069,7 +1039,7 @@ disown 2>/dev/null || true
             repo_files = ("/etc/yum.repos.d/antigravity.repo",)
         for path in repo_files:
             if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
             else:
                 self.ctx.runner.run(
                     ["rm", "-f", path],

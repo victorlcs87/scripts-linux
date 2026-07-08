@@ -8,12 +8,28 @@ from reforja.core import (
     PromptInterruptedError,
     Runner,
     backup_path,
+    capture,
     load_env_file,
     progress_bar,
     prompt_user,
     write_text,
 )
 from reforja.desktop import DesktopEntry
+
+
+def test_capture_returns_stdout_of_pure_read() -> None:
+    proc = capture(["echo", "ola"])
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "ola"
+
+
+def test_capture_never_raises_on_missing_command() -> None:
+    proc = capture(["comando-que-nao-existe-xyz"])
+
+    assert proc.returncode == 127
+    assert proc.stdout == ""
+    assert proc.stderr
 
 
 def test_dry_run_does_not_execute_command(tmp_path: Path) -> None:

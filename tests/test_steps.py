@@ -370,10 +370,8 @@ def test_apps_on_debian_use_flatpak_for_heroic_and_zapzap_when_system_package_is
             },
         )(),
     )
-    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        "reforja.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
-    )
+    monkeypatch.setattr("reforja.installers.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("reforja.installers.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
     step._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
@@ -401,10 +399,8 @@ def test_apps_on_immutable_fall_back_to_flatpak(tmp_path: Path, monkeypatch) -> 
             },
         )(),
     )
-    monkeypatch.setattr("reforja.steps.gaming.install_system_or_aur", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        "reforja.steps.gaming.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id)
-    )
+    monkeypatch.setattr("reforja.installers.install_system_or_aur", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("reforja.installers.install_flatpak", lambda app_id, _runner: installed_flatpaks.append(app_id))
 
     step._install_system_or_flatpak("heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl")
 
@@ -1079,8 +1075,9 @@ def test_hydra_is_installable_in_step15(tmp_path: Path) -> None:
 def test_step15_installs_hydra_when_missing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)  # dry-run
     step = UpdateAppImagesStep(ctx)
-    fake_run, _calls = _fake_github_run("v4.1.0", "hydralauncher-4.1.0.AppImage")
-    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+    fake_fetch, fake_capture, _calls = _fake_github_release("v4.1.0", "hydralauncher-4.1.0.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
+    monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
     monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
     monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
 
@@ -1104,7 +1101,9 @@ def test_step15_failure_on_one_item_does_not_abort(tmp_path: Path, monkeypatch) 
         return original(app, updated, skipped, missing)
 
     monkeypatch.setattr(step, "_process_one", flaky)
-    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", _fake_github_run("v1", "Reforja.AppImage")[0])
+    fake_fetch, fake_capture, _calls = _fake_github_release("v1", "Reforja.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
+    monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
     monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
     monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
 
@@ -1115,7 +1114,7 @@ def test_step15_failure_on_one_item_does_not_abort(tmp_path: Path, monkeypatch) 
     assert processed == ["Hydra Launcher", "Reforja"]
     assert step.result.compliance == "atencao"
     assert "Hydra Launcher" in step.result.summary
-    assert "ERRO:" in log
+    assert "[erro]" in log
     assert any("chown" in hint for hint in step.result.hints)
 
 
@@ -1177,25 +1176,19 @@ def _reforja_entry(step: UpdateAppImagesStep) -> dict:
     return next(app for app in step._APPIMAGES if app["name"] == "Reforja")
 
 
-def _fake_github_run(tag: str, asset: str):
-    import json as _json
-
-    payload = _json.dumps({"tag_name": tag, "assets": [{"name": asset, "browser_download_url": f"https://x/{asset}"}]})
-
-    class _Proc:
-        def __init__(self, stdout: str) -> None:
-            self.stdout = stdout
-            self.returncode = 0
-
+def _fake_github_release(tag: str, asset: str):
+    payload = {"tag_name": tag, "assets": [{"name": asset, "browser_download_url": f"https://x/{asset}"}]}
     calls: list[list[str]] = []
 
-    def run(cmd, *args, **kwargs):
-        calls.append(list(cmd))
-        if cmd[:2] == ["curl", "-fsSL"]:
-            return _Proc(payload)
-        return _Proc("")
+    def fetch(url, **_kwargs):
+        calls.append(["curl", "-fsSL", url])
+        return payload
 
-    return run, calls
+    def fake_capture(cmd, **_kwargs):
+        calls.append(list(cmd))
+        return CompletedProcess(list(cmd), 0, stdout="", stderr="")
+
+    return fetch, fake_capture, calls
 
 
 def test_reforja_entry_is_installable_and_self_update(tmp_path: Path) -> None:
@@ -1209,8 +1202,9 @@ def test_reforja_entry_is_installable_and_self_update(tmp_path: Path) -> None:
 def test_update_appimages_installs_reforja_when_missing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)  # dry-run
     step = UpdateAppImagesStep(ctx)
-    fake_run, _calls = _fake_github_run("v1.0.5", "Reforja-1.0.5-x86_64.AppImage")
-    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+    fake_fetch, fake_capture, _calls = _fake_github_release("v1.0.5", "Reforja-1.0.5-x86_64.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
+    monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
     monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
     monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
 
@@ -1225,8 +1219,9 @@ def test_reforja_self_update_uses_temp_and_skips_kill(tmp_path: Path, monkeypatc
     ctx = make_ctx(tmp_path)  # dry-run: comandos sao apenas ecoados
     step = UpdateAppImagesStep(ctx)
     app = _reforja_entry(step)
-    fake_run, calls = _fake_github_run("v1.0.6", "Reforja-1.0.6-x86_64.AppImage")
-    monkeypatch.setattr("reforja.steps.appimage.subprocess.run", fake_run)
+    fake_fetch, fake_capture, calls = _fake_github_release("v1.0.6", "Reforja-1.0.6-x86_64.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
+    monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
 
     canonical = ctx.user.home / app["path"]
     result = step._update_one(app, canonical)

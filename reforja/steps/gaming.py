@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import grp
 import os
 import re
 import subprocess
@@ -12,6 +11,7 @@ from ..core import (
     announce,
     backup_existing,
     badge,
+    capture,
     command_exists,
     confirm_phrase,
     paint,
@@ -22,19 +22,22 @@ from ..core import (
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
-    ensure_rpmfusion,
     flatpak_installed,
     install_flatpak,
+    install_system_or_flatpak,
+    npm_global_installed,
+)
+from ..platform import (
+    current_distro,
+    ensure_rpmfusion,
     install_system_or_aur,
     install_system_package,
     installed_packages_matching,
-    npm_global_installed,
     remove_system_packages,
     system_installed,
 )
-from ..platform import current_distro
 from ..steps_base import Step
-from ._common import ProbeResult, header
+from ._common import InputGroupMixin, ProbeResult, header
 
 # Pacotes de driver por fabricante e familia de distro. Em Arch, os `lib32-*`
 # dependem do repositorio [multilib] habilitado (padrao no CachyOS).
@@ -382,12 +385,7 @@ class GpuStep(Step):
         )
 
     def _gpu_count(self) -> int:
-        if not command_exists("lspci"):
-            return 0
-        result = self._run_probe(["lspci"], "Listando dispositivos PCI")
-        if result.returncode != 0:
-            return 0
-        return len(hardware.list_gpus(result.stdout))
+        return len(self._list_gpus())
 
     def _probe_prime_gl(self) -> ProbeResult:
         if not command_exists("prime-run"):
@@ -431,17 +429,8 @@ class GpuStep(Step):
         )
 
     def _run_probe(self, cmd: list[str], action: str) -> subprocess.CompletedProcess[str]:
-        try:
-            return subprocess.run(
-                cmd,
-                cwd=str(self.ctx.root),
-                env=os.environ.copy(),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=str(exc))
+        # Leitura pura (roda mesmo em dry-run); nunca levanta.
+        return capture(cmd, cwd=self.ctx.root)
 
     def _render_gpu_summary(self, results: list[ProbeResult]) -> None:
         header(self, self.title, "Diagnostico amigavel de sessao grafica e GPUs")
@@ -615,14 +604,14 @@ class AppsStep(Step):
         if "Steam" in selected:
             if self._detect_install_source("Steam"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} Steam ja detectado via {self._detect_install_source('Steam')}"
+                    f"{badge('ok', Color.SUCCESS)} Steam ja detectado via {self._detect_install_source('Steam')}"
                 )
             else:
                 self._install_steam()
         if "Heroic" in selected:
             if self._detect_install_source("Heroic"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} Heroic ja detectado via {self._detect_install_source('Heroic')}"
+                    f"{badge('ok', Color.SUCCESS)} Heroic ja detectado via {self._detect_install_source('Heroic')}"
                 )
             else:
                 self._install_system_or_flatpak(
@@ -631,21 +620,21 @@ class AppsStep(Step):
         if "ZapZap" in selected:
             if self._detect_install_source("ZapZap"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} ZapZap ja detectado via {self._detect_install_source('ZapZap')}"
+                    f"{badge('ok', Color.SUCCESS)} ZapZap ja detectado via {self._detect_install_source('ZapZap')}"
                 )
             else:
                 self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
         if "Solaar" in selected:
             if self._detect_install_source("Solaar"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} Solaar ja detectado via {self._detect_install_source('Solaar')}"
+                    f"{badge('ok', Color.SUCCESS)} Solaar ja detectado via {self._detect_install_source('Solaar')}"
                 )
             else:
                 self._install_solaar()
         if "LocalSend" in selected:
             if self._detect_install_source("LocalSend"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
+                    f"{badge('ok', Color.SUCCESS)} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
                 )
             else:
                 self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
@@ -654,7 +643,7 @@ class AppsStep(Step):
                 continue
             source = self._detect_install_source(name)
             if source:
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja detectado via {source}")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja detectado via {source}")
                 continue
             header(self, f"{name} - Flatpak")
             install_flatpak(str(definition["flatpak_id"]), self.ctx.runner)
@@ -662,13 +651,13 @@ class AppsStep(Step):
             header(self, "Codex CLI")
             if self._detect_install_source("Codex CLI"):
                 self.ctx.logger.write(
-                    f"{Color.GREEN}OK:{Color.RESET} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}"
+                    f"{badge('ok', Color.SUCCESS)} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}"
                 )
             else:
                 install_system_package("nodejs", self.ctx.runner)
                 install_system_package("npm", self.ctx.runner)
                 if npm_global_installed("@openai/codex"):
-                    self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} @openai/codex ja instalado globalmente")
+                    self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} @openai/codex ja instalado globalmente")
                 else:
                     self.ctx.runner.run(
                         ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
@@ -685,7 +674,7 @@ class AppsStep(Step):
     def _install_auto_cpufreq(self) -> None:
         source = self._detect_install_source("auto-cpufreq")
         if source:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} auto-cpufreq ja detectado via {source}")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} auto-cpufreq ja detectado via {source}")
             self._enable_auto_cpufreq_daemon()
             return
         header(self, "auto-cpufreq", "Instalando gerenciador automatico de CPU")
@@ -694,13 +683,13 @@ class AppsStep(Step):
             return
         if current_distro().immutable:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} sistema imutavel: o instalador do auto-cpufreq escreve em /usr "
+                f"{badge('aviso', Color.WARNING)} sistema imutavel: o instalador do auto-cpufreq escreve em /usr "
                 "(somente leitura). Pulando instalacao via GitHub."
             )
             self.add_hint("auto-cpufreq nao foi instalado: sistema imutavel sem pacote nativo disponivel.")
             return
         self.ctx.logger.write(
-            f"{Color.YELLOW}AVISO:{Color.RESET} auto-cpufreq nao possui Flatpak oficial; usando instalador do GitHub."
+            f"{badge('aviso', Color.WARNING)} auto-cpufreq nao possui Flatpak oficial; usando instalador do GitHub."
         )
         install_system_package("git", self.ctx.runner)
         src_dir = self.ctx.user.home / ".cache/auto-cpufreq-src"
@@ -733,7 +722,7 @@ class AppsStep(Step):
     def _enable_auto_cpufreq_daemon(self) -> None:
         if not command_exists("auto-cpufreq") and not self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} binario auto-cpufreq nao encontrado para habilitar o daemon."
+                f"{badge('aviso', Color.WARNING)} binario auto-cpufreq nao encontrado para habilitar o daemon."
             )
             return
         self.ctx.runner.run(
@@ -759,7 +748,7 @@ class AppsStep(Step):
             return
         if distro.is_debian:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Steam nao apareceu nos repositorios apt atuais. "
+                f"{badge('aviso', Color.WARNING)} Steam nao apareceu nos repositorios apt atuais. "
                 "Habilite multiverse/non-free/non-free-firmware conforme sua distro e rode esta etapa novamente."
             )
             self.mark_manual("Steam depende de repositorios adicionais no Debian/Ubuntu.")
@@ -776,8 +765,7 @@ class AppsStep(Step):
         if self.ctx.runner.dry_run or flatpak_installed("io.github.pwr_solaar.solaar"):
             return
         self.ctx.logger.write(
-            f"{Color.YELLOW}AVISO:{Color.RESET} Solaar indisponivel nos repositorios; "
-            "instalando Piper como alternativa."
+            f"{badge('aviso', Color.WARNING)} Solaar indisponivel nos repositorios; instalando Piper como alternativa."
         )
         header(self, "Piper", "Alternativa ao Solaar para mouses gaming")
         if install_system_or_aur("piper", "piper", self.ctx.runner):
@@ -785,10 +773,7 @@ class AppsStep(Step):
         install_flatpak("org.freedesktop.Piper", self.ctx.runner)
 
     def _install_system_or_flatpak(self, system_pkg: str, aur_pkg: str | None, flatpak_id: str) -> None:
-        if install_system_or_aur(system_pkg, aur_pkg, self.ctx.runner):
-            return
-        # Qualquer familia (incluindo imutaveis) cai no Flatpak quando o nativo nao instala.
-        install_flatpak(flatpak_id, self.ctx.runner)
+        install_system_or_flatpak(system_pkg, aur_pkg, flatpak_id, self.ctx.runner)
 
     def status(self) -> None:
         header(self, self.title, "Verificando origem detectada de cada app")
@@ -831,7 +816,7 @@ class AppsStep(Step):
         return None
 
 
-class SunshineStep(Step):
+class SunshineStep(InputGroupMixin, Step):
     id = "13"
     title = "Sunshine / Moonlight"
     description = (
@@ -876,39 +861,10 @@ class SunshineStep(Step):
             return
         self.mark_done("Sunshine instalado/configurado com autostart, UFW e integracao KDE.")
 
-    def _ensure_input_group(self) -> bool:
-        if self._user_in_group("input"):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} usuario {self.ctx.user.name} ja esta no grupo input")
-            return True
-        result = self.ctx.runner.run(
-            ["gpasswd", "-a", self.ctx.user.name, "input"],
-            sudo=True,
-            check=False,
-            action=f"Adicionando {self.ctx.user.name} ao grupo input",
-            show_progress=False,
-        )
-        if result and result.returncode != 0:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui adicionar {self.ctx.user.name} ao grupo input automaticamente."
-            )
-            self.ctx.logger.write(f"Execute manualmente: sudo gpasswd -a {self.ctx.user.name} input")
-            return False
-        self.ctx.logger.write(
-            f"{Color.YELLOW}AVISO:{Color.RESET} faca logout/login ou reinicie para o grupo input valer nesta sessao."
-        )
-        return True
-
-    def _user_in_group(self, group_name: str) -> bool:
-        try:
-            group = grp.getgrnam(group_name)
-        except KeyError:
-            return False
-        return self.ctx.user.name in group.gr_mem or self.ctx.user.gid == group.gr_gid
-
     def _write_udev_rule(self) -> None:
         if self._udev_rule_ready():
             self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} regra udev do Sunshine ja esta configurada: {self.udev_rule_file}"
+                f"{badge('ok', Color.SUCCESS)} regra udev do Sunshine ja esta configurada: {self.udev_rule_file}"
             )
         else:
             backup_existing(self.udev_rule_file, self.ctx.runner, sudo=True)
@@ -949,14 +905,14 @@ class SunshineStep(Step):
         write_text(self.autostart_file, self._autostart_content(), self.ctx.runner, mode=0o644)
         if self.user_service_file.exists():
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} existe sunshine.service de usuario; revise se houver Sunshine duplicado: {self.user_service_file}"
+                f"{badge('aviso', Color.WARNING)} existe sunshine.service de usuario; revise se houver Sunshine duplicado: {self.user_service_file}"
             )
 
     def _ensure_menu_launcher(self) -> None:
         existing = self._find_existing_launcher()
         if existing and existing != self.fallback_desktop_file:
             self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} lancador Sunshine ja fornecido pelo sistema: {existing}"
+                f"{badge('ok', Color.SUCCESS)} lancador Sunshine ja fornecido pelo sistema: {existing}"
             )
             return
         entry = DesktopEntry(
@@ -1008,11 +964,11 @@ class SunshineStep(Step):
 
     def _configure_ufw(self) -> None:
         if not command_exists("ufw"):
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} UFW nao instalado. Pulando regras de firewall.")
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} UFW nao instalado. Pulando regras de firewall.")
             return
         if not self._ufw_active():
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} UFW existe, mas nao esta ativo. Pulando regras de firewall."
+                f"{badge('aviso', Color.WARNING)} UFW existe, mas nao esta ativo. Pulando regras de firewall."
             )
             return
         for (port, comment), _delete_spec in self.ufw_rules:
@@ -1038,11 +994,11 @@ class SunshineStep(Step):
     def _start_sunshine(self) -> None:
         if not command_exists("sunshine") and not Path("/usr/bin/sunshine").exists() and not self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} binario sunshine nao encontrado para iniciar agora."
+                f"{badge('aviso', Color.WARNING)} binario sunshine nao encontrado para iniciar agora."
             )
             return
         if self._sunshine_running():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Sunshine ja esta rodando")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Sunshine ja esta rodando")
             return
         self.ctx.runner.run(
             f"nohup /usr/bin/sunshine > {self.sunshine_log_file} 2>&1 &",
@@ -1178,7 +1134,7 @@ class SunshineStep(Step):
 
     def _remove_user_file(self, path: Path) -> None:
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
         else:
             path.unlink(missing_ok=True)
 
@@ -1186,20 +1142,20 @@ class SunshineStep(Step):
         if not self.fallback_desktop_file.exists():
             if self.ctx.runner.dry_run:
                 self.ctx.logger.write(
-                    f"{Color.YELLOW}[dry-run]{Color.RESET} removeria fallback desktop se existisse: {self.fallback_desktop_file}"
+                    f"{badge('dry-run', Color.DRY_RUN)} removeria fallback desktop se existisse: {self.fallback_desktop_file}"
                 )
             return
         if self._desktop_launches_sunshine(self.fallback_desktop_file):
             self._remove_user_file(self.fallback_desktop_file)
         else:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} fallback desktop parece customizado; preservando: {self.fallback_desktop_file}"
+                f"{badge('aviso', Color.WARNING)} fallback desktop parece customizado; preservando: {self.fallback_desktop_file}"
             )
 
     def _remove_udev_rule_if_managed(self) -> None:
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {self.udev_rule_file} se contiver a regra gerenciada"
+                f"{badge('dry-run', Color.DRY_RUN)} removeria {self.udev_rule_file} se contiver a regra gerenciada"
             )
             return
         if not self.udev_rule_file.exists():
@@ -1221,7 +1177,7 @@ class SunshineStep(Step):
             )
         else:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} regra udev parece customizada; preservando: {self.udev_rule_file}"
+                f"{badge('aviso', Color.WARNING)} regra udev parece customizada; preservando: {self.udev_rule_file}"
             )
 
     def _remove_ufw_rules(self) -> None:

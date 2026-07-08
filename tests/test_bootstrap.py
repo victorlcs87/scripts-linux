@@ -6,21 +6,23 @@ import pytest
 from reforja import bootstrap
 
 
-def test_ensure_bootstrap_writes_state_when_requirements_are_present(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+def test_ensure_bootstrap_does_nothing_when_requirements_are_present(tmp_path: Path, monkeypatch) -> None:
+    installed: list[list[str]] = []
     monkeypatch.setattr("importlib.util.find_spec", lambda _name: object())
+    monkeypatch.setattr(
+        bootstrap,
+        "install_missing_requirements",
+        lambda requirements, _root: installed.append([item.module_name for item in requirements]),
+    )
 
     ensure_root = tmp_path / "repo"
     ensure_root.mkdir()
     bootstrap.ensure_bootstrap(ensure_root)
 
-    state_path = bootstrap.bootstrap_state_path()
-    assert state_path.exists()
-    assert '"version": 1' in state_path.read_text(encoding="utf-8")
+    assert installed == []
 
 
 def test_ensure_bootstrap_installs_missing_requirements_once(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     installed: list[list[str]] = []
 
     monkeypatch.setattr("importlib.util.find_spec", lambda _name: None)
@@ -34,8 +36,15 @@ def test_ensure_bootstrap_installs_missing_requirements_once(tmp_path: Path, mon
     ensure_root.mkdir()
     bootstrap.ensure_bootstrap(ensure_root)
 
-    assert installed == [["InquirerPy", "pytest"]]
-    assert bootstrap.bootstrap_state_path().exists()
+    assert installed == [["InquirerPy"]]
+
+
+def test_requirements_do_not_impose_dev_dependencies() -> None:
+    # pytest/ruff sao deps de desenvolvimento (pip install -e .[dev]); o
+    # bootstrap de runtime nao deve instala-las para o usuario final.
+    names = {req.module_name for req in bootstrap.REQUIREMENTS}
+    assert "pytest" not in names
+    assert names == {"InquirerPy"}
 
 
 def test_install_missing_requirements_raises_clear_error_when_pip_fails(tmp_path: Path, monkeypatch) -> None:
@@ -83,10 +92,13 @@ def test_install_with_system_package_uses_dnf_on_fedora(tmp_path: Path, monkeypa
     monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(subprocess, "run", lambda cmd, **_kwargs: commands.append(cmd))
 
-    bootstrap._install_with_system_package([bootstrap.REQUIREMENTS[1]], tmp_path)
+    requirement = bootstrap.BootstrapRequirement(
+        "exemplo", "python-exemplo", "python3-exemplo", None, "exemplo", fedora_package="python3-exemplo"
+    )
+    bootstrap._install_with_system_package([requirement], tmp_path)
 
     assert commands[-1][:4] == ["sudo", "dnf", "install", "-y"]
-    assert "python3-pytest" in commands[-1]
+    assert "python3-exemplo" in commands[-1]
 
 
 def test_install_with_system_package_skips_native_on_immutable(tmp_path: Path, monkeypatch) -> None:

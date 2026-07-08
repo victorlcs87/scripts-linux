@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from ..cli import ROOT, default_step_message, default_step_summary
+from ..cli import ROOT
 from ..core import (
     CommandInterruptedError,
     InteractiveExecutor,
@@ -21,6 +21,7 @@ from ..core import (
     StepRunResult,
     detect_user,
 )
+from ..dispatch import dispatch_action, finalize_result
 from ..steps_base import Step, StepContext
 
 
@@ -82,37 +83,14 @@ class StepWorker(QThread):
             self.failed.emit("erro", f"etapa falhou: {exc}")
 
     def _run_action(self) -> StepRunResult:
-        dry = self._action == "dry-run"
         step = build_gui_step(
             self._step_cls,
             self._logger,
-            dry_run=dry,
+            dry_run=self._action == "dry-run",
             askpass=self._askpass,
             interactive_executor=self._interactive_executor,
             run_dir=self._run_dir,
         )
         started = time.monotonic()
-        if self._action in ("apply", "dry-run"):
-            step.apply()
-        elif self._action == "status":
-            step.status()
-        elif self._action == "undo":
-            step.undo()
-        else:
-            raise ValueError(f"acao invalida: {self._action}")
-        if not step.result.message:
-            step.result.message = default_step_message(self._action, step.result.status)
-        if not step.result.summary:
-            step.result.summary = default_step_summary(self._action, step.result)
-        return StepRunResult(
-            step_id=self._step_cls.id,
-            title=self._step_cls.title,
-            status=step.result.status,
-            message=step.result.summary,
-            compliance=step.result.compliance,
-            duration_seconds=time.monotonic() - started,
-            applied_items=step.result.applied_items,
-            missing_items=step.result.missing_items,
-            attention_items=step.result.attention_items,
-            hints=step.result.hints,
-        )
+        dispatch_action(step, self._action)
+        return finalize_result(step, self._action, time.monotonic() - started)

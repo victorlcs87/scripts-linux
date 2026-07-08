@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -8,12 +9,14 @@ from pathlib import Path
 from ..core import (
     Color,
     badge,
+    capture,
     clean_subprocess_env,
     select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
     copy_asset,
+    fetch_json,
 )
 from ..steps_base import Step
 from ._common import header
@@ -89,7 +92,7 @@ class UpdateAppImagesStep(Step):
                 self._process_one(app, updated, skipped, missing)
             except Exception as exc:  # noqa: BLE001 - reportar e continuar
                 failed.append(app["name"])
-                self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} {app['name']}: {type(exc).__name__}: {exc}")
+                self.ctx.logger.write(f"{badge('erro', Color.ERROR)} {app['name']}: {type(exc).__name__}: {exc}")
                 self.add_hint(self._failure_hint(app, exc))
         if failed:
             self.mark_attention(
@@ -172,7 +175,7 @@ class UpdateAppImagesStep(Step):
         )
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} criaria {canonical.parent} e moveria {discovered} para {canonical}"
+                f"{badge('dry-run', Color.DRY_RUN)} criaria {canonical.parent} e moveria {discovered} para {canonical}"
             )
         else:
             canonical.parent.mkdir(parents=True, exist_ok=True)
@@ -212,10 +215,10 @@ class UpdateAppImagesStep(Step):
             if alt == desktop_file or not alt.exists():
                 continue
             if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria atalho nao-canonico {alt}")
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria atalho nao-canonico {alt}")
             else:
                 alt.unlink(missing_ok=True)
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Atalho nao-canonico removido: {alt}")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Atalho nao-canonico removido: {alt}")
 
     def _install_fresh(self, app: dict) -> str | None:
         """Instala um AppImage ausente (quando installable): baixa a versao mais recente,
@@ -226,9 +229,7 @@ class UpdateAppImagesStep(Step):
         canonical = self.ctx.user.home / app["path"]
         self.ctx.logger.write(f"{badge(name.lower().replace(' ', '-'), Color.INFO)} {name}: nao instalado; instalando.")
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} criaria {canonical.parent} e instalaria {name}"
-            )
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} criaria {canonical.parent} e instalaria {name}")
         else:
             canonical.parent.mkdir(parents=True, exist_ok=True)
         result = self._update_one(app, canonical)
@@ -265,27 +266,9 @@ class UpdateAppImagesStep(Step):
 
         # Consultar release mais recente no GitHub (execucao real mesmo em dry-run: e apenas leitura)
         self.ctx.logger.write(f"Consultando release mais recente de {name}...")
-        try:
-            api_proc = subprocess.run(
-                ["curl", "-fsSL", f"https://api.github.com/repos/{repo}/releases/latest"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=clean_subprocess_env(),
-            )
-            api_stdout = api_proc.stdout
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            api_stdout = ""
-        if not api_stdout.strip():
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Nao foi possivel consultar releases de {name}.")
-            return "current"
-
-        import json as _json
-
-        try:
-            release = _json.loads(api_stdout)
-        except _json.JSONDecodeError:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Resposta invalida da API do GitHub para {name}.")
+        release = fetch_json(f"https://api.github.com/repos/{repo}/releases/latest")
+        if not isinstance(release, dict):
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Nao foi possivel consultar releases de {name}.")
             return "current"
 
         latest_tag: str = release.get("tag_name", "")
@@ -296,23 +279,19 @@ class UpdateAppImagesStep(Step):
         )
         if not url:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Nenhum asset AppImage encontrado no release {latest_tag} de {name}."
+                f"{badge('aviso', Color.WARNING)} Nenhum asset AppImage encontrado no release {latest_tag} de {name}."
             )
             return "current"
 
         # Comparar com versao instalada
         installed_tag = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
-        import os as _os
-
-        app_ok = appimage_path.exists() and _os.access(str(appimage_path), _os.X_OK)
+        app_ok = appimage_path.exists() and os.access(str(appimage_path), os.X_OK)
         if installed_tag and installed_tag == latest_tag and app_ok:
-            self.ctx.logger.write(
-                f"{Color.GREEN}OK:{Color.RESET} {name} ja esta na versao mais recente ({latest_tag})."
-            )
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja esta na versao mais recente ({latest_tag}).")
             return "current"
         if installed_tag and installed_tag == latest_tag and not app_ok:
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} {name} marcado como {latest_tag} mas arquivo ausente ou nao-executavel. Forcando re-download."
+                f"{badge('aviso', Color.WARNING)} {name} marcado como {latest_tag} mas arquivo ausente ou nao-executavel. Forcando re-download."
             )
 
         if installed_tag:
@@ -334,7 +313,7 @@ class UpdateAppImagesStep(Step):
         )
         if dl is not None and dl.returncode != 0:
             self.ctx.logger.write(
-                f"{Color.RED}ERRO:{Color.RESET} Falha ao baixar {name} (codigo {dl.returncode}). Versao nao registrada."
+                f"{badge('erro', Color.ERROR)} Falha ao baixar {name} (codigo {dl.returncode}). Versao nao registrada."
             )
             if was_running:
                 self._relaunch(appimage_path, name)
@@ -348,7 +327,7 @@ class UpdateAppImagesStep(Step):
         chmod_ok = chmod_result is None or chmod_result.returncode == 0
         if not chmod_ok:
             self.ctx.logger.write(
-                f"{Color.RED}ERRO:{Color.RESET} Falha ao tornar {name} executavel. Versao nao registrada."
+                f"{badge('erro', Color.ERROR)} Falha ao tornar {name} executavel. Versao nao registrada."
             )
             if was_running:
                 self._relaunch(appimage_path, name)
@@ -362,16 +341,14 @@ class UpdateAppImagesStep(Step):
             )
             if mv_result is not None and mv_result.returncode != 0:
                 self.ctx.logger.write(
-                    f"{Color.RED}ERRO:{Color.RESET} Falha ao instalar o novo {name}. Versao nao registrada."
+                    f"{badge('erro', Color.ERROR)} Falha ao instalar o novo {name}. Versao nao registrada."
                 )
                 return "current"
         if not self.ctx.runner.dry_run:
             version_file.write_text(latest_tag + "\n", encoding="utf-8")
         else:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} gravaria versao {latest_tag} em {version_file}"
-            )
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} atualizado para {latest_tag}.")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} gravaria versao {latest_tag} em {version_file}")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} atualizado para {latest_tag}.")
         if self_update:
             self.ctx.logger.write(
                 f"{badge('info', Color.INFO)} A nova versao de {name} sera usada no proximo lancamento."
@@ -382,34 +359,30 @@ class UpdateAppImagesStep(Step):
 
     def _kill_if_running(self, appimage_path: Path, name: str) -> bool:
         """Encerra o processo do AppImage se estiver rodando. Retorna True se estava rodando."""
-        result = subprocess.run(
-            ["pgrep", "-f", str(appimage_path)],
-            capture_output=True,
-            text=True,
-        )
+        result = capture(["pgrep", "-f", str(appimage_path)])
         pids = result.stdout.strip().split() if result.stdout.strip() else []
         if not pids:
             return False
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} encerraria {name} (PIDs: {', '.join(pids)}) antes de atualizar"
+                f"{badge('dry-run', Color.DRY_RUN)} encerraria {name} (PIDs: {', '.join(pids)}) antes de atualizar"
             )
             return True
         self.ctx.logger.write(f"Encerrando {name} (PIDs: {', '.join(pids)}) para atualizar...")
-        subprocess.run(["kill", "-TERM"] + pids, capture_output=True)
+        capture(["kill", "-TERM", *pids])
         time.sleep(2)
         # Garante encerramento caso SIGTERM nao tenha sido suficiente
-        still = subprocess.run(["pgrep", "-f", str(appimage_path)], capture_output=True, text=True)
+        still = capture(["pgrep", "-f", str(appimage_path)])
         if still.stdout.strip():
-            subprocess.run(["kill", "-KILL"] + still.stdout.strip().split(), capture_output=True)
+            capture(["kill", "-KILL", *still.stdout.strip().split()])
             time.sleep(1)
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} encerrado.")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} encerrado.")
         return True
 
     def _relaunch(self, appimage_path: Path, name: str) -> None:
         """Relanca o AppImage em segundo plano apos a atualizacao."""
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} relancaria {name} em segundo plano")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} relancaria {name} em segundo plano")
             return
         self.ctx.logger.write(f"Relancando {name}...")
         subprocess.Popen(
@@ -420,7 +393,7 @@ class UpdateAppImagesStep(Step):
             close_fds=True,
             env=clean_subprocess_env(),
         )
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} relancado em segundo plano.")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} relancado em segundo plano.")
 
     def status(self) -> None:
         header(self, self.title, "Versoes instaladas de AppImages")

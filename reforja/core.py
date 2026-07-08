@@ -99,6 +99,33 @@ def clean_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def capture(
+    cmd: Sequence[str],
+    *,
+    timeout: int = 30,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Roda um comando de LEITURA pura (fora do Runner) e captura a saida.
+
+    Uso: consultas que rodam mesmo em dry-run (gh, lspci, pgrep, probes).
+    Nunca levanta: timeout/comando ausente viram returncode 127 com stderr
+    preenchido. Sempre usa clean_subprocess_env() para nao vazar libs do
+    AppImage/PyInstaller para os subprocessos.
+    """
+    try:
+        return subprocess.run(
+            list(cmd),
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=clean_subprocess_env(),
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        return subprocess.CompletedProcess(args=list(cmd), returncode=127, stdout="", stderr=str(exc))
+
+
 def detect_user() -> UserInfo:
     name = os.environ.get("SUDO_USER") or os.environ.get("USER") or pwd.getpwuid(os.getuid()).pw_name
     entry = pwd.getpwnam(name)

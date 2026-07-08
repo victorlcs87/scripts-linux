@@ -6,9 +6,10 @@ from pathlib import Path
 from .. import hardware
 from ..core import (
     Color,
+    badge,
     command_exists,
 )
-from ..installers import (
+from ..platform import (
     install_system_or_aur,
     install_system_package,
 )
@@ -40,7 +41,7 @@ class HardwareStep(Step):
         for line in hardware.render_summary(facts):
             self.ctx.logger.write(line)
         self.ctx.logger.write("")
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} relatorio salvo em {destino}")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} relatorio salvo em {destino}")
         self.add_hint(f"Compartilhe o arquivo quando precisar de suporte: {destino}")
         self.mark_done(f"Inventario coletado e salvo em {destino}.")
         self.mark_applied("Inventario de hardware coletado.", items=hardware.facts_summary(facts))
@@ -60,7 +61,7 @@ class HardwareStep(Step):
             self.mark_pending("Nenhum inventario de hardware foi coletado ainda.", missing=[str(destino)])
             return
         mtime = datetime.fromtimestamp(destino.stat().st_mtime)
-        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} relatorio em {destino}")
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} relatorio em {destino}")
         self.ctx.logger.write(f"Ultima coleta: {mtime:%Y-%m-%d %H:%M:%S}")
         facts = hardware.read_facts()
         for line in hardware.facts_summary(facts):
@@ -70,7 +71,7 @@ class HardwareStep(Step):
     def undo(self) -> None:
         destino = self.report_file
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {destino}")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {destino}")
             return
         if destino.exists():
             self.ctx.runner.run(

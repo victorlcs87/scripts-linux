@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import grp
 import os
 import re
 from pathlib import Path
@@ -14,15 +13,15 @@ from ..core import (
     write_text,
     write_text_sudo,
 )
-from ..installers import (
+from ..platform import (
     install_system_or_aur,
     system_installed,
 )
 from ..steps_base import Step
-from ._common import header
+from ._common import InputGroupMixin, header
 
 
-class GesturesStep(Step):
+class GesturesStep(InputGroupMixin, Step):
     id = "09"
     title = "Gestos KDE"
     description = (
@@ -34,7 +33,7 @@ class GesturesStep(Step):
         header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
         if not hardware.has_touchpad():
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} nenhum touchpad detectado nesta maquina; gestos nao se aplicam a desktops."
+                f"{badge('aviso', Color.WARNING)} nenhum touchpad detectado nesta maquina; gestos nao se aplicam a desktops."
             )
             self.mark_skipped("Maquina sem touchpad; gestos nao se aplicam.")
             self.mark_applied("Nao aplicavel: maquina sem touchpad.")
@@ -66,35 +65,6 @@ class GesturesStep(Step):
             return
         self.mark_done("Gestos configurados com libinput-gestures.")
 
-    def _ensure_input_group(self) -> bool:
-        if self._user_in_group("input"):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} usuario {self.ctx.user.name} ja esta no grupo input")
-            return True
-        result = self.ctx.runner.run(
-            ["gpasswd", "-a", self.ctx.user.name, "input"],
-            sudo=True,
-            check=False,
-            action=f"Adicionando {self.ctx.user.name} ao grupo input",
-            show_progress=False,
-        )
-        if result and result.returncode != 0:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} nao consegui adicionar {self.ctx.user.name} ao grupo input automaticamente."
-            )
-            self.ctx.logger.write(f"Execute manualmente: sudo gpasswd -a {self.ctx.user.name} input")
-            return False
-        self.ctx.logger.write(
-            f"{Color.YELLOW}AVISO:{Color.RESET} faca logout/login ou reinicie para o grupo input valer nesta sessao."
-        )
-        return True
-
-    def _user_in_group(self, group_name: str) -> bool:
-        try:
-            group = grp.getgrnam(group_name)
-        except KeyError:
-            return False
-        return self.ctx.user.name in group.gr_mem or self.ctx.user.gid == group.gr_gid
-
     def _write_libinput_config(self) -> None:
         helper = self.ctx.user.home / ".local/bin/kde-gnome-like-overview"
         conf = self.ctx.user.home / ".config/libinput-gestures.conf"
@@ -111,7 +81,7 @@ exit 1
             mode=0o755,
         )
         if conf.exists() and conf.read_text(encoding="utf-8", errors="ignore") == conf_content:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {conf} ja esta atualizado")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {conf} ja esta atualizado")
         else:
             backup_existing(conf, self.ctx.runner)
             write_text(conf, conf_content, self.ctx.runner)
@@ -189,7 +159,7 @@ exit 1
             self.ctx.user.home / ".local/bin/kde-gnome-like-overview",
         ):
             if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {path}")
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
             else:
                 path.unlink(missing_ok=True)
         if command_exists("libinput-gestures-setup"):
@@ -210,7 +180,7 @@ class NumLockStep(Step):
         kde_conf = self.ctx.user.home / ".config/kcminputrc"
         if command_exists("kwriteconfig6"):
             if self._kde_numlock_ready(kde_conf):
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do KDE ja esta configurado")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Num Lock do KDE ja esta configurado")
             else:
                 backup_existing(kde_conf, self.ctx.runner)
                 self.ctx.runner.run(
@@ -224,7 +194,7 @@ class NumLockStep(Step):
                 kde_conf.read_text(encoding="utf-8") if kde_conf.exists() else "", "Keyboard", "NumLock", "0"
             )
             if kde_conf.exists() and kde_conf.read_text(encoding="utf-8", errors="ignore") == content:
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do KDE ja esta configurado")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Num Lock do KDE ja esta configurado")
             else:
                 backup_existing(kde_conf, self.ctx.runner)
                 write_text(kde_conf, content, self.ctx.runner)
@@ -236,7 +206,7 @@ class NumLockStep(Step):
         )
         sddm_content = "[General]\nNumlock=on\n"
         if self.sddm_file.exists() and self.sddm_file.read_text(encoding="utf-8", errors="ignore") == sddm_content:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Num Lock do SDDM ja esta configurado")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Num Lock do SDDM ja esta configurado")
         else:
             backup_existing(self.sddm_file, self.ctx.runner, sudo=True)
             write_text_sudo(self.sddm_file, sddm_content, self.ctx.runner)
@@ -286,7 +256,7 @@ class NumLockStep(Step):
             except PermissionError:
                 continue
             if "Numlock" in text or "NumLock" in text:
-                self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Possivel conflito SDDM: {path}")
+                self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Possivel conflito SDDM: {path}")
 
     def status(self) -> None:
         header(self, self.title, "Verificando configuracoes atuais de Num Lock")
@@ -311,7 +281,7 @@ class NumLockStep(Step):
 
     def undo(self) -> None:
         if self.ctx.runner.dry_run:
-            self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {self.sddm_file}")
+            self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {self.sddm_file}")
         else:
             self.ctx.runner.run(["rm", "-f", str(self.sddm_file)], sudo=True)
         self.ctx.logger.write(

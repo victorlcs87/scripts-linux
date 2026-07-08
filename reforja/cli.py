@@ -23,6 +23,7 @@ from .core import (
     progress_bar,
     prompt_user,
 )
+from .dispatch import dispatch_action, finalize_result
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
 from .tui import TuiDependencyError, choose_multiple, choose_option
@@ -58,35 +59,10 @@ def step_by_id(step_id: str) -> type[Step] | None:
 
 
 def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult:
-    dry = action == "dry-run"
-    step = build_step(step_cls, logger, dry_run=dry)
+    step = build_step(step_cls, logger, dry_run=action == "dry-run")
     started = time.monotonic()
-    if action == "apply":
-        step.apply()
-    elif action == "dry-run":
-        step.apply()
-    elif action == "status":
-        step.status()
-    elif action == "undo":
-        step.undo()
-    else:
-        raise ValueError(f"acao invalida: {action}")
-    if not step.result.message:
-        step.result.message = default_step_message(action, step.result.status)
-    if not step.result.summary:
-        step.result.summary = default_step_summary(action, step.result)
-    return StepRunResult(
-        step_id=step_cls.id,
-        title=step_cls.title,
-        status=step.result.status,
-        message=step.result.summary,
-        compliance=step.result.compliance,
-        duration_seconds=time.monotonic() - started,
-        applied_items=list(step.result.applied_items),
-        missing_items=list(step.result.missing_items),
-        attention_items=list(step.result.attention_items),
-        hints=list(step.result.hints),
-    )
+    dispatch_action(step, action)
+    return finalize_result(step, action, time.monotonic() - started)
 
 
 def run_action_safe(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult | None:
@@ -379,36 +355,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     main_menu(logger)
     return 0
-
-
-def default_step_message(action: str, status: str) -> str:
-    if status == "skipped":
-        return "Nada novo para fazer nesta etapa."
-    if status == "manual":
-        return "A etapa dependeu de interacao manual."
-    if action == "status":
-        return "Status coletado."
-    if action == "dry-run":
-        return "Dry-run concluido."
-    if action == "undo":
-        return "Undo concluido."
-    return "Etapa concluida."
-
-
-def default_step_summary(action: str, result) -> str:
-    if action == "status":
-        if result.compliance == "aplicado":
-            return result.summary or "Etapa aplicada."
-        if result.compliance == "pendente":
-            return result.summary or "Ha itens pendentes nesta etapa."
-        if result.compliance == "atencao":
-            return result.summary or "A etapa requer atencao."
-        return "Status coletado."
-    if action == "dry-run":
-        return result.summary or "Dry-run concluido."
-    if action == "undo":
-        return result.summary or "Undo concluido."
-    return result.summary or result.message or "Etapa concluida."
 
 
 def render_step_summary(logger: Logger, action: str, result: StepRunResult) -> None:

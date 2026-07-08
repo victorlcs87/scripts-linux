@@ -306,7 +306,6 @@ class MainWindow(QMainWindow):
         self._console.setReadOnly(True)
         self._console.setMaximumBlockCount(8000)
         self._terminal = TerminalWidget()
-        self._terminal.finished.connect(lambda _rc: None)
         self._stack.addWidget(self._console)
         self._stack.addWidget(self._terminal)
         main_layout.addWidget(self._stack, 1)

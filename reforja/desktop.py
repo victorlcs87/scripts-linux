@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .core import Runner, backup_existing, write_text
+from .core import Runner, announce, backup_existing, write_text
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class DesktopEntry:
 def install_desktop_entry(path: Path, entry: DesktopEntry, runner: Runner) -> None:
     rendered = entry.render()
     if path.exists() and path.read_text(encoding="utf-8", errors="ignore") == rendered:
-        runner.logger.write(f"\033[0;32mOK:\033[0m {path} ja esta atualizado")
+        announce(runner.logger, "done", f"{path} ja esta atualizado")
     else:
         backup_existing(path, runner)
         write_text(path, rendered, runner, mode=0o644)

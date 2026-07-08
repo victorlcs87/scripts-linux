@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .core import Color, Runner, announce, command_exists, write_text_sudo
+from .core import Color, Runner, announce, badge, command_exists, write_text_sudo
 
 
 class UnsupportedDistroError(RuntimeError):
@@ -197,9 +197,7 @@ def install_first_available(packages: tuple[str, ...] | list[str], runner: Runne
         if system_package_exists(pkg):
             install_system_package(pkg, runner)
             return pkg
-    runner.logger.write(
-        f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote disponivel entre: {', '.join(packages)}"
-    )
+    runner.logger.write(f"{badge('aviso', Color.WARNING)} nao encontrei pacote disponivel entre: {', '.join(packages)}")
     return None
 
 
@@ -232,7 +230,7 @@ def install_system_or_aur(system_pkg: str, aur_pkg: str | None, runner: Runner) 
             manual_message="Comando interativo: o helper AUR pode pedir confirmacoes.",
         )
         return True
-    runner.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} nao encontrei pacote para {system_pkg}")
+    runner.logger.write(f"{badge('aviso', Color.WARNING)} nao encontrei pacote para {system_pkg}")
     return False
 
 
@@ -413,17 +411,32 @@ def system_query_command(*packages: str) -> list[str]:
     raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")
 
 
+# Memo por processo: no "Aplicar tudo" mais de um step habilita o RPM Fusion
+# (GPU e Steam); a checagem/instalacao so precisa acontecer uma vez.
+_rpmfusion_ready = False
+
+
+def _reset_ecosystem_cache() -> None:
+    """Zera o memo (para testes)."""
+    global _rpmfusion_ready
+    _rpmfusion_ready = False
+
+
 def ensure_rpmfusion(runner: Runner) -> None:
     """Habilita os repositorios RPM Fusion (free/nonfree) no Fedora mutavel.
 
     Necessario para Steam, codecs e drivers NVIDIA nativos. No-op em outras
     familias e em sistemas imutaveis (onde pacotes nativos sao degradados).
     """
+    global _rpmfusion_ready
     distro = current_distro()
     if not distro.is_fedora or distro.immutable:
         return
+    if _rpmfusion_ready and not runner.dry_run:
+        return
     if system_installed("rpmfusion-free-release") and system_installed("rpmfusion-nonfree-release"):
         announce(runner.logger, "skipped", "RPM Fusion (free/nonfree) ja habilitado")
+        _rpmfusion_ready = True
         return
     announce(
         runner.logger,
@@ -445,6 +458,8 @@ def ensure_rpmfusion(runner: Runner) -> None:
         interactive_tty=True,
         manual_message="Comando interativo: o dnf vai pedir senha do sudo e sua confirmacao para adicionar o RPM Fusion.",
     )
+    if not runner.dry_run:
+        _rpmfusion_ready = True
 
 
 # Repositorio oficial do Antigravity no Google Artifact Registry (auto-updater).

@@ -4,6 +4,7 @@ import re
 
 from ..core import (
     Color,
+    badge,
     command_exists,
     select_many,
 )
@@ -11,13 +12,16 @@ from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
     flatpak_installed,
     install_flatpak,
+    remove_flatpak,
+)
+from ..platform import (
+    current_distro,
     install_system_or_aur,
     install_system_package,
-    remove_flatpak,
     system_installed,
     system_package_exists,
+    system_query_command,
 )
-from ..platform import current_distro, system_query_command
 from ..steps_base import Step
 from ._common import header
 
@@ -95,7 +99,7 @@ class WebAppsStep(Step):
             return
         chosen = [WEBAPPS[i] for i in indices]
         if all(self._webapp_present(name, slug) for name, slug, _url, _manifest in chosen):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} WebApps/atalhos ja encontrados. Pulando criacao.")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} WebApps/atalhos ja encontrados. Pulando criacao.")
             self.mark_skipped("WebApps/atalhos ja existentes.")
             return
         created = False
@@ -107,9 +111,7 @@ class WebAppsStep(Step):
             created = self._try_webapp_manager()
         if not created:
             self._create_desktop_fallbacks(chosen)
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Fallback criado. Estes atalhos nao sao PWAs reais."
-            )
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Fallback criado. Estes atalhos nao sao PWAs reais.")
             self.mark_manual("Fallback .desktop criado; PWAs reais podem exigir ajuste manual.")
             return
         self.mark_done("WebApps processados.")
@@ -118,11 +120,11 @@ class WebAppsStep(Step):
     def _choice_label(self, name: str, slug: str) -> str:
         return f"{name} (ja existe)" if self._webapp_present(name, slug) else f"{name} (nao criado)"
 
-    def _try_firefoxpwa(self, webapps=WEBAPPS) -> bool:
+    def _try_firefoxpwa(self, webapps) -> bool:
         ok_all = True
         for name, slug, _url, manifest in webapps:
             if self._webapp_present(name, slug):
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja encontrado")
                 continue
             profile_id = None
             result = self.ctx.runner.run(
@@ -165,11 +167,11 @@ class WebAppsStep(Step):
             return True
         return False
 
-    def _create_desktop_fallbacks(self, webapps=WEBAPPS) -> None:
+    def _create_desktop_fallbacks(self, webapps) -> None:
         app_dir = self.ctx.user.home / ".local/share/applications"
         for name, slug, url, _manifest in webapps:
             if self._webapp_present(name, slug):
-                self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {name} ja encontrado")
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja encontrado")
                 continue
             entry = DesktopEntry(
                 name=name,
@@ -225,7 +227,7 @@ class WebAppsStep(Step):
         for _name, slug, _url, _manifest in WEBAPPS:
             target = app_dir / f"{slug}.desktop"
             if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{Color.YELLOW}[dry-run]{Color.RESET} removeria {target}")
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {target}")
             else:
                 target.unlink(missing_ok=True)
         self.ctx.logger.write("Removidos apenas os fallbacks .desktop criados por esta etapa.")

@@ -52,16 +52,6 @@ class Step:
     def apply(self) -> None:
         raise NotImplementedError
 
-    def dry_run(self) -> None:
-        dry_ctx = StepContext(
-            root=self.ctx.root,
-            run_dir=self.ctx.run_dir,
-            user=self.ctx.user,
-            logger=self.ctx.logger,
-            runner=Runner(self.ctx.logger, dry_run=True),
-        )
-        self.__class__(dry_ctx).apply()
-
     def status(self) -> None:
         self.ctx.logger.write("Status ainda nao implementado para esta etapa.")
 

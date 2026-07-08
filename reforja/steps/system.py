@@ -9,15 +9,17 @@ from ..core import (
     print_lines,
     prompt_user,
 )
-from ..installers import (
+from ..installers import ensure_flatpak
+from ..platform import (
     aur_helper,
-    ensure_flatpak,
+    current_distro,
     install_first_available,
-    install_pacman,
-    pacman_exists,
+    install_system_package,
     system_installed,
+    system_package_exists,
+    system_query_command,
+    update_system,
 )
-from ..platform import current_distro, system_query_command, update_system
 from ..steps_base import Step
 from ._common import header
 
@@ -136,11 +138,9 @@ class ShellyStep(Step):
                 f"{badge('info', Color.INFO)} SteamOS usa imagem read-only: atualize pela interface do sistema (steamos-update)."
             )
         elif distro.immutable:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Atualizacao via rpm-ostree so vale apos reiniciar."
-            )
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Atualizacao via rpm-ostree so vale apos reiniciar.")
         else:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} Reinicie apos atualizacao grande/kernel.")
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Reinicie apos atualizacao grande/kernel.")
 
     def status(self) -> None:
         header(self, "Status do ecossistema", "Resumo do que ja esta pronto antes das proximas etapas")
@@ -234,8 +234,8 @@ class ShellyStep(Step):
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} AUR helper detectado: {aur_helper()}")
             return
         for candidate in ("paru", "yay"):
-            if pacman_exists(candidate):
-                install_pacman(candidate, self.ctx.runner)
+            if system_package_exists(candidate):
+                install_system_package(candidate, self.ctx.runner)
                 if aur_helper():
                     self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} AUR helper preparado: {aur_helper()}")
                     return
@@ -255,13 +255,13 @@ class LinuxToysStep(Step):
     def apply(self) -> None:
         header(self, self.title, "Instalando utilitarios do Linux Toys")
         if command_exists("linuxtoys") or system_installed("linuxtoys"):
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} Linux Toys ja parece instalado")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Linux Toys ja parece instalado")
             self.mark_skipped("Linux Toys ja parece instalado.")
             return
         build_dir = Path("/tmp/linuxtoys")
         if build_dir.exists():
             self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} limpando build anterior em {build_dir} para evitar falha de makepkg"
+                f"{badge('aviso', Color.WARNING)} limpando build anterior em {build_dir} para evitar falha de makepkg"
             )
             self.ctx.runner.run(
                 ["rm", "-rf", str(build_dir)],
