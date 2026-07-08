@@ -58,9 +58,8 @@ class GitStep(Step):
     # Rotulos do menu principal (a ordem define a ordem de execucao).
     _ACTIONS = (
         "Instalar Git + GitHub CLI (gh)",
-        "Conectar uma conta GitHub (login pelo navegador)",
+        "Conectar uma conta GitHub (login + alias SSH da conta)",
         "Adicionar um repositorio (clonar + configurar autor)",
-        "Configurar host alias SSH por conta (separar 2+ contas)",
     )
 
     def apply(self) -> None:
@@ -97,13 +96,6 @@ class GitStep(Step):
                     partes.append("repositorios: " + ", ".join(added))
             except Exception as exc:  # noqa: BLE001
                 self._report_failure("adicionar repositorio", exc)
-        if 3 in chosen:
-            try:
-                msg = self._configure_ssh_alias()
-                if msg:
-                    partes.append(msg)
-            except Exception as exc:  # noqa: BLE001
-                self._report_failure("configurar alias SSH", exc)
         if partes:
             resumo = " | ".join(partes)
             self.mark_done(resumo)
@@ -199,10 +191,14 @@ class GitStep(Step):
         if self.ctx.runner.dry_run:
             return "Login do GitHub (dry-run)."
         conta = self._gh_user_field("login")
-        if conta:
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} conta ativa: {conta}")
-            return f"Conta '{conta}' conectada."
-        return "Login do GitHub executado."
+        if not conta:
+            return "Login do GitHub executado."
+        self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} conta ativa: {conta}")
+        # No mesmo fluxo, ja cria o alias SSH dedicado dessa conta (chave + bloco Host).
+        alias = self._ensure_account_alias(conta)
+        if alias:
+            return f"Conta '{conta}' conectada (alias SSH '{alias}')."
+        return f"Conta '{conta}' conectada."
 
     def _add_repos(self) -> list[str]:
         adicionados: list[str] = []
@@ -431,21 +427,6 @@ class GitStep(Step):
         backup_existing(self.config_file, self.ctx.runner)
         write_text(self.config_file, existing + self._account_block(alias, key), self.ctx.runner, mode=0o600)
 
-    def _pick_account_for_alias(self, contas: list[str]) -> str:
-        if not contas:
-            return ""
-        labels = [*contas, "Outra / nenhuma (vou enviar a chave manualmente)"]
-        idx = select_many(
-            "A qual conta GitHub este alias pertence?",
-            labels,
-            self.ctx.logger,
-            detail="Usado para enviar a chave publica automaticamente para a conta certa via gh.",
-        )
-        if not idx:
-            return ""
-        escolha = idx[0]
-        return contas[escolha] if escolha < len(contas) else ""
-
     def _upload_key_via_gh(self, alias: str, key: Path, conta: str) -> bool:
         if not conta or not command_exists("gh"):
             return False
@@ -479,34 +460,33 @@ class GitStep(Step):
             ],
         )
 
-    def _configure_ssh_alias(self) -> str:
-        contas = self._logged_accounts() if command_exists("gh") else []
+    def _ensure_account_alias(self, login: str) -> str:
+        """Cria (ou reaproveita) o alias SSH dedicado da conta recem-conectada.
+
+        Chamado logo apos o login: a conta `login` ja esta ativa no gh, entao a
+        chave e enviada direto para ela. Retorna o nome do alias configurado.
+        """
+        alias_default = f"github-{login}"
         try:
-            alias = prompt_user(
-                "Nome do alias SSH (ex: github-trabalho, vazio para pular)",
-                self.ctx.logger,
-                detail="Voce vai clonar usando git@<alias>:owner/repo.git. Use um nome curto e memoravel.",
-                prompt_label="Alias",
-                allow_empty=True,
-            ).strip()
+            alias = (
+                prompt_user(
+                    "Nome do alias SSH desta conta",
+                    self.ctx.logger,
+                    detail=f"Enter para usar: {alias_default} (ou digite um nome memoravel, ex: github-trabalho)",
+                    prompt_label="Alias",
+                    allow_empty=True,
+                ).strip()
+                or alias_default
+            )
         except PromptInterruptedError:
+            self.add_hint("Alias SSH nao configurado (entrada interrompida).")
             return ""
-        if not alias:
-            return ""
-        conta = self._pick_account_for_alias(contas)
         self._ensure_ssh_dir()
         key = self._key_path(alias)
-        email = ""
-        if conta:
-            self.ctx.runner.run(
-                ["gh", "auth", "switch", "--hostname", "github.com", "--user", conta],
-                check=False,
-                action=f"Ativando a conta {conta}",
-            )
-            email = self._gh_user_field("email")
         if key.exists():
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} chave {key.name} ja existe; reaproveitando")
         else:
+            email = self._gh_user_field("email")
             if not email:
                 try:
                     email = prompt_user(
@@ -527,12 +507,13 @@ class GitStep(Step):
             check=False,
             action=f"Adicionando a chave de '{alias}' ao ssh-agent",
         )
-        if not self._upload_key_via_gh(alias, key, conta):
+        # A conta `login` ja esta ativa apos o `gh auth login`, entao a chave vai para ela.
+        if not self._upload_key_via_gh(alias, key, login):
             self._print_pubkey_instructions(alias, key)
         self.ctx.logger.write(
             paint(f"Pronto! Para clonar com esta conta: git clone git@{alias}:OWNER/REPO.git", Color.ACCENT)
         )
-        return f"Alias SSH '{alias}' configurado."
+        return alias
 
     def _remove_account(self, alias: str) -> bool:
         key = self._key_path(alias)

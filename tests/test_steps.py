@@ -579,6 +579,11 @@ class _RecordingRunner(Runner):
                 Path(cmd[4], ".git").mkdir(parents=True, exist_ok=True)
             elif cmd[:2] == ["git", "clone"] and len(cmd) >= 4:
                 Path(cmd[3], ".git").mkdir(parents=True, exist_ok=True)
+            elif cmd[:1] == ["ssh-keygen"] and "-f" in cmd:
+                key = Path(cmd[cmd.index("-f") + 1])
+                key.parent.mkdir(parents=True, exist_ok=True)
+                key.write_text("PRIV", encoding="utf-8")
+                key.with_suffix(".pub").write_text("ssh-ed25519 AAAA", encoding="utf-8")
         return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
 
@@ -677,27 +682,27 @@ def test_git_step_account_block_has_expected_ssh_config(tmp_path: Path) -> None:
     assert "IdentitiesOnly yes" in block
 
 
-def test_git_step_configure_ssh_alias_generates_key_and_writes_host_block(tmp_path: Path, monkeypatch) -> None:
+def test_git_step_login_creates_account_alias(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     runner = _RecordingRunner(ctx.logger)
     ctx.runner = runner
     step = GitStep(ctx)
 
-    monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: False)
-    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [])
-    respostas = {"Alias": "github-trabalho", "Email": "work@x.com"}
+    monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: True)
     monkeypatch.setattr(
-        "reforja.steps.dev.prompt_user",
-        lambda prompt, logger, **k: respostas.get(k.get("prompt_label"), ""),
+        GitStep, "_gh_user_field", lambda self, field: {"login": "victorlcs87", "email": "v@x.com"}[field]
     )
+    # prompt_user retorna "" -> aceita o alias padrao github-<login>.
+    monkeypatch.setattr("reforja.steps.dev.prompt_user", lambda prompt, logger, **k: "")
 
-    msg = step._configure_ssh_alias()
+    msg = step._login_account()
 
-    assert "github-trabalho" in msg
-    key = step._key_path("github-trabalho")
-    assert ["ssh-keygen", "-t", "ed25519", "-C", "work@x.com", "-f", str(key), "-N", ""] in runner.calls
+    assert "victorlcs87" in msg and "github-victorlcs87" in msg
+    key = step._key_path("github-victorlcs87")
+    assert ["ssh-keygen", "-t", "ed25519", "-C", "v@x.com", "-f", str(key), "-N", ""] in runner.calls
+    assert ["gh", "ssh-key", "add", str(key) + ".pub", "--title", "reforja-github-victorlcs87"] in runner.calls
     cfg = (ctx.user.home / ".ssh" / "config").read_text(encoding="utf-8")
-    assert "Host github-trabalho" in cfg
+    assert "Host github-victorlcs87" in cfg
     assert "IdentitiesOnly yes" in cfg
 
 
