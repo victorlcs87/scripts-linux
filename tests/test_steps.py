@@ -574,8 +574,11 @@ class _RecordingRunner(Runner):
     def run(self, cmd, **kwargs):  # type: ignore[override]
         recorded = list(cmd) if not isinstance(cmd, str) else [cmd]
         self.calls.append(recorded)
-        if isinstance(cmd, list) and cmd[:3] == ["gh", "repo", "clone"] and len(cmd) >= 5:
-            Path(cmd[4], ".git").mkdir(parents=True, exist_ok=True)
+        if isinstance(cmd, list):
+            if cmd[:3] == ["gh", "repo", "clone"] and len(cmd) >= 5:
+                Path(cmd[4], ".git").mkdir(parents=True, exist_ok=True)
+            elif cmd[:2] == ["git", "clone"] and len(cmd) >= 4:
+                Path(cmd[3], ".git").mkdir(parents=True, exist_ok=True)
         return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
 
@@ -660,6 +663,69 @@ def test_git_step_logged_accounts_parses_gh_status(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(GitStep, "_gh_query", lambda self, args, **k: sample)
 
     assert step._logged_accounts() == ["victorlcs87", "victor-work"]
+
+
+def test_git_step_account_block_has_expected_ssh_config(tmp_path: Path) -> None:
+    step = GitStep(make_ctx(tmp_path))
+    key = step._key_path("github-work")
+
+    block = step._account_block("github-work", key)
+
+    assert "Host github-work" in block
+    assert "HostName github.com" in block
+    assert f"IdentityFile {key}" in block
+    assert "IdentitiesOnly yes" in block
+
+
+def test_git_step_configure_ssh_alias_generates_key_and_writes_host_block(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    runner = _RecordingRunner(ctx.logger)
+    ctx.runner = runner
+    step = GitStep(ctx)
+
+    monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: False)
+    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [])
+    respostas = {"Alias": "github-trabalho", "Email": "work@x.com"}
+    monkeypatch.setattr(
+        "reforja.steps.dev.prompt_user",
+        lambda prompt, logger, **k: respostas.get(k.get("prompt_label"), ""),
+    )
+
+    msg = step._configure_ssh_alias()
+
+    assert "github-trabalho" in msg
+    key = step._key_path("github-trabalho")
+    assert ["ssh-keygen", "-t", "ed25519", "-C", "work@x.com", "-f", str(key), "-N", ""] in runner.calls
+    cfg = (ctx.user.home / ".ssh" / "config").read_text(encoding="utf-8")
+    assert "Host github-trabalho" in cfg
+    assert "IdentitiesOnly yes" in cfg
+
+
+def test_git_step_add_repo_uses_ssh_alias_when_configured(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    runner = _RecordingRunner(ctx.logger)
+    ctx.runner = runner
+    step = GitStep(ctx)
+
+    ssh = ctx.user.home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_ed25519_github-trabalho.pub").write_text("ssh-ed25519 AAAA", encoding="utf-8")
+
+    monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: False)
+    # _maybe_pick_alias -> escolhe o unico alias (indice 0).
+    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [0])
+    respostas = {"Repo": "owner/proj", "Nome": "V", "Email": "v@x.com", "Outro": "n"}
+    monkeypatch.setattr(
+        "reforja.steps.dev.prompt_user",
+        lambda prompt, logger, **k: respostas.get(k.get("prompt_label"), ""),
+    )
+
+    step._add_repos()
+
+    target = ctx.user.home / "repositorios" / "proj"
+    assert ["git", "clone", "git@github-trabalho:owner/proj.git", str(target)] in runner.calls
+    # Nao deve cair no caminho do gh quando ha alias.
+    assert not any(call[:3] == ["gh", "repo", "clone"] for call in runner.calls)
 
 
 def test_git_step_strip_host_block_removes_only_target_alias(tmp_path: Path) -> None:

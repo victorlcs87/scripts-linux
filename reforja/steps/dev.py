@@ -60,6 +60,7 @@ class GitStep(Step):
         "Instalar Git + GitHub CLI (gh)",
         "Conectar uma conta GitHub (login pelo navegador)",
         "Adicionar um repositorio (clonar + configurar autor)",
+        "Configurar host alias SSH por conta (separar 2+ contas)",
     )
 
     def apply(self) -> None:
@@ -96,6 +97,13 @@ class GitStep(Step):
                     partes.append("repositorios: " + ", ".join(added))
             except Exception as exc:  # noqa: BLE001
                 self._report_failure("adicionar repositorio", exc)
+        if 3 in chosen:
+            try:
+                msg = self._configure_ssh_alias()
+                if msg:
+                    partes.append(msg)
+            except Exception as exc:  # noqa: BLE001
+                self._report_failure("configurar alias SSH", exc)
         if partes:
             resumo = " | ".join(partes)
             self.mark_done(resumo)
@@ -198,16 +206,19 @@ class GitStep(Step):
 
     def _add_repos(self) -> list[str]:
         adicionados: list[str] = []
+        aliases = self._configured_aliases()
         while True:
-            self._maybe_switch_account()
+            alias = self._maybe_pick_alias(aliases)
+            if not alias:
+                self._maybe_switch_account()
             spec = self._choose_repo_spec()
             if not spec:
                 break
-            target = self._clone_repo(spec)
+            target = self._clone_repo(spec, alias=alias)
             if target is not None:
                 owner, repo = self._parse_owner_repo(spec)
                 name, email = self._configure_author(target)
-                self._record_repo(target, owner, repo, name, email)
+                self._record_repo(target, owner, repo, name, email, account=alias)
                 adicionados.append(target.name)
             try:
                 mais = (
@@ -282,11 +293,12 @@ class GitStep(Step):
             return []
         return [item["nameWithOwner"] for item in data if isinstance(item, dict) and item.get("nameWithOwner")]
 
-    def _clone_repo(self, spec: str) -> Path | None:
+    def _clone_repo(self, spec: str, *, alias: str = "") -> Path | None:
         base = self.ctx.user.home / "repositorios"
         if not base.exists():
             self.ctx.runner.run(["mkdir", "-p", str(base)], action=f"Criando diretorio {base}", show_progress=False)
-        target = base / self._repo_dir_name(spec)
+        owner, repo = self._parse_owner_repo(spec)
+        target = base / (repo or self._repo_dir_name(spec))
         if (target / ".git").exists():
             self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {target} ja existe; atualizando")
             self.ctx.runner.run(
@@ -295,14 +307,46 @@ class GitStep(Step):
                 action=f"Atualizando {target.name}",
             )
             return target
-        self.ctx.runner.run(
-            ["gh", "repo", "clone", spec, str(target)],
-            check=False,
-            action=f"Clonando {spec}",
-        )
+        # Com alias SSH: clona via git@<alias>:owner/repo.git para fixar a conta certa.
+        # Sem alias: usa o gh (conta ativa) resolvendo owner/repo ou URL.
+        if alias and owner and repo:
+            ssh_url = f"git@{alias}:{owner}/{repo}.git"
+            self.ctx.runner.run(
+                ["git", "clone", ssh_url, str(target)],
+                check=False,
+                action=f"Clonando {ssh_url}",
+            )
+        else:
+            self.ctx.runner.run(
+                ["gh", "repo", "clone", spec, str(target)],
+                check=False,
+                action=f"Clonando {spec}",
+            )
         if self.ctx.runner.dry_run:
             return target
         return target if (target / ".git").exists() else None
+
+    def _configured_aliases(self) -> list[str]:
+        """Aliases SSH ja criados (a partir das chaves id_ed25519_<alias>)."""
+        if not self.ssh_dir.exists():
+            return []
+        return sorted(pub.name[len("id_ed25519_") : -len(".pub")] for pub in self.ssh_dir.glob("id_ed25519_*.pub"))
+
+    def _maybe_pick_alias(self, aliases: list[str]) -> str:
+        if not aliases:
+            return ""
+        labels = [f"{a}  (git@{a}:owner/repo.git)" for a in aliases]
+        labels.append("Nenhum (usar a conta ativa do gh)")
+        idx = select_many(
+            "Clonar usando qual alias SSH?",
+            labels,
+            self.ctx.logger,
+            detail="Aliases separam contas: cada um usa a chave certa. Marque UM ou 'Nenhum'.",
+        )
+        if not idx:
+            return ""
+        escolha = idx[0]
+        return aliases[escolha] if escolha < len(aliases) else ""
 
     @staticmethod
     def _repo_dir_name(spec: str) -> str:
@@ -366,6 +410,130 @@ class GitStep(Step):
             )
         return nome, email
 
+    # ------------------------------------------------------------------ alias SSH por conta
+
+    def _ensure_ssh_dir(self) -> None:
+        if self.ctx.runner.dry_run:
+            return
+        self.ssh_dir.mkdir(parents=True, exist_ok=True)
+        self.ssh_dir.chmod(0o700)
+
+    def _account_block(self, alias: str, key: Path) -> str:
+        return (
+            f"\nHost {alias}\n    HostName github.com\n    User git\n    IdentityFile {key}\n    IdentitiesOnly yes\n"
+        )
+
+    def _write_host_block(self, alias: str, key: Path) -> None:
+        existing = self.config_file.read_text(encoding="utf-8") if self.config_file.exists() else ""
+        if f"Host {alias}" in existing:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} bloco 'Host {alias}' ja existe no ~/.ssh/config")
+            return
+        backup_existing(self.config_file, self.ctx.runner)
+        write_text(self.config_file, existing + self._account_block(alias, key), self.ctx.runner, mode=0o600)
+
+    def _pick_account_for_alias(self, contas: list[str]) -> str:
+        if not contas:
+            return ""
+        labels = [*contas, "Outra / nenhuma (vou enviar a chave manualmente)"]
+        idx = select_many(
+            "A qual conta GitHub este alias pertence?",
+            labels,
+            self.ctx.logger,
+            detail="Usado para enviar a chave publica automaticamente para a conta certa via gh.",
+        )
+        if not idx:
+            return ""
+        escolha = idx[0]
+        return contas[escolha] if escolha < len(contas) else ""
+
+    def _upload_key_via_gh(self, alias: str, key: Path, conta: str) -> bool:
+        if not conta or not command_exists("gh"):
+            return False
+        pub = key.with_suffix(".pub")
+        if not pub.exists() and not self.ctx.runner.dry_run:
+            return False
+        res = self.ctx.runner.run(
+            ["gh", "ssh-key", "add", str(pub), "--title", f"reforja-{alias}"],
+            check=False,
+            action=f"Enviando a chave de '{alias}' para a conta {conta}",
+        )
+        if self.ctx.runner.dry_run:
+            return True
+        return bool(res) and getattr(res, "returncode", 1) == 0
+
+    def _print_pubkey_instructions(self, alias: str, key: Path) -> None:
+        pub = key.with_suffix(".pub")
+        conteudo = pub.read_text(encoding="utf-8").strip() if pub.exists() else "(chave publica nao encontrada)"
+        print_lines(
+            self.ctx.logger,
+            [
+                "",
+                paint("Envie esta chave publica para o GitHub da conta certa:", Color.SUCCESS),
+                "",
+                conteudo,
+                "",
+                "  1) Acesse https://github.com/settings/keys e clique em 'New SSH Key'.",
+                "  2) Cole a chave acima e salve.",
+                f"  3) Teste a conexao: ssh -T git@{alias}",
+                "",
+            ],
+        )
+
+    def _configure_ssh_alias(self) -> str:
+        contas = self._logged_accounts() if command_exists("gh") else []
+        try:
+            alias = prompt_user(
+                "Nome do alias SSH (ex: github-trabalho, vazio para pular)",
+                self.ctx.logger,
+                detail="Voce vai clonar usando git@<alias>:owner/repo.git. Use um nome curto e memoravel.",
+                prompt_label="Alias",
+                allow_empty=True,
+            ).strip()
+        except PromptInterruptedError:
+            return ""
+        if not alias:
+            return ""
+        conta = self._pick_account_for_alias(contas)
+        self._ensure_ssh_dir()
+        key = self._key_path(alias)
+        email = ""
+        if conta:
+            self.ctx.runner.run(
+                ["gh", "auth", "switch", "--hostname", "github.com", "--user", conta],
+                check=False,
+                action=f"Ativando a conta {conta}",
+            )
+            email = self._gh_user_field("email")
+        if key.exists():
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} chave {key.name} ja existe; reaproveitando")
+        else:
+            if not email:
+                try:
+                    email = prompt_user(
+                        "Email da conta (comentario da chave)",
+                        self.ctx.logger,
+                        prompt_label="Email",
+                        allow_empty=True,
+                    ).strip()
+                except PromptInterruptedError:
+                    email = ""
+            self.ctx.runner.run(
+                ["ssh-keygen", "-t", "ed25519", "-C", email or alias, "-f", str(key), "-N", ""],
+                action=f"Gerando chave SSH ed25519 para '{alias}'",
+            )
+        self._write_host_block(alias, key)
+        self.ctx.runner.run(
+            ["ssh-add", str(key)],
+            check=False,
+            action=f"Adicionando a chave de '{alias}' ao ssh-agent",
+        )
+        if not self._upload_key_via_gh(alias, key, conta):
+            self._print_pubkey_instructions(alias, key)
+        self.ctx.logger.write(
+            paint(f"Pronto! Para clonar com esta conta: git clone git@{alias}:OWNER/REPO.git", Color.ACCENT)
+        )
+        return f"Alias SSH '{alias}' configurado."
+
     def _remove_account(self, alias: str) -> bool:
         key = self._key_path(alias)
         pub = key.with_suffix(".pub")
@@ -427,7 +595,7 @@ class GitStep(Step):
             self.ctx.runner,
         )
 
-    def _record_repo(self, target: Path, owner: str, repo: str, name: str, email: str) -> None:
+    def _record_repo(self, target: Path, owner: str, repo: str, name: str, email: str, *, account: str = "") -> None:
         state = self._load_state()
         entry = {
             "path": str(target),
@@ -435,6 +603,7 @@ class GitStep(Step):
             "repo": repo or target.name,
             "name": name,
             "email": email,
+            "account": account,
         }
         repos = [r for r in state.get("repos", []) if r.get("path") != entry["path"]]
         repos.append(entry)
