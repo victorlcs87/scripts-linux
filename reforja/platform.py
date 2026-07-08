@@ -499,3 +499,77 @@ def ensure_antigravity_repo(runner: Runner) -> None:
     if distro.is_fedora:
         write_text_sudo(Path(_ANTIGRAVITY_YUM_REPO), _ANTIGRAVITY_YUM_CONTENT, runner)
         return
+
+
+# Repositorio oficial do GitHub CLI (usado como fallback quando o pacote 'gh'
+# nao esta no repo nativo da distro, tipico em Debian/Ubuntu antigos).
+_GH_APT_KEY_URL = "https://cli.github.com/packages/githubcli-archive-keyring.gpg"
+_GH_APT_KEYRING = "/etc/apt/keyrings/githubcli-archive-keyring.gpg"
+_GH_APT_LIST = "/etc/apt/sources.list.d/github-cli.list"
+_GH_APT_LINE = (
+    "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] "
+    "https://cli.github.com/packages stable main"
+)
+_GH_YUM_REPO_URL = "https://cli.github.com/packages/rpm/gh-cli.repo"
+
+
+def ensure_github_cli(runner: Runner) -> bool:
+    """Instala o GitHub CLI (`gh`). Retorna True se ficou disponivel.
+
+    - Arch: pacote `github-cli`.
+    - Fedora/Debian: pacote `gh` do repo nativo; se indisponivel, adiciona o
+      repositorio oficial do gh (dnf/apt) e instala de la.
+    - Imutaveis (Bazzite/SteamOS): nao instala nativo (retorna False) para o
+      chamador orientar Distrobox/Homebrew.
+    """
+    if command_exists("gh"):
+        announce(runner.logger, "skipped", "GitHub CLI (gh) ja instalado")
+        return True
+    distro = current_distro()
+    if distro.immutable:
+        announce(
+            runner.logger,
+            "warning",
+            "sistema imutavel: instale o GitHub CLI via Distrobox ou Homebrew "
+            "(ex.: 'distrobox enter' e 'sudo dnf install gh', ou 'brew install gh').",
+        )
+        return False
+    if distro.is_arch:
+        install_system_package("github-cli", runner)
+        return command_exists("gh") or runner.dry_run
+    if distro.is_fedora:
+        if not system_package_exists("gh"):
+            announce(runner.logger, "info", "Adicionando o repositorio oficial (DNF) do GitHub CLI.")
+            runner.run(
+                ["dnf", "config-manager", "--add-repo", _GH_YUM_REPO_URL],
+                sudo=True,
+                check=False,
+                action="Adicionando repositorio do GitHub CLI",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o dnf pode pedir a senha do sudo.",
+            )
+        install_system_package("gh", runner)
+        return command_exists("gh") or runner.dry_run
+    if distro.is_debian:
+        if not system_package_exists("gh"):
+            announce(runner.logger, "info", "Adicionando o repositorio oficial (APT) do GitHub CLI.")
+            script = (
+                "set -e\n"
+                "install -d -m 0755 /etc/apt/keyrings\n"
+                f"curl -fsSL {_GH_APT_KEY_URL} -o {_GH_APT_KEYRING}\n"
+                f"chmod go+r {_GH_APT_KEYRING}\n"
+                f"printf '%s\\n' {shlex.quote(_GH_APT_LINE)} > {_GH_APT_LIST}\n"
+            )
+            runner.run(
+                f"bash -c {shlex.quote(script)}",
+                sudo=True,
+                shell=True,
+                action="Configurando repositorio APT do GitHub CLI",
+                interactive=True,
+                interactive_tty=True,
+                manual_message="Comando interativo: o apt pode pedir a senha do sudo para adicionar o repositorio.",
+            )
+        install_system_package("gh", runner)
+        return command_exists("gh") or runner.dry_run
+    raise UnsupportedDistroError(f"familia de distro nao suportada: {distro.family}")

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -13,7 +14,7 @@ from reforja.cli import (
     select_and_run,
     step_menu,
 )
-from reforja.core import Logger, MenuOption, PromptInterruptedError, Runner, StepRunResult, UserInfo
+from reforja.core import Logger, MenuOption, Runner, StepRunResult, UserInfo
 from reforja.steps import (
     ALL_STEPS,
     AntigravityStep,
@@ -562,36 +563,103 @@ def test_render_run_summary_aggregates_counts(tmp_path: Path) -> None:
     assert "[failed] 1" in log
 
 
-def test_git_step_ctrl_c_on_repo_url_becomes_skipped(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    ctx.runner.dry_run = False
-    step = GitStep(ctx)
+class _RecordingRunner(Runner):
+    """Runner que registra os comandos sem executar de fato. Simula um clone
+    bem-sucedido criando `<target>/.git`, para o fluxo de add-repo prosseguir."""
 
-    monkeypatch.setattr("reforja.steps.dev.install_system_package", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "reforja.steps.dev.prompt_user",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            PromptInterruptedError("entrada interrompida pelo usuario: Informe a URL")
-        ),
-    )
+    def __init__(self, logger: Logger) -> None:
+        super().__init__(logger, dry_run=False)
+        self.calls: list[list[str]] = []
+
+    def run(self, cmd, **kwargs):  # type: ignore[override]
+        recorded = list(cmd) if not isinstance(cmd, str) else [cmd]
+        self.calls.append(recorded)
+        if isinstance(cmd, list) and cmd[:3] == ["gh", "repo", "clone"] and len(cmd) >= 5:
+            Path(cmd[4], ".git").mkdir(parents=True, exist_ok=True)
+        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+
+def test_git_step_menu_empty_is_skipped(tmp_path: Path, monkeypatch) -> None:
+    step = GitStep(make_ctx(tmp_path))
+    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [])
 
     step.apply()
 
     assert step.result.status == "skipped"
-    assert "Nenhuma acao executada" in step.result.message
+    assert "Nenhuma acao selecionada" in step.result.message
 
 
-def test_git_step_account_block_has_expected_ssh_config(tmp_path: Path) -> None:
+def test_git_step_add_repo_clones_configures_author_and_records_state(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    runner = _RecordingRunner(ctx.logger)
+    ctx.runner = runner
+    step = GitStep(ctx)
+
+    # So a acao "Adicionar repositorio" (indice 2) marcada.
+    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [2])
+    # gh ausente no ambiente de teste: sem contas nem listagem de repos.
+    monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: False)
+
+    respostas = {"Repo": "victorlcs87/gsv-calendar", "Nome": "Victor Lima", "Email": "v@x.com", "Outro": "n"}
+
+    def fake_prompt(prompt, logger, *, detail=None, prompt_label="Resposta", allow_empty=True):
+        return respostas.get(prompt_label, "")
+
+    monkeypatch.setattr("reforja.steps.dev.prompt_user", fake_prompt)
+
+    step.apply()
+
+    target = ctx.user.home / "repositorios" / "gsv-calendar"
+    assert ["gh", "repo", "clone", "victorlcs87/gsv-calendar", str(target)] in runner.calls
+    assert ["git", "-C", str(target), "config", "user.name", "Victor Lima"] in runner.calls
+    assert ["git", "-C", str(target), "config", "user.email", "v@x.com"] in runner.calls
+
+    state = json.loads((ctx.user.home / ".config" / "reforja" / "git.json").read_text(encoding="utf-8"))
+    entry = state["repos"][0]
+    assert entry["owner"] == "victorlcs87"
+    assert entry["repo"] == "gsv-calendar"
+    assert entry["email"] == "v@x.com"
+    assert step.result.status == "done"
+
+
+@pytest.mark.parametrize(
+    "spec, owner, repo",
+    [
+        ("victorlcs87/gsv-calendar", "victorlcs87", "gsv-calendar"),
+        ("git@github.com:owner/repo.git", "owner", "repo"),
+        ("https://github.com/owner/repo", "owner", "repo"),
+        ("https://github.com/owner/repo.git", "owner", "repo"),
+    ],
+)
+def test_git_step_parse_owner_repo_handles_url_and_shorthand(spec: str, owner: str, repo: str) -> None:
+    assert GitStep._parse_owner_repo(spec) == (owner, repo)
+    assert GitStep._repo_dir_name(spec) == repo
+
+
+def test_git_step_state_roundtrip_and_forget(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False  # write_text grava de fato
+    step = GitStep(ctx)
+    target = ctx.user.home / "repositorios" / "gsv-calendar"
+
+    step._record_repo(target, "victorlcs87", "gsv-calendar", "Victor", "v@x.com")
+    assert step._load_state()["repos"][0]["repo"] == "gsv-calendar"
+
+    step._forget_repo(str(target))
+    assert step._load_state()["repos"] == []
+
+
+def test_git_step_logged_accounts_parses_gh_status(tmp_path: Path, monkeypatch) -> None:
     step = GitStep(make_ctx(tmp_path))
-    key = step._key_path("github-work")
+    sample = (
+        "github.com\n"
+        "  ✓ Logged in to github.com account victorlcs87 (keyring)\n"
+        "  - Active account: true\n"
+        "  ✓ Logged in to github.com account victor-work (keyring)\n"
+    )
+    monkeypatch.setattr(GitStep, "_gh_query", lambda self, args, **k: sample)
 
-    block = step._account_block("github-work", key)
-
-    assert "Host github-work" in block
-    assert "HostName github.com" in block
-    assert "User git" in block
-    assert f"IdentityFile {key}" in block
-    assert "IdentitiesOnly yes" in block
+    assert step._logged_accounts() == ["victorlcs87", "victor-work"]
 
 
 def test_git_step_strip_host_block_removes_only_target_alias(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,10 +14,12 @@ from ..core import (
     backup_existing,
     badge,
     clean_subprocess_env,
+    command_exists,
     ensure_owner,
     paint,
     print_lines,
     prompt_user,
+    select_many,
     write_text,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
@@ -26,6 +29,7 @@ from ..installers import (
 from ..platform import (
     current_distro,
     ensure_antigravity_repo,
+    ensure_github_cli,
     system_installed,
 )
 from ..steps_base import Step
@@ -36,8 +40,8 @@ class GitStep(Step):
     id = "06"
     title = "Git / GitHub"
     description = (
-        "Instala o Git, clona/atualiza o repositorio base e configura uma ou mais contas GitHub "
-        "com chave SSH dedicada (alias no ~/.ssh/config + ssh-agent + orientacao de cadastro)."
+        "Instala o Git e o GitHub CLI (gh), conecta sua conta pelo navegador (o gh cria/envia a chave SSH) "
+        "e adiciona repositorios: clona em ~/repositorios e ja configura o autor dos commits."
     )
 
     @property
@@ -51,154 +55,306 @@ class GitStep(Step):
     def _key_path(self, alias: str) -> Path:
         return self.ssh_dir / f"id_ed25519_{alias}"
 
-    def apply(self) -> None:
-        header(self, self.title, "Repositorio base + contas GitHub via chave SSH")
-        install_system_package("git", self.ctx.runner)
-        repo_msg = self._setup_base_repo()
-        account_msg = self._configure_accounts()
-        if self.ctx.runner.dry_run:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} pediria a URL do repositorio e os dados das contas GitHub"
-            )
-            self.mark_manual("Dry-run indica solicitacao de URL do repositorio e dados das contas.")
-            return
-        partes = [p for p in (repo_msg, account_msg) if p]
-        if partes:
-            self.mark_done(" ".join(partes))
-            self.mark_applied(" ".join(partes))
-        else:
-            self.mark_skipped("Nenhuma acao executada (repositorio e contas pulados).")
+    # Rotulos do menu principal (a ordem define a ordem de execucao).
+    _ACTIONS = (
+        "Instalar Git + GitHub CLI (gh)",
+        "Conectar uma conta GitHub (login pelo navegador)",
+        "Adicionar um repositorio (clonar + configurar autor)",
+    )
 
-    def _setup_base_repo(self) -> str:
-        base = self.ctx.user.home / "repositorios"
-        target = base / "scripts-linux"
-        if base.exists():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {base} ja existe")
+    def apply(self) -> None:
+        header(self, self.title, "GitHub facil: instalar o gh, conectar a conta e clonar repositorios")
+        indices = select_many(
+            "O que voce quer fazer?",
+            self._ACTIONS,
+            self.ctx.logger,
+            detail="Marque uma ou mais acoes. Nada marcado = nada a fazer. Na primeira vez, marque as tres em ordem.",
+        )
+        if not indices:
+            self.mark_skipped("Nenhuma acao selecionada.")
+            return
+        chosen = set(indices)
+        partes: list[str] = []
+        # Cada acao isola a propria falha: reporta a causa e segue para a proxima.
+        if 0 in chosen:
+            try:
+                self._install_tooling()
+                partes.append("ferramentas (git + gh)")
+            except Exception as exc:  # noqa: BLE001 - reportar e continuar
+                self._report_failure("instalar ferramentas", exc)
+        if 1 in chosen:
+            try:
+                msg = self._login_account()
+                if msg:
+                    partes.append(msg)
+            except Exception as exc:  # noqa: BLE001
+                self._report_failure("conectar conta", exc)
+        if 2 in chosen:
+            try:
+                added = self._add_repos()
+                if added:
+                    partes.append("repositorios: " + ", ".join(added))
+            except Exception as exc:  # noqa: BLE001
+                self._report_failure("adicionar repositorio", exc)
+        if partes:
+            resumo = " | ".join(partes)
+            self.mark_done(resumo)
+            self.mark_applied(resumo)
         else:
-            self.ctx.runner.run(["mkdir", "-p", str(base)], action=f"Criando diretorio {base}", show_progress=False)
-        if self.ctx.runner.dry_run:
+            self.mark_skipped("Nenhuma acao concluida.")
+
+    def _report_failure(self, acao: str, exc: Exception) -> None:
+        self.ctx.logger.write(f"{Color.RED}ERRO:{Color.RESET} ao {acao}: {type(exc).__name__}: {exc}")
+        self.add_hint(f"Falha ao {acao}: {exc}")
+
+    # ------------------------------------------------------------------ gh helpers
+
+    def _gh_query(self, args: list[str], *, merge_stderr: bool = False) -> str:
+        """Roda um comando `gh` de leitura pura e devolve a saida (ou "").
+
+        Nao passa pelo Runner porque e leitura (roda mesmo em dry-run) e precisa
+        capturar stdout. `gh auth status` escreve em stderr em algumas versoes,
+        por isso o merge opcional.
+        """
+        if not command_exists("gh"):
             return ""
         try:
-            repo_url = prompt_user(
-                "Informe a URL do repositorio scripts-linux (SSH/HTTPS, vazio para pular)",
+            proc = subprocess.run(
+                ["gh", *args],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=clean_subprocess_env(),
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ""
+        out = proc.stdout or ""
+        if merge_stderr:
+            out = out + "\n" + (proc.stderr or "")
+        elif proc.returncode != 0:
+            return ""
+        return out.strip()
+
+    def _gh_user_field(self, field: str) -> str:
+        return self._gh_query(["api", "user", "--jq", f'.{field} // ""'])
+
+    def _logged_accounts(self) -> list[str]:
+        """Contas GitHub logadas no gh, extraidas de `gh auth status`."""
+        text = self._gh_query(["auth", "status"], merge_stderr=True)
+        if not text:
+            return []
+        nomes: list[str] = []
+        # Formato novo: "Logged in to github.com account <nome>"; antigo: "... as <nome>".
+        for m in re.finditer(r"account (\S+)", text):
+            nomes.append(m.group(1).strip("()"))
+        if not nomes:
+            for m in re.finditer(r"Logged in to \S+ as (\S+)", text):
+                nomes.append(m.group(1).strip("()"))
+        vistos: set[str] = set()
+        unicos: list[str] = []
+        for n in nomes:
+            if n not in vistos:
+                vistos.add(n)
+                unicos.append(n)
+        return unicos
+
+    # ------------------------------------------------------------------ acoes
+
+    def _install_tooling(self) -> None:
+        install_system_package("git", self.ctx.runner)
+        if not ensure_github_cli(self.ctx.runner):
+            self.add_hint("GitHub CLI nao instalado automaticamente; veja as instrucoes acima.")
+
+    def _login_account(self) -> str:
+        if not command_exists("gh") and not self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{Color.YELLOW}AVISO:{Color.RESET} gh nao encontrado. Rode antes 'Instalar Git + GitHub CLI'."
+            )
+            self.add_hint("Instale o GitHub CLI antes de conectar a conta.")
+            return ""
+        self.ctx.logger.write(
+            paint(
+                "O gh vai abrir um assistente: escolha GitHub.com, protocolo SSH e "
+                "aceite gerar/enviar a chave SSH. Depois autorize no navegador.",
+                Color.MUTED,
+            )
+        )
+        self.ctx.runner.run(
+            ["gh", "auth", "login"],
+            check=False,
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Login interativo: o gh abre o navegador e pode gerar/enviar sua chave SSH. Nao e travamento.",
+        )
+        # Configura o git para usar o gh como credential helper (clones HTTPS).
+        self.ctx.runner.run(["gh", "auth", "setup-git"], check=False, action="Configurando git para usar o gh")
+        if self.ctx.runner.dry_run:
+            return "Login do GitHub (dry-run)."
+        conta = self._gh_user_field("login")
+        if conta:
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} conta ativa: {conta}")
+            return f"Conta '{conta}' conectada."
+        return "Login do GitHub executado."
+
+    def _add_repos(self) -> list[str]:
+        adicionados: list[str] = []
+        while True:
+            self._maybe_switch_account()
+            spec = self._choose_repo_spec()
+            if not spec:
+                break
+            target = self._clone_repo(spec)
+            if target is not None:
+                owner, repo = self._parse_owner_repo(spec)
+                name, email = self._configure_author(target)
+                self._record_repo(target, owner, repo, name, email)
+                adicionados.append(target.name)
+            try:
+                mais = prompt_user(
+                    "Adicionar outro repositorio? (s/N)",
+                    self.ctx.logger,
+                    prompt_label="Outro",
+                    allow_empty=True,
+                ).strip().lower()
+            except PromptInterruptedError:
+                break
+            if mais not in ("s", "sim", "y", "yes"):
+                break
+        return adicionados
+
+    def _maybe_switch_account(self) -> None:
+        contas = self._logged_accounts()
+        if len(contas) <= 1:
+            return
+        idx = select_many(
+            "Qual conta GitHub usar para este repositorio?",
+            contas,
+            self.ctx.logger,
+            detail="Marque UMA conta. Ela vira a conta ativa para o clone.",
+        )
+        if idx:
+            escolhida = contas[idx[0]]
+            self.ctx.runner.run(
+                ["gh", "auth", "switch", "--hostname", "github.com", "--user", escolhida],
+                check=False,
+                action=f"Ativando a conta {escolhida}",
+            )
+
+    def _choose_repo_spec(self) -> str:
+        """Deixa o usuario escolher um repo da lista do gh ou digitar owner/repo/URL."""
+        repos = self._list_own_repos()
+        if repos:
+            labels = [*repos, "Outro (digitar owner/repo ou URL)"]
+            idx = select_many(
+                "Qual repositorio clonar?",
+                labels,
                 self.ctx.logger,
-                detail="O clone so continua depois que voce fornecer a URL desejada.",
-                prompt_label="Repo URL",
+                detail="Marque UM. A ultima opcao permite digitar manualmente. Nada marcado = encerrar.",
+            )
+            if not idx:
+                return ""
+            escolha = idx[0]
+            if escolha < len(repos):
+                return repos[escolha]
+        try:
+            spec = prompt_user(
+                "Repositorio (owner/repo ou URL, vazio para encerrar)",
+                self.ctx.logger,
+                detail="Ex: victorlcs87/gsv-calendar ou git@github.com:owner/repo.git",
+                prompt_label="Repo",
                 allow_empty=True,
             ).strip()
         except PromptInterruptedError:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}AVISO:{Color.RESET} Entrada da URL interrompida. Clone/pull cancelado."
-            )
             return ""
-        if not repo_url:
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} URL vazia, pulando clone.")
-            return ""
+        return spec
+
+    def _list_own_repos(self) -> list[str]:
+        raw = self._gh_query(["repo", "list", "--limit", "100", "--json", "nameWithOwner"])
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return [item["nameWithOwner"] for item in data if isinstance(item, dict) and item.get("nameWithOwner")]
+
+    def _clone_repo(self, spec: str) -> Path | None:
+        base = self.ctx.user.home / "repositorios"
+        if not base.exists():
+            self.ctx.runner.run(["mkdir", "-p", str(base)], action=f"Criando diretorio {base}", show_progress=False)
+        target = base / self._repo_dir_name(spec)
         if (target / ".git").exists():
-            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} repositorio ja existe em {target}; atualizando")
+            self.ctx.logger.write(f"{Color.GREEN}OK:{Color.RESET} {target} ja existe; atualizando")
             self.ctx.runner.run(
                 ["git", "-C", str(target), "pull", "--ff-only"],
                 check=False,
-                action="Atualizando repositorio scripts-linux",
+                action=f"Atualizando {target.name}",
             )
-            return "Repositorio scripts-linux atualizado."
-        self.ctx.runner.run(["git", "clone", repo_url, str(target)], action="Clonando repositorio scripts-linux")
-        return "Repositorio scripts-linux clonado."
-
-    def _ensure_ssh_dir(self) -> None:
-        if self.ctx.runner.dry_run:
-            return
-        self.ssh_dir.mkdir(parents=True, exist_ok=True)
-        self.ssh_dir.chmod(0o700)
-
-    def _configure_accounts(self) -> str:
-        if self.ctx.runner.dry_run:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} pediria alias/usuario/nome/email e geraria chave ed25519 por conta"
-            )
-            return ""
-        self._ensure_ssh_dir()
-        adicionados: list[str] = []
-        while True:
-            try:
-                alias = prompt_user(
-                    "Alias da conta GitHub (vazio para encerrar)",
-                    self.ctx.logger,
-                    detail="Ex: github-work. Cada conta ganha uma chave SSH dedicada. Deixe vazio para nao adicionar (mais).",
-                    prompt_label="Alias",
-                    allow_empty=True,
-                ).strip()
-            except PromptInterruptedError:
-                self.add_hint("Configuracao de contas GitHub interrompida pelo usuario.")
-                break
-            if not alias:
-                break
-            try:
-                ghuser = prompt_user(
-                    "Usuario GitHub", self.ctx.logger, prompt_label="Usuario", allow_empty=False
-                ).strip()
-                gitname = prompt_user(
-                    "Nome para commits", self.ctx.logger, prompt_label="Nome", allow_empty=False
-                ).strip()
-                email = prompt_user("Email", self.ctx.logger, prompt_label="Email", allow_empty=False).strip()
-            except PromptInterruptedError:
-                self.add_hint(f"Dados da conta '{alias}' interrompidos; conta nao configurada.")
-                break
-            if self._add_account(alias, ghuser, gitname, email):
-                adicionados.append(alias)
-        if adicionados:
-            return f"Contas GitHub configuradas: {', '.join(adicionados)}."
-        return ""
-
-    def _account_block(self, alias: str, key: Path) -> str:
-        return (
-            f"\nHost {alias}\n    HostName github.com\n    User git\n    IdentityFile {key}\n    IdentitiesOnly yes\n"
-        )
-
-    def _add_account(self, alias: str, ghuser: str, gitname: str, email: str) -> bool:
-        key = self._key_path(alias)
-        if key.exists():
-            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} chave do alias '{alias}' ja existe; pulando.")
-            self.add_hint(f"Alias '{alias}' ja possui chave em {key}; remova com 'undo' antes de recriar.")
-            return False
+            return target
         self.ctx.runner.run(
-            ["ssh-keygen", "-t", "ed25519", "-C", email, "-f", str(key), "-N", ""],
-            action=f"Gerando chave SSH ed25519 para '{alias}'",
-        )
-        existing = self.config_file.read_text(encoding="utf-8") if self.config_file.exists() else ""
-        if f"Host {alias}" not in existing:
-            backup_existing(self.config_file, self.ctx.runner)
-            write_text(self.config_file, existing + self._account_block(alias, key), self.ctx.runner, mode=0o600)
-        self.ctx.runner.run(
-            ["ssh-add", str(key)],
+            ["gh", "repo", "clone", spec, str(target)],
             check=False,
-            action=f"Adicionando chave de '{alias}' ao ssh-agent",
+            action=f"Clonando {spec}",
         )
-        pub = key.with_suffix(".pub")
-        pub_content = pub.read_text(encoding="utf-8").strip() if pub.exists() else "(chave publica nao encontrada)"
-        print_lines(
-            self.ctx.logger,
-            [
-                "",
-                paint("====================================", Color.SUCCESS),
-                paint(f"COPIE ESTA CHAVE PUBLICA ({alias})", Color.SUCCESS),
-                paint("====================================", Color.SUCCESS),
-                "",
-                pub_content,
-                "",
-                "Proximos passos:",
-                "  1) Acesse https://github.com/settings/keys e clique em 'New SSH Key'.",
-                "  2) Cole a chave publica acima e salve.",
-                f"  3) Teste a conexao: ssh -T git@{alias}",
-                f"     (deve aparecer algo como: Hi {ghuser}! You've successfully authenticated...)",
-                f"  4) Para clonar: git clone git@{alias}:USUARIO/REPOSITORIO.git",
-                "  5) Dentro do repositorio configure manualmente o autor dos commits:",
-                f'       git config user.name "{gitname}"',
-                f'       git config user.email "{email}"',
-                "",
-            ],
-        )
-        return True
+        if self.ctx.runner.dry_run:
+            return target
+        return target if (target / ".git").exists() else None
+
+    @staticmethod
+    def _repo_dir_name(spec: str) -> str:
+        _, repo = GitStep._parse_owner_repo(spec)
+        return repo or spec.strip().replace("/", "-")
+
+    @staticmethod
+    def _parse_owner_repo(spec: str) -> tuple[str, str]:
+        s = spec.strip().rstrip("/")
+        if s.endswith(".git"):
+            s = s[:-4]
+        for prefix in ("git@github.com:", "https://github.com/", "http://github.com/", "ssh://git@github.com/"):
+            if s.startswith(prefix):
+                s = s[len(prefix) :]
+                break
+        parts = [p for p in s.replace(":", "/").split("/") if p]
+        if len(parts) >= 2:
+            return parts[-2], parts[-1]
+        return "", parts[-1] if parts else ""
+
+    def _configure_author(self, target: Path) -> tuple[str, str]:
+        nome_default = self._gh_user_field("name") or self._gh_user_field("login")
+        email_default = self._gh_user_field("email")
+        try:
+            nome = prompt_user(
+                "Nome para os commits deste repo",
+                self.ctx.logger,
+                detail=f"Enter para usar: {nome_default or '(vazio)'}",
+                prompt_label="Nome",
+                allow_empty=True,
+            ).strip() or nome_default
+            email = prompt_user(
+                "Email para os commits deste repo",
+                self.ctx.logger,
+                detail=f"Enter para usar: {email_default or '(vazio)'}",
+                prompt_label="Email",
+                allow_empty=True,
+            ).strip() or email_default
+        except PromptInterruptedError:
+            self.add_hint(f"Autor do commit nao configurado para {target.name}.")
+            return "", ""
+        if nome:
+            self.ctx.runner.run(
+                ["git", "-C", str(target), "config", "user.name", nome],
+                check=False,
+                action=f"Configurando user.name em {target.name}",
+                show_progress=False,
+            )
+        if email:
+            self.ctx.runner.run(
+                ["git", "-C", str(target), "config", "user.email", email],
+                check=False,
+                action=f"Configurando user.email em {target.name}",
+                show_progress=False,
+            )
+        return nome, email
 
     def _remove_account(self, alias: str) -> bool:
         key = self._key_path(alias)
@@ -237,71 +393,158 @@ class GitStep(Step):
                 result.append(line)
         return "".join(result)
 
-    def status(self) -> None:
-        header(self, self.title, "Repositorio base, chaves SSH e contas GitHub")
-        self.ctx.runner.run(["git", "--version"], check=False)
-        self.ctx.runner.run(
-            ["git", "-C", str(self.ctx.user.home / "repositorios/scripts-linux"), "status", "--short", "--branch"],
-            check=False,
+    # ------------------------------------------------------------------ estado
+
+    def _state_path(self) -> Path:
+        return self.ctx.user.home / ".config" / "reforja" / "git.json"
+
+    def _load_state(self) -> dict:
+        path = self._state_path()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    data.setdefault("repos", [])
+                    return data
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {"repos": []}
+
+    def _save_state(self, state: dict) -> None:
+        write_text(
+            self._state_path(),
+            json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+            self.ctx.runner,
         )
-        repo_ok = (self.ctx.user.home / "repositorios/scripts-linux/.git").exists()
 
-        self.ctx.logger.write("")
-        self.ctx.logger.write(paint("===== ~/.ssh/config =====", Color.ACCENT))
-        if self.config_file.exists():
-            print_lines(self.ctx.logger, self.config_file.read_text(encoding="utf-8").splitlines())
+    def _record_repo(self, target: Path, owner: str, repo: str, name: str, email: str) -> None:
+        state = self._load_state()
+        entry = {
+            "path": str(target),
+            "owner": owner,
+            "repo": repo or target.name,
+            "name": name,
+            "email": email,
+        }
+        repos = [r for r in state.get("repos", []) if r.get("path") != entry["path"]]
+        repos.append(entry)
+        state["repos"] = repos
+        self._save_state(state)
+
+    def _forget_repo(self, path: str) -> None:
+        state = self._load_state()
+        state["repos"] = [r for r in state.get("repos", []) if r.get("path") != path]
+        self._save_state(state)
+
+    # ------------------------------------------------------------------ status / undo
+
+    def status(self) -> None:
+        header(self, self.title, "GitHub CLI, contas conectadas e repositorios configurados")
+        self.ctx.runner.run(["git", "--version"], check=False)
+        gh_ok = command_exists("gh")
+        if gh_ok:
+            self.ctx.runner.run(["gh", "--version"], check=False, show_progress=False)
+            self.ctx.runner.run(["gh", "auth", "status"], check=False, action="Contas GitHub conectadas")
         else:
-            self.ctx.logger.write("Arquivo inexistente.")
+            self.ctx.logger.write(f"{Color.YELLOW}AVISO:{Color.RESET} GitHub CLI (gh) nao instalado.")
+        contas = self._logged_accounts() if gh_ok else []
 
-        keys = sorted(self.ssh_dir.glob("id_ed25519_*.pub")) if self.ssh_dir.exists() else []
+        repos = self._load_state().get("repos", [])
         self.ctx.logger.write("")
-        self.ctx.logger.write(paint("===== CHAVES POR CONTA =====", Color.ACCENT))
-        if keys:
-            for pub in keys:
-                alias = pub.name[len("id_ed25519_") : -len(".pub")]
-                self.ctx.logger.write(f"{badge(alias, Color.SUCCESS)} {pub}")
+        self.ctx.logger.write(paint("===== REPOSITORIOS CONFIGURADOS =====", Color.ACCENT))
+        repos_ok: list[dict] = []
+        if repos:
+            for r in repos:
+                path = Path(r.get("path", ""))
+                existe = (path / ".git").exists()
+                tone = Color.SUCCESS if existe else Color.WARNING
+                sufixo = "" if existe else "  (pasta ausente)"
+                autor = r.get("email") or r.get("name") or ""
+                self.ctx.logger.write(f"{badge(r.get('owner') or '?', tone)} {path} <{autor}>{sufixo}")
+                if existe:
+                    repos_ok.append(r)
         else:
-            self.ctx.logger.write("Nenhuma chave de conta encontrada.")
-        self.ctx.runner.run(["ssh-add", "-l"], check=False, action="Listando chaves no ssh-agent")
+            self.ctx.logger.write("Nenhum repositorio configurado ainda.")
 
-        if repo_ok and keys:
-            self.mark_applied("Repositorio clonado e contas GitHub configuradas.")
-        elif repo_ok:
-            self.mark_applied("Repositorio scripts-linux clonado; nenhuma conta SSH configurada.")
-        elif keys:
-            self.mark_attention(
-                "Contas GitHub configuradas, mas repositorio base nao foi clonado.",
-                attention=["repositorio scripts-linux"],
+        self._status_legacy_ssh()
+
+        if gh_ok and contas and repos_ok:
+            self.mark_applied(
+                f"gh instalado, {len(contas)} conta(s) e {len(repos_ok)} repo(s) configurados.",
+                items=[r.get("repo", "?") for r in repos_ok],
             )
+        elif gh_ok and contas:
+            self.mark_applied("gh instalado e conta conectada; adicione repositorios quando quiser.")
+        elif gh_ok:
+            self.mark_pending("gh instalado, mas nenhuma conta GitHub conectada.", missing=["conta GitHub"])
         else:
             self.mark_pending(
-                "Repositorio nao clonado e nenhuma conta GitHub configurada.",
-                missing=["repositorio scripts-linux", "contas GitHub"],
+                "GitHub CLI nao instalado e nenhuma conta conectada.",
+                missing=["GitHub CLI (gh)", "conta GitHub"],
             )
 
+    def _status_legacy_ssh(self) -> None:
+        keys = sorted(self.ssh_dir.glob("id_ed25519_*.pub")) if self.ssh_dir.exists() else []
+        if not keys and not self.config_file.exists():
+            return
+        self.ctx.logger.write("")
+        self.ctx.logger.write(paint("===== LEGADO (chaves SSH do fluxo antigo) =====", Color.MUTED))
+        if self.config_file.exists():
+            print_lines(self.ctx.logger, self.config_file.read_text(encoding="utf-8").splitlines())
+        for pub in keys:
+            alias = pub.name[len("id_ed25519_") : -len(".pub")]
+            self.ctx.logger.write(f"{badge(alias, Color.INFO)} {pub}")
+
     def undo(self) -> None:
-        header(self, self.title, "Remover conta GitHub (chave SSH + bloco no config)")
-        if self.ctx.runner.dry_run:
-            self.ctx.logger.write(
-                f"{Color.YELLOW}[dry-run]{Color.RESET} pediria o alias e removeria chave e bloco do config"
-            )
-            self.mark_manual("Dry-run indica remocao de conta GitHub.")
+        header(self, self.title, "Desconectar conta, esquecer repositorio ou remover chave antiga")
+        contas = self._logged_accounts() if command_exists("gh") else []
+        repos = self._load_state().get("repos", [])
+        legacy = sorted(self.ssh_dir.glob("id_ed25519_*.pub")) if self.ssh_dir.exists() else []
+
+        opcoes: list[str] = []
+        acoes: list[tuple[str, str]] = []
+        for c in contas:
+            opcoes.append(f"Desconectar conta GitHub: {c}")
+            acoes.append(("logout", c))
+        for r in repos:
+            opcoes.append(f"Esquecer repositorio (mantem os arquivos): {r.get('path')}")
+            acoes.append(("forget", str(r.get("path"))))
+        for pub in legacy:
+            alias = pub.name[len("id_ed25519_") : -len(".pub")]
+            opcoes.append(f"Remover chave SSH antiga: {alias}")
+            acoes.append(("legacy", alias))
+
+        if not opcoes:
+            self.mark_skipped("Nada configurado para desfazer.")
             return
-        try:
-            alias = prompt_user(
-                "Alias da conta a remover",
-                self.ctx.logger,
-                detail="Remove id_ed25519_<alias>(.pub) e o bloco Host correspondente do ~/.ssh/config.",
-                prompt_label="Alias",
-                allow_empty=False,
-            ).strip()
-        except PromptInterruptedError:
-            self.mark_skipped("Remocao cancelada pelo usuario.")
+        idx = select_many(
+            "O que voce quer remover?",
+            opcoes,
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = cancelar. 'Esquecer' nao apaga os arquivos do repo.",
+        )
+        if not idx:
+            self.mark_skipped("Nada selecionado.")
             return
-        if self._remove_account(alias):
-            self.mark_done(f"Conta '{alias}' removida.")
+        feito: list[str] = []
+        for i in idx:
+            kind, val = acoes[i]
+            if kind == "logout":
+                self.ctx.runner.run(
+                    ["gh", "auth", "logout", "--hostname", "github.com", "--user", val],
+                    check=False,
+                    action=f"Desconectando a conta {val}",
+                )
+                feito.append(f"conta {val}")
+            elif kind == "forget":
+                self._forget_repo(val)
+                feito.append(f"repo {Path(val).name}")
+            elif kind == "legacy" and self._remove_account(val):
+                feito.append(f"chave {val}")
+        if feito:
+            self.mark_done("Removido: " + ", ".join(feito))
         else:
-            self.mark_skipped(f"Nada a remover para o alias '{alias}'.")
+            self.mark_skipped("Nada removido.")
 
 
 class AntigravityStep(Step):
