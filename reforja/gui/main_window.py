@@ -24,9 +24,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..cli import render_run_summary, render_status_overview
+from ..cli import render_run_summary, render_status_overview, synthetic_result
 from ..core import StepRunResult
 from ..steps import ALL_GROUPS
+from ..steps_base import Step as _StepBase
 from .askpass import resolve_askpass
 from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
 
         self._askpass = resolve_askpass()
         self._worker: StepWorker | None = None
+        self._running_step: type | None = None
         self._queue: list[tuple[type, str]] = []
         self._queue_action = ""
         self._queue_total = 0
@@ -126,10 +128,10 @@ class MainWindow(QMainWindow):
             self._update_checker.start()
 
     # --- atualizacao do app ------------------------------------------------------
-    def _on_update_available(self, tag: str, url: str) -> None:
+    def _on_update_available(self, tag: str, url: str, sha256_url: str = "") -> None:
         # Disparado pela checagem automatica do startup; oferece o update in-place.
         self._append(f"[info] Nova versao disponivel: {tag}")
-        self._offer_update(tag, url)
+        self._offer_update(tag, url, sha256_url)
 
     def _check_updates_manual(self) -> None:
         if self._updating or self._check_worker is not None:
@@ -142,7 +144,7 @@ class MainWindow(QMainWindow):
         self._check_worker = worker
         worker.start()
 
-    def _on_check_result(self, status: str, tag: str, url: str) -> None:
+    def _on_check_result(self, status: str, tag: str, url: str, sha256_url: str = "") -> None:
         self._btn_update.setEnabled(True)
         if status == "current":
             self._append(f"[done] Voce ja esta na versao mais recente (v{tag}).")
@@ -156,9 +158,9 @@ class MainWindow(QMainWindow):
                 f"Nao foi possivel verificar atualizacoes.\n\nDetalhe: {detail}",
             )
         else:  # available
-            self._offer_update(tag, url)
+            self._offer_update(tag, url, sha256_url)
 
-    def _offer_update(self, tag: str, url: str) -> None:
+    def _offer_update(self, tag: str, url: str, sha256_url: str = "") -> None:
         if self._updating:
             return
         answer = QMessageBox.question(
@@ -180,18 +182,23 @@ class MainWindow(QMainWindow):
             )
             QDesktopServices.openUrl(QUrl(url))
             return
-        self._start_self_update(url, target, tag)
+        self._start_self_update(url, target, tag, sha256_url)
 
-    def _start_self_update(self, url: str, target: Path, tag: str) -> None:
+    def _start_self_update(self, url: str, target: Path, tag: str, sha256_url: str = "") -> None:
         self._updating = True
         self._btn_update.setEnabled(False)
         self._set_running(True)
         self._append(f"[info] Baixando e instalando a versao v{tag}...")
-        self._progress.setRange(0, 0)  # modo "ocupado"
-        worker = DownloadWorker(url, target)
+        self._progress.setRange(0, 0)  # ocupado ate o primeiro progresso chegar
+        worker = DownloadWorker(url, target, sha256_url)
+        worker.progress.connect(self._on_download_progress)
         worker.finished.connect(lambda ok, msg, t=tag: self._on_update_finished(ok, msg, t))
         self._download_worker = worker
         worker.start()
+
+    def _on_download_progress(self, percent: int) -> None:
+        self._progress.setRange(0, 100)
+        self._progress.setValue(percent)
 
     def _on_update_finished(self, ok: bool, message: str, tag: str) -> None:
         self._download_worker = None
@@ -257,6 +264,7 @@ class MainWindow(QMainWindow):
                 self._list.addItem(item)
         self._list.currentRowChanged.connect(self._select_step)
         self._list.itemClicked.connect(self._on_item_clicked)
+        self._list.itemChanged.connect(lambda _item: self._update_undo_enabled())
         side_layout.addWidget(self._list, 1)
 
         # Marcar/limpar selecao
@@ -296,6 +304,10 @@ class MainWindow(QMainWindow):
         self._btn_undo.clicked.connect(lambda: self._run_action("undo"))
         for btn in (self._btn_apply, self._btn_status, self._btn_undo):
             actions.addWidget(btn)
+        self._btn_stop = QPushButton("Parar")
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.clicked.connect(self._stop_requested)
+        actions.addWidget(self._btn_stop)
         actions.addStretch(1)
         main_layout.addLayout(actions)
 
@@ -366,24 +378,37 @@ class MainWindow(QMainWindow):
         if step is None:  # cabecalho de grupo
             return
         self._step_title.setText(step.title)
-        # Undo so e oferecido quando o step de fato implementa o metodo.
-        self._btn_undo.setEnabled("undo" in step.__dict__)
+        self._update_undo_enabled()
         # Mostra a descricao da etapa no console (preview), sem perturbar execucao.
         if self._worker is None:
             self._show_step_info(step)
 
     def _show_step_info(self, step) -> None:
         self._stack.setCurrentWidget(self._console)
+        if self._results:
+            # Ja houve execucao nesta sessao: preserva o resumo no console e so
+            # atualiza o titulo/descricao no painel.
+            return
         self._console.clear()
         self._append(f"[info] {step.title}")
         desc = getattr(step, "description", "") or "Sem descricao disponivel para esta etapa."
         self._append(desc)
         self._append("")
         acoes = "Aplicar executa a etapa. Status apenas verifica o estado."
-        if "undo" in step.__dict__:
+        if self._has_undo(step):
             acoes += " Undo desfaz o que a etapa criou."
         self._append(acoes)
         self._append("Marque a(s) etapa(s) e clique em Aplicar / Status / Undo.")
+
+    @staticmethod
+    def _has_undo(step: type) -> bool:
+        # Detecta undo mesmo herdado (mixin/base intermediaria), sem falso
+        # positivo do placeholder da classe base.
+        return step.undo is not _StepBase.undo
+
+    def _update_undo_enabled(self) -> None:
+        targets = self._target_steps()
+        self._btn_undo.setEnabled(any(self._has_undo(step) for step in targets))
 
     def _current_step(self) -> type | None:
         item = self._list.currentItem()
@@ -423,6 +448,7 @@ class MainWindow(QMainWindow):
             self._btn_update,
         ):
             btn.setEnabled(not running)
+        self._btn_stop.setEnabled(running)
         if not running:
             self._select_step(self._list.currentRow())
 
@@ -435,12 +461,38 @@ class MainWindow(QMainWindow):
         return [current] if current is not None else []
 
     def _run_action(self, action: str) -> None:
-        self._run_steps(action, self._target_steps())
+        steps = self._target_steps()
+        if action == "undo":
+            steps = [step for step in steps if self._has_undo(step)]
+        if not steps:
+            return
+        if not self._confirm_action(action, steps):
+            return
+        self._run_steps(action, steps)
+
+    def _confirm_action(self, action: str, steps: list[type]) -> bool:
+        """Confirmacao para operacoes de maior impacto: Undo e apply em lote grande."""
+        if action == "undo":
+            titles = "\n".join(f"- {step.title}" for step in steps)
+            answer = QMessageBox.question(
+                self,
+                "Confirmar Undo",
+                f"Desfazer o que estas etapas criaram?\n\n{titles}",
+            )
+            return answer == QMessageBox.StandardButton.Yes
+        if action == "apply" and len(steps) > 3:
+            answer = QMessageBox.question(
+                self,
+                "Confirmar aplicacao em lote",
+                f"Aplicar {len(steps)} etapas em sequencia?",
+            )
+            return answer == QMessageBox.StandardButton.Yes
+        return True
 
     def _run_steps(self, action: str, steps: list[type]) -> None:
         if self._worker is not None or not steps:
             return
-        self._console.clear()  # descarta o preview da descricao antes de streamar a execucao
+        self._console.clear()  # descarta o preview/resumo anterior antes de streamar a execucao
         self._queue = [(step, action) for step in steps]
         self._queue_total = len(self._queue)
         self._queue_action = action
@@ -457,8 +509,12 @@ class MainWindow(QMainWindow):
             self._finish_queue()
             return
         step_cls, action = self._queue.pop(0)
-        done = self._queue_total - len(self._queue) - 1
-        self._progress.setValue(int(done / self._queue_total * 100))
+        self._running_step = step_cls
+        # Barra em modo "ocupado" enquanto o step corrente roda; a contagem por
+        # concluidas volta em _on_result/_finish_queue.
+        self._progress.setRange(0, 0)
+        completed = self._queue_total - len(self._queue) - 1
+        self._progress.setFormat(f"{step_cls.title} ({completed + 1}/{self._queue_total})")
         self._append(f"---- {step_cls.title} ----")
         self._start_worker(step_cls, action)
 
@@ -484,21 +540,46 @@ class MainWindow(QMainWindow):
         if item is not None:
             item.setData(_ROLE_COMPLIANCE, result.compliance)
         self._refresh_step_items()
+        self._progress.setRange(0, 100)
+        self._progress.setValue(int(len(self._results) / max(1, self._queue_total) * 100))
         self._append(f"[{result.status}] {result.title}: {result.message}")
 
-    def _on_failed(self, kind: str, message: str) -> None:
+    def _on_failed(self, status: str, message: str) -> None:
+        # Mesmo comportamento do CLI (run_steps): a falha entra no resumo como
+        # resultado sintetico e o lote PARA; as restantes ficam como blocked.
+        kind = "aviso" if status == "manual" else "erro"
         self._append(f"[{kind}] {message}")
+        if self._running_step is not None:
+            self._results.append(synthetic_result(self._running_step, status, RuntimeError(message)))
+        for step_cls, _action in self._queue:
+            self._results.append(synthetic_result(step_cls, "blocked", RuntimeError("etapa anterior falhou")))
+        self._queue = []
 
     def _on_worker_done(self) -> None:
         self._worker = None
+        self._running_step = None
         if self._queue:
             self._next_in_queue()
         else:
             self._finish_queue()
 
+    def _stop_requested(self) -> None:
+        """Botao Parar: cancela o comando corrente e esvazia a fila."""
+        self._append("[aviso] Parando: aguardando o comando atual encerrar...")
+        self._btn_stop.setEnabled(False)
+        for step_cls, _action in self._queue:
+            self._results.append(synthetic_result(step_cls, "blocked", RuntimeError("cancelado pelo usuario")))
+        self._queue = []
+        worker = self._worker
+        if worker is not None:
+            worker.stop()
+        self._terminal.interrupt()
+
     def _finish_queue(self) -> None:
         self._set_running(False)
+        self._progress.setRange(0, 100)
         self._progress.setValue(100)
+        self._progress.setFormat("%p%")
         self._render_summary()
         self._stack.setCurrentWidget(self._console)
 
@@ -543,6 +624,13 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+            # Cancela o comando em andamento e espera a thread encerrar.
+            self._queue = []
+            self._worker.stop()
+            self._terminal.interrupt()
+            self._worker.wait(3000)
+        if self._download_worker is not None:
+            self._download_worker.cancel()
         # Aguarda threads de rede terminarem para nao destrui-las em execucao.
         for thread in (self._update_checker, self._check_worker, self._download_worker):
             if thread is not None and thread.isRunning():

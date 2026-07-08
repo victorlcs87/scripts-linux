@@ -14,6 +14,7 @@ Tudo falha em silencio/com mensagem (sem rede, sem release, repo privado, etc.).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import ssl
@@ -66,6 +67,23 @@ def parse_release(data: dict, current: str) -> tuple[str, str, str]:
     return "available", tag, url
 
 
+def find_sha256_url(data: dict) -> str:
+    """URL do asset SHA256SUMS do release (ou "" quando ausente)."""
+    for asset in data.get("assets", []):
+        if str(asset.get("name", "")) == "SHA256SUMS":
+            return str(asset.get("browser_download_url", ""))
+    return ""
+
+
+def expected_sha256(sums_text: str, filename: str) -> str:
+    """Extrai o hash esperado de um arquivo no formato do sha256sum ("hash  nome")."""
+    for line in sums_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == filename:
+            return parts[0].lower()
+    return ""
+
+
 def running_appimage() -> Path | None:
     """Caminho do AppImage em execucao (variavel APPIMAGE), ou None fora de AppImage."""
     value = os.environ.get("APPIMAGE")
@@ -81,7 +99,7 @@ def _fetch_latest() -> dict:
 class UpdateChecker(QThread):
     """Checagem automatica no startup. Silenciosa; so emite se houver versao nova."""
 
-    updateAvailable = Signal(str, str)  # (tag, url)
+    updateAvailable = Signal(str, str, str)  # (tag, url, sha256_url)
 
     def __init__(self, current: str = __version__) -> None:
         super().__init__()
@@ -96,13 +114,13 @@ class UpdateChecker(QThread):
             return
         status, tag, url = parse_release(data, self._current)
         if status == "available":
-            self.updateAvailable.emit(tag, url)
+            self.updateAvailable.emit(tag, url, find_sha256_url(data))
 
 
 class CheckWorker(QThread):
     """Checagem manual sob demanda. Sempre reporta um resultado."""
 
-    resultReady = Signal(str, str, str)  # (status, tag, url) — status: available|current|error
+    resultReady = Signal(str, str, str, str)  # (status, tag, url, sha256_url) — status: available|current|error
 
     def __init__(self, current: str = __version__) -> None:
         super().__init__()
@@ -113,36 +131,69 @@ class CheckWorker(QThread):
             data = _fetch_latest()
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             # Repassa o detalhe real do erro (no campo url) para nao mascarar como "sem rede".
-            self.resultReady.emit("error", "", f"{type(exc).__name__}: {exc}")
+            self.resultReady.emit("error", "", f"{type(exc).__name__}: {exc}", "")
             return
         status, tag, url = parse_release(data, self._current)
-        self.resultReady.emit(status, tag, url)
+        self.resultReady.emit(status, tag, url, find_sha256_url(data))
 
 
 class DownloadWorker(QThread):
-    """Baixa o novo AppImage e substitui o arquivo alvo de forma atomica."""
+    """Baixa o novo AppImage, valida o SHA256 (quando o release publica o
+    SHA256SUMS) e substitui o arquivo alvo de forma atomica."""
 
     finished = Signal(bool, str)  # (ok, message)
+    progress = Signal(int)  # 0-100 (so quando ha Content-Length)
 
-    def __init__(self, url: str, target: Path) -> None:
+    def __init__(self, url: str, target: Path, sha256_url: str = "") -> None:
         super().__init__()
         self._url = url
         self._target = target
+        self._sha256_url = sha256_url
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Interrompe o download no proximo chunk (usado no fechamento da janela)."""
+        self._cancelled = True
+
+    def _expected_hash(self) -> str:
+        if not self._sha256_url:
+            return ""
+        try:
+            req = urllib.request.Request(self._sha256_url)
+            with urllib.request.urlopen(req, timeout=_TIMEOUT, context=_ssl_context()) as resp:  # noqa: S310
+                sums = resp.read().decode("utf-8", errors="ignore")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return ""
+        filename = self._url.rsplit("/", 1)[-1]
+        return expected_sha256(sums, filename)
 
     def run(self) -> None:  # noqa: D401 (override QThread.run)
         target = self._target
         tmp = target.with_name(target.name + ".new")
+        expected = self._expected_hash()
+        digest = hashlib.sha256()
         try:
             req = urllib.request.Request(self._url, headers={"Accept": "application/octet-stream"})
             with (
                 urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp,  # noqa: S310
                 open(tmp, "wb") as out,
             ):
+                total = int(resp.headers.get("Content-Length") or 0)
+                received = 0
                 while True:
+                    if self._cancelled:
+                        raise OSError("download cancelado")
                     chunk = resp.read(65536)
                     if not chunk:
                         break
                     out.write(chunk)
+                    digest.update(chunk)
+                    received += len(chunk)
+                    if total:
+                        self.progress.emit(int(received / total * 100))
+            # Integridade: sem hash conferido, nao substituimos o executavel.
+            if expected and digest.hexdigest().lower() != expected:
+                raise OSError("SHA256 do download nao confere com o SHA256SUMS do release")
             tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             # Rename atomico no mesmo diretorio: a instancia em uso mantem o inode antigo.
             os.replace(tmp, target)

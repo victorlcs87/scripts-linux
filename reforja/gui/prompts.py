@@ -114,6 +114,19 @@ class GuiInteraction(QObject):
         ]
 
     # --- chamado na thread de trabalho (InteractionProvider) ---------------------
+    def _request_blocking(self, kind: str, default: Any, **payload: Any) -> dict[str, Any]:
+        """Emite o pedido para a thread de UI e bloqueia ate a resposta."""
+        req: dict[str, Any] = {
+            "kind": kind,
+            "result": default,
+            "cancelled": False,
+            "event": threading.Event(),
+            **payload,
+        }
+        self._request.emit(req)
+        req["event"].wait()
+        return req
+
     def ask_text(
         self,
         prompt: str,
@@ -122,31 +135,13 @@ class GuiInteraction(QObject):
         prompt_label: str = "Resposta",
         allow_empty: bool = True,
     ) -> str:
-        req: dict[str, Any] = {
-            "kind": "text",
-            "prompt": prompt,
-            "detail": detail,
-            "allow_empty": allow_empty,
-            "result": "",
-            "cancelled": False,
-            "event": threading.Event(),
-        }
-        self._request.emit(req)
-        req["event"].wait()
+        req = self._request_blocking("text", "", prompt=prompt, detail=detail, allow_empty=allow_empty)
         if req["cancelled"]:
             raise PromptInterruptedError(f"entrada cancelada pelo usuario: {prompt}")
         return req["result"]
 
     def confirm_phrase(self, phrase: str, *, detail: str | None = None) -> bool:
-        req: dict[str, Any] = {
-            "kind": "confirm",
-            "phrase": phrase,
-            "detail": detail,
-            "result": False,
-            "event": threading.Event(),
-        }
-        self._request.emit(req)
-        req["event"].wait()
+        req = self._request_blocking("confirm", False, phrase=phrase, detail=detail)
         return bool(req["result"])
 
     def choose_many(
@@ -156,14 +151,5 @@ class GuiInteraction(QObject):
         *,
         detail: str | None = None,
     ) -> list[int]:
-        req: dict[str, Any] = {
-            "kind": "multi",
-            "prompt": prompt,
-            "options": list(options),
-            "detail": detail,
-            "result": [],
-            "event": threading.Event(),
-        }
-        self._request.emit(req)
-        req["event"].wait()
+        req = self._request_blocking("multi", [], prompt=prompt, options=list(options), detail=detail)
         return list(req["result"])

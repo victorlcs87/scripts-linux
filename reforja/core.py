@@ -363,6 +363,24 @@ class Runner:
         # GUI roda esses comandos num terminal embutido (pty) em vez de assumir o
         # TTY atual. Assinatura: (cmd, *, cwd, env, action) -> returncode (int).
         self.interactive_executor: InteractiveExecutor | None = None
+        # Cancelamento cooperativo (botao Parar da GUI): a flag e checada no
+        # loop de streaming e no inicio de cada run(); o processo ativo e
+        # terminado na hora do pedido.
+        self._abort_requested = False
+        self._active_process: subprocess.Popen | None = None
+
+    def request_abort(self) -> None:
+        """Pede o cancelamento do comando atual (e dos proximos deste Runner)."""
+        self._abort_requested = True
+        process = self._active_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    def _raise_aborted(self, printable: str) -> None:
+        self._abort_requested = False
+        self._active_process = None
+        announce(self.logger, "failed", "cancelado pelo usuario")
+        raise CommandInterruptedError(f"comando cancelado pelo usuario: {printable}")
 
     def cmd_text(self, cmd: Sequence[str] | str, sudo: bool = False) -> str:
         if isinstance(cmd, str):
@@ -399,6 +417,8 @@ class Runner:
                 )
             self.logger.write(f"{badge('dry-run', Color.DRY_RUN)} {printable}")
             return None
+        if self._abort_requested:
+            self._raise_aborted(printable)
         if sudo and no_new_privs_enabled():
             raise PrivilegeEscalationBlockedError(
                 "este ambiente bloqueia sudo porque NoNewPrivs=1. "
@@ -491,6 +511,7 @@ class Runner:
                 raise RuntimeError(f"comando nao encontrado: {printable}") from exc
             return subprocess.CompletedProcess(args=full_cmd, returncode=127, stdout="", stderr=str(exc))
         assert process.stdout is not None
+        self._active_process = process
         os.set_blocking(process.stdout.fileno(), False)
         collected: list[str] = []
         buffer = ""
@@ -515,6 +536,14 @@ class Runner:
                     self.logger.clear_transient()
                     buffer = self._flush_buffer(buffer + text)
                     continue
+                if self._abort_requested:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    self.logger.clear_transient()
+                    self._raise_aborted(printable)
                 if process.poll() is not None:
                     break
                 if show_progress and now - last_output >= 0.8 and now - last_heartbeat >= 0.2:
@@ -544,6 +573,11 @@ class Runner:
                 self.logger.write(buffer.rstrip("\r\n"))
             self.logger.clear_transient()
             returncode = process.wait()
+            self._active_process = None
+            # O terminate() do request_abort pode encerrar o filho via EOF antes
+            # da checagem do loop; garante o desfecho "cancelado" mesmo assim.
+            if self._abort_requested:
+                self._raise_aborted(printable)
         except KeyboardInterrupt as exc:
             self.logger.clear_transient()
             process.terminate()

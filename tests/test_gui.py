@@ -223,11 +223,13 @@ def test_offer_update_inicia_download_quando_em_appimage(app, tmp_path: Path, mo
     started: dict[str, object] = {}
 
     class _FakeDownload:
-        def __init__(self, url, target) -> None:
+        def __init__(self, url, target, sha256_url="") -> None:
             started["url"] = url
             started["target"] = target
+            started["sha256_url"] = sha256_url
 
         finished = _FakeSignal()
+        progress = _FakeSignal()
 
         def start(self) -> None:
             started["started"] = True
@@ -304,3 +306,118 @@ def test_choose_many_cancelar_retorna_vazio(app, monkeypatch) -> None:
     req = _multi_req(["a", "b"])
     gi._handle_multi(req)
     assert req["result"] == []
+
+
+# --- fase 4: falhas no resumo, Parar, Undo, SHA256 --------------------------------
+def test_falha_no_lote_entra_no_resumo_e_bloqueia_restantes(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window, "_start_worker", lambda step, action: None)
+
+    _check(window, "00")
+    _check(window, "03")
+    _check(window, "10")
+    window._run_action("status")  # monta a fila e "inicia" o primeiro (00)
+
+    # O primeiro step (00) falha: vira resultado sintetico e o resto e bloqueado.
+    window._on_failed("failed", "explodiu")
+
+    statuses = [(r.step_id, r.status) for r in window._results]
+    assert ("00", "failed") in statuses
+    assert ("03", "blocked") in statuses
+    assert ("10", "blocked") in statuses
+    assert window._queue == []
+
+
+def test_botao_parar_bloqueia_fila_e_habilita_so_em_execucao(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    assert window._btn_stop.isEnabled() is False
+    window._set_running(True)
+    assert window._btn_stop.isEnabled() is True
+
+    window._queue = [(ALL_STEPS[0], "apply"), (ALL_STEPS[1], "apply")]
+    window._stop_requested()
+    assert window._queue == []
+    assert all(r.status == "blocked" for r in window._results)
+
+
+def test_undo_habilita_conforme_alvos_marcados(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    # HardwareStep (14) tem undo; AppsStep (10) usa o placeholder da base (sem undo).
+    window._list.setCurrentItem(window._item_for_step("10"))
+    window._update_undo_enabled()
+    assert window._btn_undo.isEnabled() is False
+
+    _check(window, "14")
+    window._update_undo_enabled()
+    assert window._btn_undo.isEnabled() is True
+
+
+def test_undo_pede_confirmacao(app, tmp_path: Path, monkeypatch) -> None:
+    import reforja.gui.main_window as mw
+
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window, "_run_steps", lambda action, steps: None)
+    asked: list[str] = []
+    monkeypatch.setattr(
+        mw.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: asked.append("q") or mw.QMessageBox.StandardButton.No),
+    )
+
+    _check(window, "14")
+    window._run_action("undo")
+    assert asked == ["q"]  # perguntou e o usuario recusou -> nada roda
+
+
+def test_expected_sha256_encontra_hash_do_arquivo() -> None:
+    from reforja.gui.updater import expected_sha256, find_sha256_url
+
+    sums = "abc123  Reforja-1.0.9-x86_64.AppImage\ndef456  Reforja.zsync\n"
+    assert expected_sha256(sums, "Reforja-1.0.9-x86_64.AppImage") == "abc123"
+    assert expected_sha256(sums, "inexistente") == ""
+
+    data = {
+        "assets": [
+            {"name": "SHA256SUMS", "browser_download_url": "http://x/SHA256SUMS"},
+            {"name": "Reforja.AppImage", "browser_download_url": "http://x/app"},
+        ]
+    }
+    assert find_sha256_url(data) == "http://x/SHA256SUMS"
+    assert find_sha256_url({"assets": []}) == ""
+
+
+def test_download_worker_rejeita_hash_divergente(tmp_path: Path, monkeypatch) -> None:
+    from reforja.gui.updater import DownloadWorker
+
+    target = tmp_path / "Reforja.AppImage"
+    target.write_bytes(b"antigo")
+    worker = DownloadWorker("http://x/Reforja.AppImage", target, "http://x/SHA256SUMS")
+
+    class _Resp:
+        headers = {"Content-Length": "4"}
+
+        def __init__(self, payload: bytes) -> None:
+            self._payload = payload
+
+        def read(self, _n: int = -1) -> bytes:
+            data, self._payload = self._payload, b""
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(worker, "_expected_hash", lambda: "hash-que-nao-bate")
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, **k: _Resp(b"novo"))
+    results: list[tuple[bool, str]] = []
+    worker.finished.connect(lambda ok, msg: results.append((ok, msg)))
+
+    worker.run()  # roda sincrono (sem thread) para o teste
+
+    assert results and results[0][0] is False
+    assert "SHA256" in results[0][1]
+    assert target.read_bytes() == b"antigo"  # binario preservado

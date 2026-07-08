@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     # Alinha o WM_CLASS ao .desktop (reforja.desktop) para que o KDE Wayland
     # agrupe a janela com o icone correto na barra de tarefas.
     app.setDesktopFileName("reforja")
+    # Icone da janela para ambientes sem o .desktop instalado (rodando do fonte).
+    icon_path = Path(__file__).resolve().parents[2] / "assets" / "reforja.png"
+    if icon_path.exists():
+        from PySide6.QtGui import QIcon
+
+        app.setWindowIcon(QIcon(str(icon_path)))
     if _THEME.exists():
         app.setStyleSheet(_THEME.read_text(encoding="utf-8"))
 

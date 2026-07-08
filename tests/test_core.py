@@ -154,3 +154,32 @@ def test_prompt_user_handles_ctrl_c_cleanly(monkeypatch, tmp_path: Path) -> None
     log = logger.path.read_text(encoding="utf-8")
     assert "[skipped]" in log
     assert "Campo interrompido pelo usuario" in log
+
+
+def test_runner_request_abort_cancels_running_command(tmp_path: Path) -> None:
+    import threading
+
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger)
+
+    # Cancela pouco depois do comando comecar; o sleep de 30s nunca completa.
+    threading.Timer(0.3, runner.request_abort).start()
+    from reforja.core import CommandInterruptedError
+
+    with pytest.raises(CommandInterruptedError):
+        runner.run(["sleep", "30"])
+
+
+def test_runner_abort_flag_blocks_next_command(tmp_path: Path) -> None:
+    from reforja.core import CommandInterruptedError
+
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger)
+    runner.request_abort()
+
+    with pytest.raises(CommandInterruptedError):
+        runner.run(["true"])
+
+    # Depois de consumido o abort, comandos voltam a rodar.
+    result = runner.run(["true"])
+    assert result is not None and result.returncode == 0
