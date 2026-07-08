@@ -210,12 +210,16 @@ class GitStep(Step):
                 self._record_repo(target, owner, repo, name, email)
                 adicionados.append(target.name)
             try:
-                mais = prompt_user(
-                    "Adicionar outro repositorio? (s/N)",
-                    self.ctx.logger,
-                    prompt_label="Outro",
-                    allow_empty=True,
-                ).strip().lower()
+                mais = (
+                    prompt_user(
+                        "Adicionar outro repositorio? (s/N)",
+                        self.ctx.logger,
+                        prompt_label="Outro",
+                        allow_empty=True,
+                    )
+                    .strip()
+                    .lower()
+                )
             except PromptInterruptedError:
                 break
             if mais not in ("s", "sim", "y", "yes"):
@@ -323,20 +327,26 @@ class GitStep(Step):
         nome_default = self._gh_user_field("name") or self._gh_user_field("login")
         email_default = self._gh_user_field("email")
         try:
-            nome = prompt_user(
-                "Nome para os commits deste repo",
-                self.ctx.logger,
-                detail=f"Enter para usar: {nome_default or '(vazio)'}",
-                prompt_label="Nome",
-                allow_empty=True,
-            ).strip() or nome_default
-            email = prompt_user(
-                "Email para os commits deste repo",
-                self.ctx.logger,
-                detail=f"Enter para usar: {email_default or '(vazio)'}",
-                prompt_label="Email",
-                allow_empty=True,
-            ).strip() or email_default
+            nome = (
+                prompt_user(
+                    "Nome para os commits deste repo",
+                    self.ctx.logger,
+                    detail=f"Enter para usar: {nome_default or '(vazio)'}",
+                    prompt_label="Nome",
+                    allow_empty=True,
+                ).strip()
+                or nome_default
+            )
+            email = (
+                prompt_user(
+                    "Email para os commits deste repo",
+                    self.ctx.logger,
+                    detail=f"Enter para usar: {email_default or '(vazio)'}",
+                    prompt_label="Email",
+                    allow_empty=True,
+                ).strip()
+                or email_default
+            )
         except PromptInterruptedError:
             self.add_hint(f"Autor do commit nao configurado para {target.name}.")
             return "", ""
