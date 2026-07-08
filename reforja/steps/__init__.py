@@ -2,26 +2,23 @@
 
 from ..steps_base import Step, StepGroup
 from .appimage import UpdateAppImagesStep
-from .browser import BrowserStep, WebAppsStep
+from .browser import BrowserStep
 from .dev import AntigravityStep, GitStep
 from .gaming import AppsStep, GpuStep, SunshineStep
 from .inventory import HardwareStep
-from .kde import GesturesStep, NumLockStep
+from .kde import KdeStep
 from .storage import FstabStep, RcloneStep
-from .system import LinuxToysStep, ShellyStep
+from .system import ShellyStep
 
 ALL_STEPS: tuple[type[Step], ...] = (
     ShellyStep,
-    LinuxToysStep,
     BrowserStep,
-    WebAppsStep,
     GpuStep,
     GitStep,
     RcloneStep,
     FstabStep,
-    GesturesStep,
+    KdeStep,
     AppsStep,
-    NumLockStep,
     AntigravityStep,
     SunshineStep,
     HardwareStep,
@@ -29,29 +26,28 @@ ALL_STEPS: tuple[type[Step], ...] = (
 )
 
 # Camada de categorias para navegacao (CLI/GUI). Orthogonal a ALL_STEPS, que
-# permanece a lista canonica sequencial (IDs 00..15 inalterados).
+# permanece a lista canonica sequencial. Lacunas de ID vem de fusoes:
+# 02 (Linux Toys) virou item do passo 10; 04 (WebApps) fundiu no 03;
+# 11 (Num Lock) fundiu no 09.
 ALL_GROUPS: tuple[StepGroup, ...] = (
-    StepGroup("sistema", "Sistema base", (ShellyStep, GpuStep)),
-    StepGroup("apps", "Aplicativos", (LinuxToysStep, BrowserStep, WebAppsStep, AppsStep, UpdateAppImagesStep)),
+    StepGroup("sistema", "Sistema base", (ShellyStep,)),
+    StepGroup("apps", "Aplicativos", (BrowserStep, AppsStep, UpdateAppImagesStep)),
     StepGroup("dev", "Dev", (GitStep, AntigravityStep)),
-    StepGroup("jogos", "Jogos e streaming", (SunshineStep,)),
-    StepGroup("kde", "Desktop / KDE", (GesturesStep, NumLockStep)),
+    StepGroup("jogos", "Jogos e streaming", (GpuStep, SunshineStep)),
+    StepGroup("kde", "Desktop / KDE", (KdeStep,)),
     StepGroup("armazenamento", "Armazenamento", (RcloneStep, FstabStep)),
     StepGroup("info", "Hardware / Info", (HardwareStep,)),
 )
 
 __all__ = [
     "ShellyStep",
-    "LinuxToysStep",
     "BrowserStep",
-    "WebAppsStep",
     "GpuStep",
     "GitStep",
     "RcloneStep",
     "FstabStep",
-    "GesturesStep",
+    "KdeStep",
     "AppsStep",
-    "NumLockStep",
     "AntigravityStep",
     "SunshineStep",
     "HardwareStep",

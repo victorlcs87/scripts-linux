@@ -10,6 +10,7 @@ from ..core import (
     backup_existing,
     badge,
     command_exists,
+    select_many,
     write_text,
     write_text_sudo,
 )
@@ -21,32 +22,63 @@ from ..steps_base import Step
 from ._common import InputGroupMixin, header
 
 
-class GesturesStep(InputGroupMixin, Step):
+class KdeStep(InputGroupMixin, Step):
     id = "09"
-    title = "Gestos KDE"
+    title = "Ajustes KDE"
     description = (
-        "Configura gestos de 3 dedos (abre o Overview com swipe) via libinput-gestures no KDE. "
-        "Pulada automaticamente em maquinas sem touchpad (desktops)."
+        "Ajustes de desktop num unico menu: gestos de 3 dedos no touchpad (libinput-gestures, "
+        "pulado em desktops) e Num Lock fixo na sessao e na tela de login (KDE + SDDM)."
+    )
+    sddm_file = Path("/etc/sddm.conf.d/10-numlock.conf")
+
+    _ITEMS = (
+        "Gestos do touchpad (libinput-gestures)",
+        "Fixar Num Lock (KDE + SDDM)",
     )
 
     def apply(self) -> None:
-        header(self, self.title, "Instalando e configurando gestos com libinput-gestures")
+        header(self, self.title, "Gestos do touchpad e Num Lock num unico passo")
+        indices = select_many(
+            "Quais ajustes aplicar?",
+            self._ITEMS,
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = nada a fazer.",
+        )
+        if not indices:
+            self.mark_skipped("Nenhum ajuste selecionado.")
+            return
+        chosen = set(indices)
+        resultados: list[tuple[str, str]] = []
+        if 0 in chosen:
+            resultados.append(self._apply_gestures())
+        if 1 in chosen:
+            resultados.append(self._apply_numlock())
+        mensagens = " | ".join(msg for _status, msg in resultados)
+        estados = {status for status, _msg in resultados}
+        if "manual" in estados:
+            self.mark_manual(mensagens)
+        elif estados == {"skipped"}:
+            self.mark_skipped(mensagens)
+        else:
+            self.mark_done(mensagens)
+            self.mark_applied(mensagens)
+
+    # ------------------------------------------------------------------ gestos
+
+    def _apply_gestures(self) -> tuple[str, str]:
         if not hardware.has_touchpad():
             self.ctx.logger.write(
                 f"{badge('aviso', Color.WARNING)} nenhum touchpad detectado nesta maquina; gestos nao se aplicam a desktops."
             )
-            self.mark_skipped("Maquina sem touchpad; gestos nao se aplicam.")
-            self.mark_applied("Nao aplicavel: maquina sem touchpad.")
-            return
+            return ("skipped", "Gestos: nao aplicavel (sem touchpad)")
         self.ctx.logger.write(
-            "Configuracao principal desta etapa: libinput-gestures com gestos de 3 dedos para Overview."
+            "Configuracao principal deste item: libinput-gestures com gestos de 3 dedos para Overview."
         )
         install_system_or_aur("libinput-gestures", "libinput-gestures", self.ctx.runner)
         input_group_ready = self._ensure_input_group()
         if not command_exists("libinput-gestures-setup") and not self.ctx.runner.dry_run:
             self.ctx.logger.write("libinput-gestures-setup nao ficou disponivel apos a instalacao.")
-            self.mark_manual("libinput-gestures nao ficou disponivel apos a instalacao.")
-            return
+            return ("manual", "Gestos: libinput-gestures nao ficou disponivel apos a instalacao")
         self._write_libinput_config()
         self.ctx.runner.run(
             ["libinput-gestures-setup", "autostart"],
@@ -61,9 +93,11 @@ class GesturesStep(InputGroupMixin, Step):
             show_progress=False,
         )
         if not input_group_ready:
-            self.mark_manual(f"Execute 'sudo gpasswd -a {self.ctx.user.name} input' e faca logout/login ou reinicie.")
-            return
-        self.mark_done("Gestos configurados com libinput-gestures.")
+            return (
+                "manual",
+                f"Gestos: execute 'sudo gpasswd -a {self.ctx.user.name} input' e faca logout/login",
+            )
+        return ("done", "Gestos configurados com libinput-gestures")
 
     def _write_libinput_config(self) -> None:
         helper = self.ctx.user.home / ".local/bin/kde-gnome-like-overview"
@@ -102,81 +136,9 @@ exit 1
         output = result.stdout if result and result.stdout else ""
         return "is currently running" in output
 
-    def status(self) -> None:
-        header(self, self.title, "Verificando pacote, servico e arquivos de gestos")
-        self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
-        if not hardware.has_touchpad():
-            self.ctx.logger.write(
-                f"{badge('touchpad', Color.WARNING)} nenhum touchpad detectado; gestos nao se aplicam a esta maquina."
-            )
-            self.mark_applied("Nao aplicavel: maquina sem touchpad.")
-            return
-        package_ready = system_installed("libinput-gestures")
-        group_ready = self._user_in_group("input")
-        service_ready = self._libinput_gestures_running()
-        self.ctx.logger.write(
-            f"{badge('libinput-gestures', Color.SUCCESS if package_ready else Color.WARNING)} {'instalado' if package_ready else 'ausente'}"
-        )
-        self.ctx.logger.write(
-            f"{badge('grupo-input', Color.SUCCESS if group_ready else Color.WARNING)} {'ok' if group_ready else 'usuario fora do grupo input'}"
-        )
-        self.ctx.logger.write(
-            f"{badge('servico', Color.SUCCESS if service_ready else Color.WARNING)} {'rodando' if service_ready else 'parado'}"
-        )
-        if not command_exists("libinput-gestures-setup"):
-            self.ctx.logger.write("libinput-gestures-setup indisponivel.")
-        config_file = self.ctx.user.home / ".config/libinput-gestures.conf"
-        if config_file.exists():
-            self.ctx.runner.run(["cat", str(config_file)], check=False)
-        else:
-            self.ctx.logger.write(f"Arquivo de configuracao ausente: {config_file}")
-        config_ready = config_file.exists()
-        expected_config_ready = self._libinput_config_ready(config_file)
-        helper_ready = (self.ctx.user.home / ".local/bin/kde-gnome-like-overview").exists()
-        if package_ready and group_ready and service_ready and expected_config_ready and helper_ready:
-            self.mark_applied("libinput-gestures, grupo input, servico e gestos up/down estao aplicados.")
-        elif package_ready or config_ready:
-            attention = []
-            if not group_ready:
-                attention.append("grupo input")
-            if not service_ready:
-                attention.append("servico libinput-gestures")
-            if not expected_config_ready:
-                attention.append("gestos up/down")
-            if not helper_ready:
-                attention.append("helper overview")
-            self.mark_attention(
-                "Gestos estao parcialmente configurados; revise grupo, servico ou arquivo.", attention=attention
-            )
-        else:
-            self.mark_pending(
-                "libinput-gestures ainda nao esta configurado.", missing=["libinput-gestures", "arquivo de gestos"]
-            )
+    # ------------------------------------------------------------------ num lock
 
-    def undo(self) -> None:
-        for path in (
-            self.ctx.user.home / ".config/libinput-gestures.conf",
-            self.ctx.user.home / ".local/bin/kde-gnome-like-overview",
-        ):
-            if self.ctx.runner.dry_run:
-                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
-            else:
-                path.unlink(missing_ok=True)
-        if command_exists("libinput-gestures-setup"):
-            self.ctx.runner.run(["libinput-gestures-setup", "stop"], check=False)
-            self.ctx.runner.run(["libinput-gestures-setup", "autostop"], check=False)
-        else:
-            self.ctx.logger.write("libinput-gestures nao instalado; nada para parar.")
-
-
-class NumLockStep(Step):
-    id = "11"
-    title = "Fixar Num Lock"
-    description = "Ativa o Num Lock por padrao no KDE Plasma e na tela de login (SDDM)."
-    sddm_file = Path("/etc/sddm.conf.d/10-numlock.conf")
-
-    def apply(self) -> None:
-        header(self, self.title, "Ajustando Num Lock para sessao e tela de login")
+    def _apply_numlock(self) -> tuple[str, str]:
         kde_conf = self.ctx.user.home / ".config/kcminputrc"
         if command_exists("kwriteconfig6"):
             if self._kde_numlock_ready(kde_conf):
@@ -211,7 +173,7 @@ class NumLockStep(Step):
             backup_existing(self.sddm_file, self.ctx.runner, sudo=True)
             write_text_sudo(self.sddm_file, sddm_content, self.ctx.runner)
         self._warn_sddm_conflicts()
-        self.mark_done("Num Lock ajustado para KDE e SDDM.")
+        return ("done", "Num Lock ajustado para KDE e SDDM")
 
     def _kde_numlock_ready(self, kde_conf: Path) -> bool:
         if not kde_conf.exists():
@@ -258,28 +220,118 @@ class NumLockStep(Step):
             if "Numlock" in text or "NumLock" in text:
                 self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Possivel conflito SDDM: {path}")
 
+    # ------------------------------------------------------------------ status / undo
+
     def status(self) -> None:
-        header(self, self.title, "Verificando configuracoes atuais de Num Lock")
+        header(self, self.title, "Gestos do touchpad e Num Lock")
+        self.ctx.logger.write(f"{badge('desktop', Color.INFO)} {os.environ.get('XDG_CURRENT_DESKTOP', 'desconhecido')}")
+
+        g_state, g_summary, g_attention, g_missing = self._status_gestures()
+        n_state, n_summary, n_attention, n_missing = self._status_numlock()
+
+        summary = f"Gestos: {g_summary} | Num Lock: {n_summary}"
+        estados = {g_state, n_state}
+        if estados == {"applied"}:
+            self.mark_applied(summary)
+        elif estados == {"pending"}:
+            self.mark_pending(summary, missing=g_missing + n_missing)
+        else:
+            self.mark_attention(summary, attention=g_attention + n_attention + g_missing + n_missing)
+
+    def _status_gestures(self) -> tuple[str, str, list[str], list[str]]:
+        if not hardware.has_touchpad():
+            self.ctx.logger.write(
+                f"{badge('touchpad', Color.WARNING)} nenhum touchpad detectado; gestos nao se aplicam a esta maquina."
+            )
+            return ("applied", "nao aplicavel (sem touchpad)", [], [])
+        package_ready = system_installed("libinput-gestures")
+        group_ready = self._user_in_group("input")
+        service_ready = self._libinput_gestures_running()
+        self.ctx.logger.write(
+            f"{badge('libinput-gestures', Color.SUCCESS if package_ready else Color.WARNING)} {'instalado' if package_ready else 'ausente'}"
+        )
+        self.ctx.logger.write(
+            f"{badge('grupo-input', Color.SUCCESS if group_ready else Color.WARNING)} {'ok' if group_ready else 'usuario fora do grupo input'}"
+        )
+        self.ctx.logger.write(
+            f"{badge('servico', Color.SUCCESS if service_ready else Color.WARNING)} {'rodando' if service_ready else 'parado'}"
+        )
+        if not command_exists("libinput-gestures-setup"):
+            self.ctx.logger.write("libinput-gestures-setup indisponivel.")
+        config_file = self.ctx.user.home / ".config/libinput-gestures.conf"
+        if config_file.exists():
+            self.ctx.runner.run(["cat", str(config_file)], check=False)
+        else:
+            self.ctx.logger.write(f"Arquivo de configuracao ausente: {config_file}")
+        config_ready = config_file.exists()
+        expected_config_ready = self._libinput_config_ready(config_file)
+        helper_ready = (self.ctx.user.home / ".local/bin/kde-gnome-like-overview").exists()
+        if package_ready and group_ready and service_ready and expected_config_ready and helper_ready:
+            return ("applied", "aplicados", [], [])
+        if package_ready or config_ready:
+            attention = []
+            if not group_ready:
+                attention.append("grupo input")
+            if not service_ready:
+                attention.append("servico libinput-gestures")
+            if not expected_config_ready:
+                attention.append("gestos up/down")
+            if not helper_ready:
+                attention.append("helper overview")
+            return ("attention", "parcialmente configurados", attention, [])
+        return ("pending", "nao configurados", [], ["libinput-gestures", "arquivo de gestos"])
+
+    def _status_numlock(self) -> tuple[str, str, list[str], list[str]]:
         self.ctx.runner.run(["grep", "-n", "NumLock", str(self.ctx.user.home / ".config/kcminputrc")], check=False)
         if self.sddm_file.exists():
             self.ctx.runner.run(["cat", str(self.sddm_file)], check=False)
         else:
             self.ctx.logger.write(f"Configuracao SDDM ainda ausente: {self.sddm_file}")
-        self.ctx.runner.run(
-            ["find", "/etc/sddm.conf.d", "-maxdepth", "1", "-type", "f", "-name", "*.conf"], check=False
-        )
         kde_ready = self._kde_numlock_ready(self.ctx.user.home / ".config/kcminputrc")
         sddm_ready = self.sddm_file.exists()
         if kde_ready and sddm_ready:
-            self.mark_applied("Num Lock esta aplicado no KDE e no SDDM.")
-        elif kde_ready or sddm_ready:
-            self.mark_attention("Num Lock esta aplicado parcialmente; falta KDE ou SDDM.")
-        else:
-            self.mark_pending(
-                "Num Lock ainda nao esta aplicado em KDE/SDDM.", missing=["KDE Num Lock", "SDDM Num Lock"]
-            )
+            return ("applied", "aplicado no KDE e no SDDM", [], [])
+        if kde_ready or sddm_ready:
+            return ("attention", "aplicado parcialmente (falta KDE ou SDDM)", ["Num Lock parcial"], [])
+        return ("pending", "nao aplicado", [], ["KDE Num Lock", "SDDM Num Lock"])
 
     def undo(self) -> None:
+        header(self, self.title, "Removendo gestos e Num Lock gerenciados por esta etapa")
+        indices = select_many(
+            "O que desfazer?",
+            ("Gestos do touchpad (config + helper + servico)", "Num Lock do SDDM (config KDE e preservada)"),
+            self.ctx.logger,
+            detail="Marque um ou mais. Nada marcado = cancelar.",
+        )
+        if not indices:
+            self.mark_skipped("Nada selecionado.")
+            return
+        chosen = set(indices)
+        feito: list[str] = []
+        if 0 in chosen:
+            self._undo_gestures()
+            feito.append("gestos")
+        if 1 in chosen:
+            self._undo_numlock()
+            feito.append("Num Lock (SDDM)")
+        self.mark_done("Desfeito: " + ", ".join(feito))
+
+    def _undo_gestures(self) -> None:
+        for path in (
+            self.ctx.user.home / ".config/libinput-gestures.conf",
+            self.ctx.user.home / ".local/bin/kde-gnome-like-overview",
+        ):
+            if self.ctx.runner.dry_run:
+                self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {path}")
+            else:
+                path.unlink(missing_ok=True)
+        if command_exists("libinput-gestures-setup"):
+            self.ctx.runner.run(["libinput-gestures-setup", "stop"], check=False)
+            self.ctx.runner.run(["libinput-gestures-setup", "autostop"], check=False)
+        else:
+            self.ctx.logger.write("libinput-gestures nao instalado; nada para parar.")
+
+    def _undo_numlock(self) -> None:
         if self.ctx.runner.dry_run:
             self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {self.sddm_file}")
         else:

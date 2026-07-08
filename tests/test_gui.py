@@ -159,7 +159,7 @@ def test_clicar_cabecalho_marca_e_desmarca_grupo(app, tmp_path: Path) -> None:
         window._list.item(i) for i in range(window._list.count()) if window._list.item(i).text() == "APLICATIVOS"
     )
     window._on_item_clicked(header)
-    assert sorted(s.id for s in window._checked_steps()) == ["02", "03", "04", "10", "15"]
+    assert sorted(s.id for s in window._checked_steps()) == ["03", "10", "15"]
     window._on_item_clicked(header)
     assert window._checked_steps() == []
 

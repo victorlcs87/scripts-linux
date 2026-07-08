@@ -9,11 +9,6 @@ from ..core import (
     select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
-from ..installers import (
-    flatpak_installed,
-    install_flatpak,
-    remove_flatpak,
-)
 from ..platform import (
     current_distro,
     install_system_or_aur,
@@ -25,86 +20,81 @@ from ..platform import (
 from ..steps_base import Step
 from ._common import header
 
-
-class BrowserStep(Step):
-    id = "03"
-    title = "Navegador e extensoes"
-    description = "Instala o Firefox, o FirefoxPWA (base para os WebApps) e o Bitwarden (Flatpak)."
-
-    def apply(self) -> None:
-        header(self, "Firefox sistema + FirefoxPWA + Bitwarden", "Preparando navegador principal e base para PWAs")
-        install_system_package("firefox", self.ctx.runner)
-        if system_package_exists("firefoxpwa"):
-            install_system_package("firefoxpwa", self.ctx.runner)
-        else:
-            install_system_or_aur("firefoxpwa", "firefoxpwa", self.ctx.runner)
-        install_flatpak("com.bitwarden.desktop", self.ctx.runner)
-        self.ctx.logger.write("Extensao FirefoxPWA: https://addons.mozilla.org/firefox/addon/pwas-for-firefox/")
-        self.mark_done("Navegador, FirefoxPWA e Bitwarden processados.")
-
-    def status(self) -> None:
-        header(self, "Status navegador")
-        self.ctx.runner.run(system_query_command("firefox", "firefoxpwa"), check=False)
-        self.ctx.runner.run(["flatpak", "info", "com.bitwarden.desktop"], check=False)
-        self.ctx.runner.run(["firefox", "--version"], check=False)
-        missing = []
-        if not system_installed("firefox"):
-            missing.append("firefox")
-        if not (system_installed("firefoxpwa") or command_exists("firefoxpwa")):
-            missing.append("firefoxpwa")
-        if not flatpak_installed("com.bitwarden.desktop"):
-            missing.append("bitwarden")
-        if missing:
-            self.mark_pending(f"Navegador ainda esta incompleto: {', '.join(missing)}.", missing=missing)
-        else:
-            self.mark_applied("Firefox, FirefoxPWA e Bitwarden estao aplicados.")
-
-    def undo(self) -> None:
-        distro = current_distro()
-        if distro.is_arch:
-            cmd = "sudo pacman -Rns firefox firefoxpwa"
-        elif distro.is_fedora:
-            cmd = "sudo dnf remove firefox firefoxpwa"
-        else:
-            cmd = "sudo apt-get remove firefox firefoxpwa"
-        self.ctx.logger.write(f"Sugestao manual para Firefox/FirefoxPWA: {cmd}")
-        remove_flatpak("com.bitwarden.desktop", self.ctx.runner)
-
-
 WEBAPPS = (
     ("ChatGPT", "chatgpt", "https://chatgpt.com", "https://chatgpt.com/manifest.json"),
     ("GSV Calendar", "gsv-calendar", "http://gsv-calendar.vercel.app", "https://gsv-calendar.vercel.app/manifest.json"),
 )
 
+# Rotulo do item de navegador no menu (os demais itens vem de WEBAPPS).
+_BROWSER_ITEM = "Firefox + FirefoxPWA (navegador e base para PWAs)"
 
-class WebAppsStep(Step):
-    id = "04"
-    title = "WebApps"
+
+class BrowserStep(Step):
+    id = "03"
+    title = "Navegador e WebApps"
     description = (
-        "Cria atalhos de WebApp (ChatGPT e GSV Calendar) via FirefoxPWA, "
-        "com fallback para WebApp Manager ou atalho .desktop."
+        "Instala o Firefox + FirefoxPWA e cria os WebApps do dia a dia (ChatGPT e GSV Calendar) "
+        "num unico menu de selecao, com fallback para WebApp Manager ou atalho .desktop."
     )
 
     def apply(self) -> None:
-        header(self, "WebApps com FirefoxPWA, WebApp Manager ou fallback", "Criando atalhos e PWAs para uso diario")
-        labels = [self._choice_label(name, slug) for name, slug, _url, _manifest in WEBAPPS]
+        header(self, self.title, "Navegador principal + WebApps num unico passo")
+        labels = [self._browser_label(), *(self._webapp_label(name, slug) for name, slug, _url, _m in WEBAPPS)]
         indices = select_many(
-            "Quais WebApps criar",
+            "O que instalar/criar?",
             labels,
             self.ctx.logger,
             detail="Marque um ou mais. Nada marcado = nada a fazer.",
         )
         if not indices:
-            self.mark_skipped("Nenhum WebApp selecionado.")
+            self.mark_skipped("Nada selecionado.")
             return
-        chosen = [WEBAPPS[i] for i in indices]
-        if all(self._webapp_present(name, slug) for name, slug, _url, _manifest in chosen):
-            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} WebApps/atalhos ja encontrados. Pulando criacao.")
-            self.mark_skipped("WebApps/atalhos ja existentes.")
-            return
-        created = False
+        chosen = set(indices)
+        partes: list[str] = []
+        if 0 in chosen:
+            self._install_browser()
+            partes.append("navegador (Firefox + FirefoxPWA)")
+        chosen_webapps = [WEBAPPS[i - 1] for i in sorted(chosen) if i >= 1]
+        if chosen_webapps:
+            msg = self._create_webapps(chosen_webapps)
+            if msg:
+                partes.append(msg)
+        if partes:
+            self.mark_done(" | ".join(partes))
+            self.result.applied_items = partes
+        else:
+            self.mark_skipped("Nada novo para fazer.")
+
+    # ------------------------------------------------------------------ navegador
+
+    def _browser_label(self) -> str:
+        ready = system_installed("firefox") and (system_installed("firefoxpwa") or command_exists("firefoxpwa"))
+        return f"{_BROWSER_ITEM} {'(ja instalado)' if ready else '(nao instalado)'}"
+
+    def _install_browser(self) -> None:
+        install_system_package("firefox", self.ctx.runner)
+        self._ensure_firefoxpwa()
+        self.ctx.logger.write("Extensao FirefoxPWA: https://addons.mozilla.org/firefox/addon/pwas-for-firefox/")
+
+    def _ensure_firefoxpwa(self) -> None:
         if system_package_exists("firefoxpwa"):
             install_system_package("firefoxpwa", self.ctx.runner)
+        else:
+            install_system_or_aur("firefoxpwa", "firefoxpwa", self.ctx.runner)
+
+    # ------------------------------------------------------------------ webapps
+
+    def _webapp_label(self, name: str, slug: str) -> str:
+        return f"WebApp {name} {'(ja existe)' if self._webapp_present(name, slug) else '(nao criado)'}"
+
+    def _create_webapps(self, chosen) -> str:
+        if all(self._webapp_present(name, slug) for name, slug, _url, _manifest in chosen):
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} WebApps/atalhos ja encontrados. Pulando criacao.")
+            return ""
+        # Os WebApps dependem do FirefoxPWA; garante mesmo sem o item de navegador marcado.
+        if not command_exists("firefoxpwa"):
+            self._ensure_firefoxpwa()
+        created = False
         if command_exists("firefoxpwa") or self.ctx.runner.dry_run:
             created = self._try_firefoxpwa(chosen)
         if not created:
@@ -113,12 +103,7 @@ class WebAppsStep(Step):
             self._create_desktop_fallbacks(chosen)
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Fallback criado. Estes atalhos nao sao PWAs reais.")
             self.mark_manual("Fallback .desktop criado; PWAs reais podem exigir ajuste manual.")
-            return
-        self.mark_done("WebApps processados.")
-        self.result.applied_items = [name for name, _slug, _url, _manifest in chosen]
-
-    def _choice_label(self, name: str, slug: str) -> str:
-        return f"{name} (ja existe)" if self._webapp_present(name, slug) else f"{name} (nao criado)"
+        return "webapps: " + ", ".join(name for name, _slug, _url, _manifest in chosen)
 
     def _try_firefoxpwa(self, webapps) -> bool:
         ok_all = True
@@ -181,9 +166,6 @@ class WebAppsStep(Step):
             )
             install_desktop_entry(app_dir / f"{slug}.desktop", entry, self.ctx.runner)
 
-    def _all_webapps_present(self) -> bool:
-        return all(self._webapp_present(name, slug) for name, slug, _url, _manifest in WEBAPPS)
-
     def _webapp_present(self, name: str, slug: str) -> bool:
         app_dir = self.ctx.user.home / ".local/share/applications"
         candidates = [
@@ -197,32 +179,46 @@ class WebAppsStep(Step):
             return bool(result and name.lower() in result.stdout.lower())
         return False
 
+    # ------------------------------------------------------------------ status / undo
+
     def status(self) -> None:
-        header(self, "Status WebApps")
+        header(self, self.title, "Navegador, FirefoxPWA e WebApps")
+        self.ctx.runner.run(system_query_command("firefox", "firefoxpwa"), check=False)
+        self.ctx.runner.run(["firefox", "--version"], check=False)
         if command_exists("firefoxpwa"):
             self.ctx.runner.run(["firefoxpwa", "profile", "list"], check=False)
+
+        browser_missing: list[str] = []
+        if not system_installed("firefox"):
+            browser_missing.append("firefox")
+        if not (system_installed("firefoxpwa") or command_exists("firefoxpwa")):
+            browser_missing.append("firefoxpwa")
+        webapps_missing = [name for name, slug, _url, _m in WEBAPPS if not self._webapp_present(name, slug)]
+
+        for name, ok in (
+            ("firefox", "firefox" not in browser_missing),
+            ("firefoxpwa", "firefoxpwa" not in browser_missing),
+        ):
+            self.ctx.logger.write(f"{badge(name, Color.SUCCESS if ok else Color.WARNING)} {'OK' if ok else 'ausente'}")
+        for name, slug, _url, _m in WEBAPPS:
+            ok = name not in webapps_missing
+            self.ctx.logger.write(f"{badge(slug, Color.SUCCESS if ok else Color.WARNING)} {'OK' if ok else 'ausente'}")
+
+        if not browser_missing and not webapps_missing:
+            self.mark_applied("Firefox, FirefoxPWA e WebApps estao aplicados.")
+        elif browser_missing:
+            self.mark_pending(
+                f"Navegador ainda esta incompleto: {', '.join(browser_missing)}.",
+                missing=browser_missing + webapps_missing,
+            )
         else:
-            self.ctx.logger.write("firefoxpwa nao esta instalado; status via CLI indisponivel.")
-        self.ctx.runner.run(
-            [
-                "find",
-                str(self.ctx.user.home / ".local/share/applications"),
-                "-maxdepth",
-                "1",
-                "-iname",
-                "*chatgpt*.desktop",
-                "-o",
-                "-iname",
-                "*gsv*.desktop",
-            ],
-            check=False,
-        )
-        if self._all_webapps_present():
-            self.mark_applied("ChatGPT e GSV Calendar estao presentes como WebApp ou atalho.")
-        else:
-            self.mark_pending("Ainda faltam WebApps/atalhos esperados.", missing=["ChatGPT", "GSV Calendar"])
+            self.mark_attention(
+                f"Navegador OK, mas faltam WebApps: {', '.join(webapps_missing)}.",
+                attention=webapps_missing,
+            )
 
     def undo(self) -> None:
+        header(self, self.title, "Removendo atalhos de WebApp criados; navegador fica")
         app_dir = self.ctx.user.home / ".local/share/applications"
         for _name, slug, _url, _manifest in WEBAPPS:
             target = app_dir / f"{slug}.desktop"
@@ -231,3 +227,12 @@ class WebAppsStep(Step):
             else:
                 target.unlink(missing_ok=True)
         self.ctx.logger.write("Removidos apenas os fallbacks .desktop criados por esta etapa.")
+        distro = current_distro()
+        if distro.is_arch:
+            cmd = "sudo pacman -Rns firefox firefoxpwa"
+        elif distro.is_fedora:
+            cmd = "sudo dnf remove firefox firefoxpwa"
+        else:
+            cmd = "sudo apt-get remove firefox firefoxpwa"
+        self.ctx.logger.write(f"Sugestao manual para remover o navegador: {cmd}")
+        self.mark_done("Atalhos de WebApp removidos; navegador preservado.")

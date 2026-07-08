@@ -489,8 +489,8 @@ class AppsStep(Step):
     title = "Apps / jogos / comunicacao / dev"
     description = (
         "Instala os apps principais: Steam e Heroic (jogos), comunicacao (Discord, ZapZap, TeamSpeak), "
-        "utilitarios (Solaar, LocalSend, Flatseal), ONLYOFFICE, auto-cpufreq e o Codex CLI. "
-        "Usa pacote nativo/AUR quando possivel, com fallback para Flatpak."
+        "utilitarios (Solaar, LocalSend, Flatseal, Bitwarden, Linux Toys), ONLYOFFICE, auto-cpufreq "
+        "e o Codex CLI. Usa pacote nativo/AUR quando possivel, com fallback para Flatpak."
     )
     apps = {
         "Steam": {
@@ -562,6 +562,20 @@ class AppsStep(Step):
             "appimage_paths": (),
             "desktop_paths": (),
             "kind": "system",
+        },
+        "Bitwarden": {
+            "system_aliases": ("bitwarden",),
+            "flatpak_id": "com.bitwarden.desktop",
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "flatpak",
+        },
+        "Linux Toys": {
+            "system_aliases": ("linuxtoys",),
+            "flatpak_id": None,
+            "appimage_paths": (),
+            "desktop_paths": (),
+            "kind": "cli",
         },
         "Solaar": {
             "system_aliases": ("solaar",),
@@ -647,6 +661,13 @@ class AppsStep(Step):
                 continue
             header(self, f"{name} - Flatpak")
             install_flatpak(str(definition["flatpak_id"]), self.ctx.runner)
+        if "Linux Toys" in selected:
+            if self._detect_install_source("Linux Toys"):
+                self.ctx.logger.write(
+                    f"{badge('ok', Color.SUCCESS)} Linux Toys ja detectado via {self._detect_install_source('Linux Toys')}"
+                )
+            else:
+                self._install_linuxtoys()
         if "Codex CLI" in selected:
             header(self, "Codex CLI")
             if self._detect_install_source("Codex CLI"):
@@ -670,6 +691,25 @@ class AppsStep(Step):
     def _choice_label(self, name: str) -> str:
         source = self._detect_install_source(name)
         return f"{name} (instalado via {source})" if source else f"{name} (nao instalado)"
+
+    def _install_linuxtoys(self) -> None:
+        header(self, "Linux Toys", "Instalando pelo script oficial (colecao de utilitarios e tweaks)")
+        build_dir = Path("/tmp/linuxtoys")
+        if build_dir.exists():
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} limpando build anterior em {build_dir} para evitar falha de makepkg"
+            )
+            self.ctx.runner.run(
+                ["rm", "-rf", str(build_dir)],
+                check=False,
+                action="Limpando build temporario anterior do Linux Toys",
+                show_progress=False,
+            )
+        self.ctx.runner.run(
+            "curl -fsSL https://linux.toys/install.sh | bash",
+            shell=True,
+            action="Baixando e executando instalador do Linux Toys",
+        )
 
     def _install_auto_cpufreq(self) -> None:
         source = self._detect_install_source("auto-cpufreq")
@@ -811,6 +851,8 @@ class AppsStep(Step):
                 return "cli (codex no PATH)"
             if npm_global_installed("@openai/codex"):
                 return "npm global"
+        if app_name == "Linux Toys" and command_exists("linuxtoys"):
+            return "cli (linuxtoys no PATH)"
         if app_name == "auto-cpufreq" and command_exists("auto-cpufreq"):
             return "cli (auto-cpufreq no PATH)"
         return None

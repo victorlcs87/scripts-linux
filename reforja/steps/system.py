@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from ..core import (
     Color,
     badge,
@@ -17,7 +15,6 @@ from ..platform import (
     install_system_package,
     system_installed,
     system_package_exists,
-    system_query_command,
     update_system,
 )
 from ..steps_base import Step
@@ -245,42 +242,3 @@ class ShellyStep(Step):
         self.ctx.logger.write(
             "Nao ha undo seguro para Flatpak/flathub/fuse2/AUR helper. Se quiser, remova manualmente os componentes preparados."
         )
-
-
-class LinuxToysStep(Step):
-    id = "02"
-    title = "Instalar Linux Toys"
-    description = "Instala o Linux Toys pelo script oficial (colecao de utilitarios e tweaks para o sistema)."
-
-    def apply(self) -> None:
-        header(self, self.title, "Instalando utilitarios do Linux Toys")
-        if command_exists("linuxtoys") or system_installed("linuxtoys"):
-            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Linux Toys ja parece instalado")
-            self.mark_skipped("Linux Toys ja parece instalado.")
-            return
-        build_dir = Path("/tmp/linuxtoys")
-        if build_dir.exists():
-            self.ctx.logger.write(
-                f"{badge('aviso', Color.WARNING)} limpando build anterior em {build_dir} para evitar falha de makepkg"
-            )
-            self.ctx.runner.run(
-                ["rm", "-rf", str(build_dir)],
-                check=False,
-                action="Limpando build temporario anterior do Linux Toys",
-                show_progress=False,
-            )
-        self.ctx.runner.run(
-            "curl -fsSL https://linux.toys/install.sh | bash",
-            shell=True,
-            action="Baixando e executando instalador do Linux Toys",
-        )
-        self.mark_done("Linux Toys instalado.")
-
-    def status(self) -> None:
-        header(self, self.title, "Verificando presenca do Linux Toys")
-        self.ctx.runner.run(system_query_command("linuxtoys"), check=False)
-        self.ctx.runner.run(["linuxtoys", "--help"], check=False)
-        if command_exists("linuxtoys") or system_installed("linuxtoys"):
-            self.mark_applied("Linux Toys esta instalado.")
-        else:
-            self.mark_pending("Linux Toys ainda nao esta instalado.", missing=["linuxtoys"])

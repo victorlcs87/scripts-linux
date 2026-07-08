@@ -5,7 +5,7 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-0A7F3F)](https://docs.pytest.org/)
 
 Automacao pos-formatacao para reconstruir um ambiente Linux/KDE com consistencia, logs e etapas auditaveis.
-O projeto substitui scripts shell longos por um CLI Python modular, com `apply`, `dry-run`, `status` e `undo` por etapa.
+O projeto substitui scripts shell longos por um CLI Python modular, com `apply`, `status` e `undo` por etapa.
 
 ## Destaques
 
@@ -24,12 +24,12 @@ O projeto substitui scripts shell longos por um CLI Python modular, com `apply`,
 - `sudo` configurado para comandos que precisam de privilegio.
 - KDE recomendado, principalmente para as etapas de gestos, Num Lock e atalhos desktop.
 
-O bootstrap instala dependencias Python internas quando necessario, incluindo `InquirerPy` e `pytest`.
+O bootstrap instala a dependencia Python interna (`InquirerPy`) quando necessario; `pytest`/`ruff` vem de `pip install -e .[dev]`.
 
 ## Interface grafica (GUI)
 
 Alem do CLI, ha uma interface grafica moderna em PySide6/Qt6 que reaproveita o
-mesmo motor (mesmos steps, mesmos `apply`/`dry-run`/`status`/`undo`):
+mesmo motor (mesmos steps, mesmos `apply`/`status`/`undo`):
 
 ```fish
 python 00-pos-formatacao-cachyos.py --gui   # bootstrap do PySide6 + abre a GUI
@@ -37,8 +37,8 @@ python -m reforja.gui                     # se o PySide6 ja estiver instalado
 ```
 
 A janela traz uma barra lateral com as etapas (com indicador de conformidade),
-botoes de acao por etapa e globais ("Aplicar tudo", "Dry-run tudo", "Status
-geral"), console com saida em streaming e barra de progresso. Comandos com
+botoes de acao (`Aplicar` / `Status` / `Undo`) sobre as etapas marcadas, console com saida em
+streaming e barra de progresso. Comandos com
 `sudo` abrem um dialogo grafico de senha (askpass) e comandos interativos
 (pacman/apt) rodam num terminal embutido. A GUI checa atualizacoes no GitHub
 Releases ao abrir.
@@ -80,8 +80,7 @@ bash scripts/10-instalar-apps-jogos-comunicacao-dev.sh
 Executar pelo modulo Python:
 
 ```fish
-python -m reforja step 10 dry-run
-python -m reforja step 11 status
+python -m reforja step 10 status
 python -m reforja step 13 apply
 ```
 
@@ -112,16 +111,13 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 | ID | Etapa | Objetivo |
 | --- | --- | --- |
 | `00` | Atualizar e preparar o sistema | Primeiro atualiza os pacotes (pacman/apt/dnf) e depois prepara a base: Flatpak/Flathub, suporte AppImage/FUSE e helper AUR quando aplicavel. |
-| `02` | Linux Toys | Instala Linux Toys pelo script oficial. |
-| `03` | Navegador e extensoes | Instala Firefox, FirefoxPWA e Bitwarden. |
-| `04` | WebApps | Cria ChatGPT e GSV Calendar via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
+| `03` | Navegador e WebApps | Menu unico: instala Firefox + FirefoxPWA e cria os WebApps (ChatGPT, GSV Calendar) via FirefoxPWA, WebApp Manager ou fallback `.desktop`. |
 | `05` | Configurar GPU / drivers | Detecta o fabricante (AMD/NVIDIA), instala os drivers certos (AMD: Vulkan RADV + VAAPI/VDPAU; NVIDIA: proprietario) e valida sessao grafica, OpenGL e Vulkan. Em desktop de GPU unica ainda remove os residuos do fabricante ausente (com confirmacao e backup); em laptop/hibrido nunca remove driver. (Steam/Heroic e demais apps sao do passo 10.) |
 | `06` | Git / GitHub | Menu simples: instala Git + GitHub CLI (gh); conecta a conta pelo navegador e no mesmo passo ja cria o host alias SSH dedicado dela (chave + bloco Host, ideal para separar 2+ contas via git@<alias>:owner/repo.git); e adiciona repositorios (clona em ~/repositorios, escolhendo da sua lista ou por alias, e ja configura o autor dos commits). Guarda o que foi configurado em ~/.config/reforja/git.json. |
 | `07` | Google Drive / rclone | Configura `rclone` e servico systemd de usuario para `~/GoogleDrive`. |
 | `08` | fstab | Configura montagens por label (`WINDOWS`, `DADOS WINDOWS`, `JOGOS LINUX`, `BACKUP`) com backup e confirmacao; labels ausentes na maquina sao ignoradas. |
-| `09` | Gestos KDE | Configura `libinput-gestures` para Overview com swipe 3 dedos; pulada automaticamente em maquinas sem touchpad (desktops). |
-| `10` | Apps / jogos / comunicacao / dev | Instala Steam/Heroic, comunicacao (Discord/ZapZap/TeamSpeak), Solaar/LocalSend/Flatseal, ONLYOFFICE, auto-cpufreq e Codex CLI. |
-| `11` | Num Lock | Configura Num Lock no KDE e no SDDM. |
+| `09` | Ajustes KDE | Menu unico: gestos de 3 dedos (`libinput-gestures`, pulado em maquinas sem touchpad) e Num Lock fixo no KDE e no SDDM. |
+| `10` | Apps / jogos / comunicacao / dev | Instala Steam/Heroic, comunicacao (Discord/ZapZap/TeamSpeak), Solaar/LocalSend/Flatseal/Bitwarden, ONLYOFFICE, Linux Toys, auto-cpufreq e Codex CLI. |
 | `12` | Antigravity IDE | Instala e **atualiza** o Antigravity: tarball oficial com auto-update por versao (Arch/imutaveis, com atalho `.desktop` e comando `antigravity-ide`) ou repositorio nativo apt/dnf (Debian/Fedora). |
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
 | `14` | Inventario de Hardware | Coleta CPU, RAM, GPUs, discos, PCI/USB e dmidecode/inxi e salva um relatorio estavel para suporte e para outras etapas consultarem. |
@@ -150,7 +146,7 @@ Depois de alterar o grupo, faca logout/login ou reinicie.
 
 ### Hydra AppImage
 
-A etapa `10` instala o Hydra como AppImage em:
+A etapa `15` instala o Hydra como AppImage em:
 
 ```text
 ~/AppImages/HydraLauncher-latest.AppImage

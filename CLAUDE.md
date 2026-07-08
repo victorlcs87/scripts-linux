@@ -14,7 +14,8 @@ Post-format automation for Linux/KDE (Arch/CachyOS/SteamOS, Debian/Ubuntu and Fe
 python -m pytest                       # run all tests
 python -m pytest tests/test_steps.py  # run one test file
 python -m pytest tests/test_steps.py -k name  # run one test
-python -m py_compile 00-pos-formatacao-cachyos.py reforja/*.py  # syntax check
+python -m ruff check . && python -m ruff format --check .  # lint + format (mesmo gate do CI)
+python -m py_compile 00-pos-formatacao-cachyos.py reforja/*.py reforja/steps/*.py reforja/gui/*.py  # syntax check
 
 python 00-pos-formatacao-cachyos.py   # main interactive flow (bootstraps deps first)
 python 00-pos-formatacao-cachyos.py --gui  # GUI (bootstraps PySide6 on demand)
@@ -27,18 +28,18 @@ QT_QPA_PLATFORM=offscreen python -m pytest tests/test_gui.py  # GUI tests headle
 bash packaging/build-appimage.sh       # build the AppImage locally (needs .[gui] + pyinstaller)
 ```
 
-There is no linter or formatter configured. Only runtime dependency is `InquirerPy` (TUI menus); `pytest` for tests. `reforja/bootstrap.py` auto-installs both at first run (system package → AUR → pip fallback).
+Lint/format: `ruff check` + `ruff format --check` (both gate the CI — run them before calling work done). Only runtime dependency is `InquirerPy` (TUI menus); dev deps (`pytest`, `ruff`) come from `pip install -e .[dev]`. `reforja/bootstrap.py` auto-installs only the runtime dep at first run (system package → AUR → pip fallback).
 
 ## Architecture
 
 Execution flows: entry point (`00-pos-formatacao-cachyos.py` or `python -m reforja`) → `bootstrap.ensure_bootstrap()` → `cli.main()` → step dispatch. The `scripts/*.sh` wrappers are 5-line shims that just call `python -m reforja step <ID> "${1:-menu}"`.
 
-- **`reforja/steps.py`** (~1800 lines) — all 14 step classes (`00` ecosystem prep … `13` Sunshine), registered in the `ALL_STEPS` tuple at the bottom. Step IDs match the `scripts/NN-*.sh` wrapper names and the README table.
-- **`reforja/steps_base.py`** — the `Step` base class and `StepContext`/`StepResult`. A step implements `apply()`, optionally `status()`/`undo()`; `dry_run()` is generic — it re-runs `apply()` with a dry-run `Runner`. Steps report outcomes via `mark_done/skipped/manual` (execution status) and `mark_applied/pending/attention` (compliance), plus `add_hint()`.
+- **`reforja/steps/`** (package) — step classes by domain: `system.py` (00), `browser.py` (03 Navegador+WebApps), `gaming.py` (05 GPU, 10 Apps, 13 Sunshine), `dev.py` (06 Git/GitHub, 12 Antigravity), `storage.py` (07 rclone, 08 fstab), `kde.py` (09 Ajustes KDE: gestos+NumLock), `inventory.py` (14), `appimage.py` (15). Registered in `ALL_STEPS`/`ALL_GROUPS` (`steps/__init__.py`); shared helpers in `steps/_common.py` (`header`, `InputGroupMixin`). Step IDs match the `scripts/NN-*.sh` wrapper names and the README table; ID gaps (01, 02, 04, 11) come from merges/removals.
+- **`reforja/steps_base.py`** — the `Step` base class and `StepContext`/`StepResult`. A step implements `apply()`, optionally `status()`/`undo()` (dry-run comes from building the step with a dry-run `Runner`). Steps report outcomes via `mark_done/skipped/manual` (execution status) and `mark_applied/pending/attention` (compliance), plus `add_hint()`.
 - **`reforja/core.py`** — `Runner` (the only sanctioned way to execute commands: handles dry-run echo, sudo, streaming output with spinner, NoNewPrivs detection, KeyboardInterrupt), `Logger` (console + `./LOGS/*.log`, ANSI stripped in files), ANSI `Color` palette, `write_text`/`write_text_sudo`/`backup_existing` helpers, `detect_user()` (resolves real user even under `SUDO_USER` — never hardcode home paths).
 - **`reforja/platform.py`** — distro abstraction. `detect_distro()` maps `/etc/os-release` to family `arch`, `debian` or `fedora`, plus an orthogonal `immutable` flag (detected via `/run/ostree-booted` or `steamos-readonly`). Everything package-related (`install_system_package`, `install_system_or_aur`, `update_system`, `ensure_rpmfusion`, query commands) branches on that family. On immutable systems native installs are no-ops (warn + skip) so callers fall back to Flatpak. New package operations must support all three families or raise `UnsupportedDistroError`.
-- **`reforja/cli.py`** — flat menu: `Aplicar tudo` / `Status geral` / `Executar etapas...` (multi-select via `choose_multiple`, then a single action `Aplicar`/`Status`/`Undo`) / `Sair`. Steps are shown by title only (no numbers). Progress bars + summary rendering. `run_action()` is the single dispatch point for step actions.
-- **`reforja/tui.py`** — InquirerPy menu wrapper with a numbered-input fallback; **`installers.py`** — higher-level install helpers (Flatpak, AppImage); **`desktop.py`** — `.desktop` entry rendering (note `StartupWMClass` matters for KDE Wayland window grouping).
+- **`reforja/cli.py`** — flat menu: `Aplicar tudo` / `Status geral` / `Executar etapas...` (multi-select via `choose_multiple`, then a single action `Aplicar`/`Status`/`Undo`) / `Sair`. Steps are shown by title only (no numbers). Progress bars + summary rendering. `run_action()` builds the step and delegates to **`reforja/dispatch.py`** (`dispatch_action` + `finalize_result`), shared with the GUI's `StepWorker` — change dispatch/summary behavior there, not in the frontends.
+- **`reforja/tui.py`** — InquirerPy menu wrapper with a numbered-input fallback; **`installers.py`** — mechanism-level helpers only (Flatpak, npm, `fetch_json`, `install_system_or_flatpak`); package-manager installs live in `platform.py` — import from there, `installers` does not re-export it; **`desktop.py`** — `.desktop` entry rendering (note `StartupWMClass` matters for KDE Wayland window grouping).
 - **`reforja/gui/`** — GUI frontend (PySide6/Qt6), a second frontend over the same engine; the CLI is untouched. It never reimplements step logic — it builds the same `StepContext` but swaps in a `GuiLogger` (emits Qt signals instead of printing) and configures the `Runner` with an askpass + an interactive-terminal executor. Key pieces: `main_window.py` (sidebar of `ALL_STEPS` + action panel + console/terminal), `step_runner.py` (`StepWorker` QThread running one action), `gui_logger.py`, `prompts.py` (`GuiInteraction` implementing `InteractionProvider` via dialogs), `askpass.py` (graphical `sudo -A`), `terminal.py` (pty-backed terminal + `TerminalExecutor` for `interactive_tty`), `updater.py` (GitHub Releases check), `theme.qss`. The I/O seam lives in `core.py`: `Logger._emit_console`, the optional `Logger.interaction` (`InteractionProvider`), and `Runner.askpass` / `Runner.interactive_executor` (`InteractiveExecutor`). The cross-thread pattern: worker emits a Qt signal and blocks on a `threading.Event` until the UI thread answers.
 
 ## GUI / packaging / release
@@ -54,4 +55,4 @@ Execution flows: entry point (`00-pos-formatacao-cachyos.py` or `python -m refor
 - Every state change must be dry-run aware (the `Runner`/`write_text` helpers handle this — don't bypass them with raw `subprocess`), back up files before modifying (`backup_existing`), and require typed confirmation for dangerous operations like fstab edits (`confirm_phrase`).
 - Tests stub `StepContext` with fake runners/loggers (see `tests/test_steps.py`) — steps never touch the real system in tests.
 - `LOGS/`, `fstab-backups/`, and caches are local-only artifacts; never commit them.
-- When adding a step: subclass `Step` in `steps.py`, append to `ALL_STEPS`, create the matching `scripts/NN-*.sh` wrapper, and update the README step table.
+- When adding a step: subclass `Step` in the right `steps/*.py` module, append to `ALL_STEPS` and a group in `ALL_GROUPS`, create the matching `scripts/NN-*.sh` wrapper, and update the README step table.

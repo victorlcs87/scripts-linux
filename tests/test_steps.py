@@ -20,11 +20,10 @@ from reforja.steps import (
     AntigravityStep,
     AppsStep,
     FstabStep,
-    GesturesStep,
     GitStep,
     GpuStep,
     HardwareStep,
-    NumLockStep,
+    KdeStep,
     ShellyStep,
     SunshineStep,
     UpdateAppImagesStep,
@@ -41,7 +40,7 @@ def _select_all(monkeypatch):
     def _all(prompt, options, logger, *, detail=None):
         return list(range(len(list(options))))
 
-    for module in ("gaming", "appimage", "browser"):
+    for module in ("gaming", "appimage", "browser", "kde"):
         monkeypatch.setattr(f"reforja.steps.{module}.select_many", _all)
 
 
@@ -60,7 +59,7 @@ def make_ctx(tmp_path: Path) -> StepContext:
 
 
 def test_numlock_ini_value_is_updated(tmp_path: Path) -> None:
-    step = NumLockStep(make_ctx(tmp_path))
+    step = KdeStep(make_ctx(tmp_path))
     text = "[Keyboard]\nNumLock=2\nRepeatDelay=600\n"
 
     updated = step._set_ini_value(text, "Keyboard", "NumLock", "0")
@@ -1059,11 +1058,12 @@ def test_appimages_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> N
     assert step.result.status == "skipped"
 
 
-def test_apps_does_not_manage_hydra_or_bitwarden(tmp_path: Path) -> None:
-    # Hydra migrou para o passo 15; Bitwarden ficou so no passo 03.
+def test_apps_manage_bitwarden_and_linuxtoys_but_not_hydra(tmp_path: Path) -> None:
+    # Hydra migrou para o passo 15; Bitwarden e Linux Toys agora moram aqui.
     step = AppsStep(make_ctx(tmp_path))
     assert "Hydra Launcher" not in step.apps
-    assert "Bitwarden" not in step.apps
+    assert step.apps["Bitwarden"]["flatpak_id"] == "com.bitwarden.desktop"
+    assert "Linux Toys" in step.apps
 
 
 def test_hydra_is_installable_in_step15(tmp_path: Path) -> None:
@@ -1238,7 +1238,7 @@ def test_reforja_self_update_uses_temp_and_skips_kill(tmp_path: Path, monkeypatc
 
 def test_gestures_config_includes_up_and_down_swipes(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
     helper = ctx.user.home / ".local/bin/kde-gnome-like-overview"
 
     rendered = step._libinput_config_content(helper)
@@ -1249,7 +1249,7 @@ def test_gestures_config_includes_up_and_down_swipes(tmp_path: Path) -> None:
 
 def test_gestures_adds_user_to_input_group_when_missing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
     calls: list[tuple[list[str] | str, bool]] = []
 
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
@@ -1270,7 +1270,7 @@ def test_gestures_adds_user_to_input_group_when_missing(tmp_path: Path, monkeypa
 
 def test_gestures_skips_input_group_when_user_is_already_member(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
     calls: list[list[str] | str] = []
 
     monkeypatch.setattr(step, "_user_in_group", lambda group: True)
@@ -1284,7 +1284,7 @@ def test_gestures_skips_input_group_when_user_is_already_member(tmp_path: Path, 
 
 def test_gestures_reports_manual_command_when_input_group_add_fails(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
 
     monkeypatch.setattr(step, "_user_in_group", lambda group: False)
     monkeypatch.setattr(ctx.runner, "run", lambda cmd, **_kwargs: CompletedProcess(cmd, 1, stdout=""))
@@ -1298,7 +1298,7 @@ def test_gestures_reports_manual_command_when_input_group_add_fails(tmp_path: Pa
 
 def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
 
     monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: True)
     monkeypatch.setattr("reforja.steps.kde.system_installed", lambda pkg: False)
@@ -1314,7 +1314,7 @@ def test_gestures_status_reports_missing_package_cleanly(tmp_path: Path, monkeyp
 
 def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
 
     monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: True)
     monkeypatch.setattr("reforja.steps.kde.system_installed", lambda pkg: pkg == "libinput-gestures")
@@ -1364,35 +1364,37 @@ def test_fstab_build_lines_skips_missing_labels(tmp_path: Path, monkeypatch) -> 
     assert "Label nao encontrado: JOGOS LINUX" in log
 
 
-def test_gestures_apply_skips_machine_without_touchpad(tmp_path: Path, monkeypatch) -> None:
+def test_kde_apply_gestures_skips_machine_without_touchpad(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
 
     monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: False)
     monkeypatch.setattr(
         "reforja.steps.kde.install_system_or_aur",
         lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"),
     )
+    # So o item de gestos marcado no menu do passo fundido.
+    monkeypatch.setattr("reforja.steps.kde.select_many", lambda *a, **k: [0])
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
 
     assert step.result.status == "skipped"
-    assert step.result.compliance == "aplicado"
     assert "nenhum touchpad detectado" in log
 
 
-def test_gestures_status_not_applicable_without_touchpad(tmp_path: Path, monkeypatch) -> None:
+def test_kde_status_gestures_not_applicable_without_touchpad(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
-    step = GesturesStep(ctx)
+    step = KdeStep(ctx)
 
     monkeypatch.setattr("reforja.hardware.has_touchpad", lambda: False)
     monkeypatch.setattr("reforja.steps.kde.os.environ", {"XDG_CURRENT_DESKTOP": "KDE"})
 
     step.status()
 
-    assert step.result.compliance == "aplicado"
+    # Gestos nao aplicaveis (sem touchpad) + Num Lock pendente => atencao geral.
     assert "sem touchpad" in step.result.summary
+    assert step.result.compliance == "atencao"
 
 
 def test_gpu_prime_probe_is_ok_on_single_gpu_desktop_without_prime_run(tmp_path: Path, monkeypatch) -> None:
