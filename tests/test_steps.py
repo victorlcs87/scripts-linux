@@ -1454,7 +1454,7 @@ def test_fstab_preselects_entries_already_in_block(tmp_path: Path, monkeypatch) 
     assert "[externo]" in capturado["options"][2]
 
 
-def test_fstab_preselects_legacy_labels_on_first_run(tmp_path: Path, monkeypatch) -> None:
+def test_fstab_preselects_every_candidate_on_first_run(tmp_path: Path, monkeypatch) -> None:
     step = make_fstab_step(tmp_path)  # sem bloco no fstab
     capturado: dict[str, object] = {}
 
@@ -1465,8 +1465,83 @@ def test_fstab_preselects_legacy_labels_on_first_run(tmp_path: Path, monkeypatch
     monkeypatch.setattr("reforja.steps.storage.select_many", fake_select)
     step._select_partitions(step._candidates(), {})
 
-    # WINDOWS e BACKUP sao labels historicas; o SSD externo nao e.
-    assert capturado["preselected"] == [0, 1]
+    # O que sobra de _candidates() ja e so disco de dados: o normal e montar todos.
+    assert capturado["preselected"] == [0, 1, 2]
+
+
+def test_fstab_windows_filesystems_get_user_ownership(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+    exfat = Partition("/dev/sdc2", "1T", "exfat", "TROCA", "x-uuid", "", False, "", "Microsoft basic data")
+    ntfs = next(part for part in step._candidates() if part.label == "WINDOWS")
+
+    linha_exfat = step._build_lines([replace(exfat, mountpoint="/mnt/troca")])[0]
+    linha_ntfs = step._build_lines([replace(ntfs, mountpoint="/mnt/windows")])[0]
+
+    # Sem dono POSIX no FS, quem diz de quem sao os arquivos e a linha do fstab.
+    assert "uid=1000,gid=1000,umask=022" in linha_exfat
+    assert "windows_names" not in linha_exfat  # so faz sentido no NTFS
+    assert "uid=1000,gid=1000,umask=022,windows_names" in linha_ntfs
+
+
+def test_fstab_lines_are_visible_and_user_mountable(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+
+    for part in step._candidates():
+        options = step._build_lines([replace(part, mountpoint="/mnt/x")])[0].split()[3].split(",")
+
+        # x-gvfs-show: aparece no Dolphin. users: monta/desmonta sem senha do polkit.
+        assert "x-gvfs-show" in options
+        assert "users" in options
+        # `users` implica noexec: sem o exec DEPOIS dele, nada roda a partir do disco.
+        assert options.index("exec") > options.index("users")
+
+
+def test_fstab_apply_releases_udisks_mount_before_mounting(tmp_path: Path, monkeypatch) -> None:
+    # Disco que o Dolphin ja montou: enquanto estiver la, o mount -a nao monta em /mnt.
+    step = make_fstab_step(
+        tmp_path,
+        parts=[replace(p, mountpoint="/run/media/tester/BACKUP") if p.uuid == "bkp-uuid" else p for p in LSBLK_PARTS],
+    )
+    calls = iter([[1], []])  # marca so o BACKUP
+    monkeypatch.setattr("reforja.steps.storage.select_many", lambda *a, **k: next(calls))
+    monkeypatch.setattr("reforja.steps.storage.write_text_sudo", lambda *a, **k: None)
+
+    step.apply()
+    log = step.ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "udisksctl unmount -b /dev/sda1" in log
+    assert log.index("udisksctl unmount") < log.index("sudo mount -a")
+
+
+def test_fstab_apply_removes_mountpoint_that_left_the_block(tmp_path: Path, monkeypatch) -> None:
+    fstab = (
+        FSTAB_BASE + "\n# BEGIN pos-formatacao-cachyos\n"
+        "UUID=bkp-uuid /mnt/backup ntfs rw,nofail 0 0\n"
+        "# END pos-formatacao-cachyos\n"
+    )
+    step = make_fstab_step(tmp_path, fstab=fstab)
+    calls = iter([[0], []])  # troca o BACKUP pelo WINDOWS
+    monkeypatch.setattr("reforja.steps.storage.select_many", lambda *a, **k: next(calls))
+    monkeypatch.setattr("reforja.steps.storage.write_text_sudo", lambda *a, **k: None)
+
+    step.apply()
+    log = step.ctx.logger.path.read_text(encoding="utf-8")
+
+    # rmdir (nunca rm -rf) e so no ponto que saiu do bloco.
+    assert "sudo rmdir /mnt/backup" in log
+    assert "rmdir /mnt/windows" not in log
+    assert "rm -rf" not in log
+
+
+def test_fstab_never_removes_mountpoint_outside_mnt(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+
+    step._remove_mountpoints(["/home/tester", "/", "/mnt/antigo"])
+    log = step.ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "rmdir /mnt/antigo" in log
+    assert "/home/tester" not in log
+    assert "umount /\n" not in log
 
 
 def test_fstab_apply_writes_block_with_selected_disks(tmp_path: Path, monkeypatch) -> None:

@@ -13,6 +13,7 @@ from ..core import (
     badge,
     capture,
     confirm_phrase,
+    ensure_owner,
     load_env_file,
     paint,
     prompt_user,
@@ -273,22 +274,35 @@ class Partition:
     def is_ext(self) -> bool:
         return self.fstype in ("ext2", "ext3", "ext4")
 
+    @property
+    def no_posix_owner(self) -> bool:
+        """Sistemas de arquivos sem dono/permissao POSIX (Windows).
+
+        Eles montam como root a menos que a propria linha do fstab diga de quem
+        sao os arquivos, via uid/gid/umask.
+        """
+        return self.is_ntfs or self.fstype in ("vfat", "exfat", "msdos")
+
+    @property
+    def is_udisks_mount(self) -> bool:
+        """Esta montado agora pelo udisks (o "clicar no Dolphin"), nao pelo fstab."""
+        return self.mountpoint.startswith("/run/media/") or self.mountpoint.startswith("/media/")
+
 
 class FstabStep(Step):
     id = "08"
     title = "Montagem de discos / fstab"
     description = (
         "Le os discos conectados na maquina, deixa voce escolher quais montar no boot e em qual pasta, "
-        "e grava o bloco no /etc/fstab (com backup e confirmacao digitada). Discos externos usam automount "
-        "com nofail: o boot nunca espera nem quebra quando eles estao desconectados."
+        "e grava o bloco no /etc/fstab (com backup e confirmacao digitada). Eles passam a montar sozinhos "
+        "no boot, gravaveis pelo seu usuario e sem pedir senha, em vez de depender de um clique no Dolphin. "
+        "Discos externos usam automount com nofail: o boot nunca espera nem quebra quando eles estao "
+        "desconectados."
     )
     begin = "# BEGIN pos-formatacao-cachyos"
     end = "# END pos-formatacao-cachyos"
     fstab_path = Path("/etc/fstab")
 
-    # Labels das montagens historicas do projeto: na primeira execucao ja vem
-    # marcadas na lista, para nao obrigar o usuario a redescobrir o que era padrao.
-    legacy_labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX", "BACKUP")
     # Sistemas de arquivos que nunca sao candidatos a montagem em /mnt.
     skip_fstypes = ("swap", "crypto_LUKS", "LVM2_member", "linux_raid_member", "squashfs")
     # Particoes de servico (EFI, reservada, recuperacao): nao sao dados do usuario.
@@ -338,13 +352,8 @@ class FstabStep(Step):
         content = self._with_block(current, lines)
         if current == content:
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} /etc/fstab ja contem o bloco esperado")
-            self._ensure_mountpoints(selection)
-            self._mount_all()
+            self._settle(existing, selection, lines)
             self.mark_skipped("/etc/fstab ja continha o bloco esperado.")
-            self.mark_applied(
-                f"{len(lines)} montagem(ns) ja configurada(s) no /etc/fstab.",
-                items=[f"{item.mountpoint} ({item.path})" for item in selection],
-            )
             return
 
         backup = backup_existing(self.fstab_path, self.ctx.runner, sudo=True)
@@ -363,8 +372,28 @@ class FstabStep(Step):
             action="Recarregando systemd apos ajuste do fstab",
             show_progress=False,
         )
-        self._mount_all()
+        self._settle(existing, selection, lines)
         self.mark_done(f"{len(lines)} montagem(ns) gravada(s) no /etc/fstab.")
+
+    def _settle(self, existing: dict[str, str], selection: list[Partition], lines: list[str]) -> None:
+        """Poe o sistema no estado que o fstab acabou de descrever.
+
+        Ordem importa: primeiro soltamos o que o udisks montou (senao o `mount -a`
+        nao consegue montar o mesmo disco em /mnt), depois montamos, depois
+        acertamos o dono e por fim removemos os pontos de montagem que sairam do
+        bloco.
+        """
+        self._ensure_mountpoints(selection)
+        self._release_udisks_mounts(selection)
+        problems = self._mount_all(selection)
+        self._fix_ownership(selection)
+        self._cleanup_stale_mountpoints(existing, selection)
+        if problems:
+            self.mark_attention(
+                f"{len(lines)} montagem(ns) no /etc/fstab, mas {len(problems)} com pendencia.",
+                attention=problems,
+            )
+            return
         self.mark_applied(
             f"{len(lines)} montagem(ns) configurada(s) no /etc/fstab.",
             items=[f"{item.mountpoint} ({item.path})" for item in selection],
@@ -486,7 +515,10 @@ class FstabStep(Step):
         if existing:
             preselected = [index for index, part in enumerate(partitions) if part.uuid in existing]
         else:
-            preselected = [index for index, part in enumerate(partitions) if part.label in self.legacy_labels]
+            # Primeira execucao: marca tudo. `_candidates()` ja tirou o que e do
+            # sistema (raiz, boot, swap, ESP, recuperacao), entao o que sobrou e
+            # disco de dados — e o normal e querer todos montados no boot.
+            preselected = list(range(len(partitions)))
         chosen = select_many(
             "Quais discos montar automaticamente no boot?",
             options,
@@ -578,20 +610,28 @@ class FstabStep(Step):
         return lines
 
     def _options_for(self, part: Partition) -> tuple[str, str]:
-        ntfs_opts = f"uid={self.ctx.user.uid},gid={self.ctx.user.gid},umask=022,windows_names"
-        # commit= so existe nos ext2/3/4; em outros FS o mount recusaria a opcao.
-        commit = ",commit=60" if part.is_ext else ""
+        opts = ["rw" if part.no_posix_owner else "defaults"]
         if part.removable:
             # noauto + automount: o boot nao espera nem falha sem o disco; ele monta
             # sozinho no primeiro acesso a pasta e desmonta quando fica ocioso.
-            opts = "noauto,nofail,x-systemd.automount,x-systemd.device-timeout=5s,x-systemd.idle-timeout=60,noatime"
+            opts += ["noauto", "x-systemd.automount", "x-systemd.idle-timeout=60"]
+        opts += ["nofail", "x-systemd.device-timeout=5s"]
+        # `users` deixa o usuario montar/desmontar sem sudo (e o que evita o pedido de
+        # senha do polkit ao clicar no disco no Dolphin); `x-gvfs-show` faz a montagem
+        # aparecer na barra lateral. Atencao: `users` implica noexec, entao o `exec`
+        # precisa vir DEPOIS dele, ou nada roda a partir do disco (jogos, AppImages).
+        opts += ["users", "exec", "x-gvfs-show", "noatime"]
+        if part.no_posix_owner:
+            # Sem dono POSIX no FS, quem define de quem sao os arquivos e o fstab.
+            opts += [f"uid={self.ctx.user.uid}", f"gid={self.ctx.user.gid}", "umask=022"]
             if part.is_ntfs:
-                opts = f"rw,{opts},{ntfs_opts}"
-            # Sem fsck no boot para disco que pode nao estar presente.
-            return opts, "0"
-        if part.is_ntfs:
-            return f"rw,nofail,x-systemd.device-timeout=5s,{ntfs_opts},noatime", "0"
-        return f"defaults,nofail,x-systemd.device-timeout=5s,noatime{commit}", "2" if part.is_ext else "0"
+                opts.append("windows_names")
+        if part.is_ext:
+            # commit= so existe nos ext2/3/4; em outros FS o mount recusaria a opcao.
+            opts.append("commit=60")
+        # Sem fsck no boot para disco que pode nao estar presente.
+        passno = "2" if part.is_ext and not part.removable else "0"
+        return ",".join(opts), passno
 
     # --- escrita -----------------------------------------------------------------
 
@@ -628,10 +668,133 @@ class FstabStep(Step):
         self.ctx.runner.run(["cp", "-a", str(backup), str(self.fstab_path)], sudo=True, check=False)
         self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} /etc/fstab restaurado a partir de {backup}")
 
-    def _mount_all(self) -> None:
-        result = self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
-        if result is not None and result.returncode != 0:
-            self.add_hint("`mount -a` reclamou de alguma montagem; confira o log e rode `sudo mount -a` a mao.")
+    def _release_udisks_mounts(self, selection: list[Partition]) -> None:
+        """Desmonta o que o udisks (Dolphin) montou em /run/media ou /media.
+
+        Enquanto o disco esta montado la, o `mount -a` nao consegue monta-lo em
+        /mnt: o ntfs-3g recusa abrir um volume ja aberto e o ext4 acabaria com o
+        mesmo disco em dois lugares. Sonda de novo em vez de usar o mountpoint da
+        selecao, que a essa altura ja e o caminho de DESTINO.
+        """
+        targets = {part.uuid: part.mountpoint for part in selection}
+        for part in self._probe_partitions():
+            if part.uuid not in targets or not part.is_udisks_mount:
+                continue
+            if part.mountpoint == targets[part.uuid]:
+                continue
+            self.ctx.logger.write(
+                f"{badge('info', Color.INFO)} {part.path} esta montado em {part.mountpoint} "
+                f"(pelo Dolphin); soltando para montar em {targets[part.uuid]}"
+            )
+            # udisksctl roda como usuario: a sessao e dona da montagem, nao pede senha.
+            result = self.ctx.runner.run(["udisksctl", "unmount", "-b", part.path], check=False)
+            if result is not None and result.returncode != 0:
+                self.ctx.runner.run(["umount", part.path], sudo=True, check=False)
+            if not self.ctx.runner.dry_run and self._is_mounted(part.mountpoint):
+                self.add_hint(
+                    f"{part.path} continua montado em {part.mountpoint}: feche o Dolphin (ou o que estiver "
+                    f"usando o disco) e rode `sudo mount -a`."
+                )
+
+    def _mount_all(self, selection: list[Partition]) -> list[str]:
+        """Monta o bloco e confere disco a disco. Devolve as pendencias."""
+        self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
+        if self.ctx.runner.dry_run:
+            return []
+        problems: list[str] = []
+        for part in selection:
+            if part.removable:
+                # Com x-systemd.automount o disco so monta no primeiro acesso a pasta.
+                continue
+            options = self._mount_options(part.mountpoint)
+            if options is None:
+                problems.append(f"{part.mountpoint}: nao montou")
+                self.ctx.logger.write(f"{badge('erro', Color.ERROR)} {part.mountpoint}: nao montou")
+                self._hint_ntfs(part)
+                continue
+            if "ro" in options.split(","):
+                problems.append(f"{part.mountpoint}: montou somente leitura")
+                self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} {part.mountpoint}: montou somente leitura")
+                self._hint_ntfs(part)
+                continue
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {part.mountpoint}: montado")
+        return problems
+
+    def _hint_ntfs(self, part: Partition) -> None:
+        if not part.is_ntfs:
+            self.add_hint(f"Veja o log do `mount -a` e tente `sudo mount {part.mountpoint}` a mao.")
+            return
+        # Volume NTFS "sujo" (hibernado ou fechado pela Inicializacao Rapida do
+        # Windows) monta somente leitura ou nem monta.
+        self.add_hint(
+            f"{part.path} e NTFS: desligue a Inicializacao Rapida no Windows (e nao o deixe hibernado), "
+            f"depois rode `sudo ntfsfix -d {part.path}` e `sudo mount -a`."
+        )
+
+    def _mount_options(self, mountpoint: str) -> str | None:
+        """Opcoes com que o ponto esta montado agora, ou None se nao esta montado."""
+        result = capture(["findmnt", "-n", "-o", "OPTIONS", "--mountpoint", mountpoint])
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+
+    def _fix_ownership(self, selection: list[Partition]) -> None:
+        """Passa a raiz dos discos com dono POSIX para quem esta rodando o script.
+
+        ext4/btrfs/xfs guardam o dono no proprio disco e montam como root:root; sem
+        isso o usuario precisa de sudo para escrever no proprio disco de dados. Nos
+        FS do Windows quem resolve isso e o uid=/gid= da linha do fstab.
+        """
+        if self.ctx.runner.dry_run:
+            return
+        candidates: list[Partition] = []
+        for part in selection:
+            # Removivel usa automount: um stat() aqui montaria o disco so pra olhar.
+            if part.removable or part.no_posix_owner or not self._is_mounted(part.mountpoint):
+                continue
+            try:
+                if Path(part.mountpoint).stat().st_uid != self.ctx.user.uid:
+                    candidates.append(part)
+            except OSError:
+                continue
+        if not candidates:
+            return
+        chosen = select_many(
+            f"Passar a raiz destes discos para o usuario {self.ctx.user.name}?",
+            [f"{part.mountpoint} ({part.path}, {part.fstype})" for part in candidates],
+            self.ctx.logger,
+            detail="Eles montam como root; sem isso voce precisa de sudo para escrever neles.",
+            preselected=list(range(len(candidates))),
+        )
+        for index in chosen:
+            part = candidates[index]
+            # Sem -R: mexer so na raiz da montagem, nao em centenas de GB de arquivos.
+            ensure_owner(Path(part.mountpoint), self.ctx.user, self.ctx.runner)
+            self.ctx.logger.write(
+                f"{badge('ok', Color.SUCCESS)} {part.mountpoint} agora e de {self.ctx.user.name} "
+                f"(as pastas de dentro mantem o dono que ja tinham)"
+            )
+
+    def _cleanup_stale_mountpoints(self, existing: dict[str, str], selection: list[Partition]) -> None:
+        """Remove pontos de montagem que sairam do bloco (e ficaram vazios em /mnt)."""
+        keep = {part.mountpoint for part in selection}
+        self._remove_mountpoints([mountpoint for mountpoint in existing.values() if mountpoint not in keep])
+
+    def _remove_mountpoints(self, mountpoints: list[str]) -> None:
+        for mountpoint in mountpoints:
+            # Cinto de seguranca: so mexemos no que este step poderia ter criado.
+            if not self._valid_mountpoint(mountpoint):
+                continue
+            self.ctx.runner.run(["umount", mountpoint], sudo=True, check=False)
+            # rmdir (nunca rm -rf): se sobrou qualquer coisa la dentro, ele falha e
+            # a pasta fica — melhor uma pasta orfa do que apagar dados por engano.
+            self.ctx.runner.run(
+                ["rmdir", mountpoint],
+                sudo=True,
+                check=False,
+                action=f"Removendo ponto de montagem {mountpoint}",
+                show_progress=False,
+            )
 
     # --- status / undo -----------------------------------------------------------
 
@@ -689,9 +852,7 @@ class FstabStep(Step):
         entries = self._managed_entries()
         backup_existing(self.fstab_path, self.ctx.runner, sudo=True)
         write_text_sudo(self.fstab_path, self._without_block(self._fstab_text()), self.ctx.runner)
-        for mountpoint in entries.values():
-            # Nao apagamos os diretorios: se algo ainda estiver montado ali, seria perigoso.
-            self.ctx.runner.run(["umount", mountpoint], sudo=True, check=False)
+        self._remove_mountpoints(list(entries.values()))
         self.ctx.runner.run(
             ["systemctl", "daemon-reload"],
             sudo=True,
