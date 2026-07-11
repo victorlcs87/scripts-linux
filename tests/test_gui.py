@@ -264,7 +264,7 @@ def test_offer_update_sem_appimage_abre_pagina(app, tmp_path: Path, monkeypatch)
 
 
 # --- seletor multi-item (choose_many) ---------------------------------------------
-def _multi_req(options):
+def _multi_req(options, preselected=()):
     import threading
 
     return {
@@ -272,6 +272,7 @@ def _multi_req(options):
         "prompt": "Quais itens",
         "options": options,
         "detail": None,
+        "preselected": list(preselected),
         "result": [],
         "event": threading.Event(),
     }
@@ -294,6 +295,29 @@ def test_choose_many_retorna_indices_marcados(app, monkeypatch) -> None:
     req = _multi_req(["a", "b", "c"])
     gi._handle_multi(req)
     assert req["result"] == [0, 2]
+
+
+def test_choose_many_marca_os_preselecionados(app, monkeypatch) -> None:
+    """O que ja esta configurado (ex.: discos ja no fstab) vem marcado, para
+    reaplicar sem precisar remarcar tudo."""
+    from PySide6.QtWidgets import QDialog, QListWidget, QWidget
+
+    from reforja.gui.prompts import GuiInteraction
+
+    gi = GuiInteraction(QWidget())
+    estados: list[Qt.CheckState] = []
+
+    def fake_exec(dialog):
+        listing = dialog.findChild(QListWidget)
+        estados.extend(listing.item(index).checkState() for index in range(listing.count()))
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+    req = _multi_req(["a", "b", "c"], preselected=[1])
+    gi._handle_multi(req)
+
+    assert estados == [Qt.CheckState.Unchecked, Qt.CheckState.Checked, Qt.CheckState.Unchecked]
+    assert req["result"] == [1]
 
 
 def test_choose_many_cancelar_retorna_vazio(app, monkeypatch) -> None:

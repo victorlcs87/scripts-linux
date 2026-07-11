@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..core import (
@@ -9,8 +11,12 @@ from ..core import (
     announce,
     backup_existing,
     badge,
+    capture,
     confirm_phrase,
     load_env_file,
+    paint,
+    prompt_user,
+    select_many,
     write_text,
     write_text_sudo,
 )
@@ -245,125 +251,451 @@ ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao mon
             notify_service_file.unlink(missing_ok=True)
 
 
+@dataclass(frozen=True)
+class Partition:
+    """Uma particao candidata a ser montada, como vista pelo lsblk."""
+
+    path: str
+    size: str
+    fstype: str
+    label: str
+    uuid: str
+    mountpoint: str
+    removable: bool
+    model: str
+    parttype: str = ""
+
+    @property
+    def is_ntfs(self) -> bool:
+        return self.fstype.startswith("ntfs")
+
+    @property
+    def is_ext(self) -> bool:
+        return self.fstype in ("ext2", "ext3", "ext4")
+
+
 class FstabStep(Step):
     id = "08"
     title = "Montagem de discos / fstab"
     description = (
-        "Configura montagens de disco no /etc/fstab por label (WINDOWS, DADOS WINDOWS, JOGOS LINUX, "
-        "BACKUP), com backup do arquivo e confirmacao digitada. Labels ausentes na maquina sao ignoradas."
+        "Le os discos conectados na maquina, deixa voce escolher quais montar no boot e em qual pasta, "
+        "e grava o bloco no /etc/fstab (com backup e confirmacao digitada). Discos externos usam automount "
+        "com nofail: o boot nunca espera nem quebra quando eles estao desconectados."
     )
-    labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX", "BACKUP")
     begin = "# BEGIN pos-formatacao-cachyos"
     end = "# END pos-formatacao-cachyos"
+    fstab_path = Path("/etc/fstab")
+
+    # Labels das montagens historicas do projeto: na primeira execucao ja vem
+    # marcadas na lista, para nao obrigar o usuario a redescobrir o que era padrao.
+    legacy_labels = ("WINDOWS", "DADOS WINDOWS", "JOGOS LINUX", "BACKUP")
+    # Sistemas de arquivos que nunca sao candidatos a montagem em /mnt.
+    skip_fstypes = ("swap", "crypto_LUKS", "LVM2_member", "linux_raid_member", "squashfs")
+    # Particoes de servico (EFI, reservada, recuperacao): nao sao dados do usuario.
+    skip_parttypes = (
+        "EFI System",
+        "Microsoft reserved",
+        "Windows recovery environment",
+        "BIOS boot",
+        "Linux swap",
+        "Linux extended boot",
+    )
+    # Pontos de montagem do proprio sistema: se a particao ja esta ai, nao mexemos.
+    system_mounts = ("/", "/boot", "/home", "/root", "/srv", "/usr", "/var", "/efi", "[SWAP]")
+
+    # --- fluxo principal ---------------------------------------------------------
 
     def apply(self) -> None:
-        header(self, self.title, "Preparando montagens persistentes no boot")
-        if not self.ctx.runner.dry_run and not confirm_phrase("APLICAR-FSTAB", self.ctx.logger):
+        header(self, self.title, "Escolha o que montar automaticamente no boot")
+        partitions = self._candidates()
+        if not partitions:
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} Nenhuma particao candidata foi detectada "
+                f"(so aparecem discos com sistema de arquivos e que nao sejam do sistema)."
+            )
+            self.mark_skipped("Nenhuma particao candidata detectada; /etc/fstab nao foi alterado.")
+            self.mark_attention(
+                "Nenhuma particao candidata detectada; nada foi gravado no fstab.",
+                attention=["nenhum disco candidato encontrado"],
+            )
             return
-        lines = self._build_lines()
-        fstab = Path("/etc/fstab")
-        current = fstab.read_text(encoding="utf-8")
-        cleaned = self._without_block(current)
-        content = cleaned.rstrip() + "\n\n" + "\n".join([self.begin, *lines, self.end]) + "\n"
+
+        existing = self._managed_entries()
+        selection = self._review_mountpoints(self._select_partitions(partitions, existing))
+
+        lines = self._build_lines(selection)
+        self._preview(lines)
+
+        if not selection and existing:
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} Nada selecionado: o bloco atual do fstab sera esvaziado."
+            )
+        if not self.ctx.runner.dry_run and not confirm_phrase("APLICAR-FSTAB", self.ctx.logger):
+            self.mark_skipped("Confirmacao nao conferiu; /etc/fstab nao foi alterado.")
+            return
+
+        current = self.fstab_path.read_text(encoding="utf-8")
+        content = self._with_block(current, lines)
         if current == content:
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} /etc/fstab ja contem o bloco esperado")
-            self._ensure_mountpoints()
-            self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
+            self._ensure_mountpoints(selection)
+            self._mount_all()
             self.mark_skipped("/etc/fstab ja continha o bloco esperado.")
+            self.mark_applied(
+                f"{len(lines)} montagem(ns) ja configurada(s) no /etc/fstab.",
+                items=[f"{item.mountpoint} ({item.path})" for item in selection],
+            )
             return
-        backup_existing(fstab, self.ctx.runner, sudo=True)
-        self._ensure_mountpoints()
-        write_text_sudo(fstab, content, self.ctx.runner)
+
+        backup = backup_existing(self.fstab_path, self.ctx.runner, sudo=True)
+        self._ensure_mountpoints(selection)
+        write_text_sudo(self.fstab_path, content, self.ctx.runner)
+        if not self._verify_fstab():
+            self._restore(backup)
+            self.mark_attention(
+                "O fstab gerado nao passou na verificacao; o backup foi restaurado.",
+                attention=["fstab invalido (findmnt --verify falhou)"],
+            )
+            return
         self.ctx.runner.run(
             ["systemctl", "daemon-reload"],
             sudo=True,
             action="Recarregando systemd apos ajuste do fstab",
             show_progress=False,
         )
-        self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
-        self.mark_done("Bloco de montagem gravado no /etc/fstab.")
+        self._mount_all()
+        self.mark_done(f"{len(lines)} montagem(ns) gravada(s) no /etc/fstab.")
+        self.mark_applied(
+            f"{len(lines)} montagem(ns) configurada(s) no /etc/fstab.",
+            items=[f"{item.mountpoint} ({item.path})" for item in selection],
+        )
 
-    def _build_lines(self) -> list[str]:
-        lines = []
-        self._found_labels: list[str] = []
-        for label in self.labels:
-            device = self._blkid_label(label)
-            if not device:
-                if self.ctx.runner.dry_run:
-                    self._found_labels.append(label)
-                self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Label nao encontrado: {label}")
+    # --- sondagem ----------------------------------------------------------------
+
+    def _probe_partitions(self) -> list[Partition]:
+        """Le os discos conectados via lsblk.
+
+        Usa `capture` (e nao o Runner) porque isto e leitura pura e precisa
+        funcionar tambem em dry-run e SEM sudo: o `blkid -s UUID -o value <dev>`
+        que este step usava antes devolvia vazio sem root, o que fazia o bloco do
+        fstab sair vazio em silencio.
+        """
+        result = capture(
+            [
+                "lsblk",
+                "-J",
+                "-o",
+                "PATH,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT,TYPE,HOTPLUG,RM,TRAN,MODEL,PARTTYPENAME",
+            ]
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Nao consegui listar os discos com lsblk")
+            return []
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Saida do lsblk em formato inesperado")
+            return []
+
+        partitions: list[Partition] = []
+
+        def walk(node: dict, parent: dict | None) -> None:
+            inherited = parent or {}
+            tran = (node.get("tran") or inherited.get("tran") or "").lower()
+            removable = bool(
+                node.get("hotplug")
+                or node.get("rm")
+                or inherited.get("hotplug")
+                or inherited.get("rm")
+                or tran in ("usb", "ieee1394")
+            )
+            if node.get("type") in ("part", "disk") and node.get("fstype") and node.get("uuid"):
+                partitions.append(
+                    Partition(
+                        path=node.get("path") or "",
+                        size=node.get("size") or "?",
+                        fstype=node.get("fstype") or "",
+                        label=node.get("label") or "",
+                        uuid=node.get("uuid") or "",
+                        mountpoint=node.get("mountpoint") or "",
+                        removable=removable,
+                        model=(node.get("model") or inherited.get("model") or "").strip(),
+                        parttype=(node.get("parttypename") or "").strip(),
+                    )
+                )
+            for child in node.get("children") or []:
+                walk(child, {**inherited, **node})
+
+        for device in payload.get("blockdevices") or []:
+            walk(device, None)
+        return partitions
+
+    def _candidates(self) -> list[Partition]:
+        """Particoes que fazem sentido oferecer: descarta as do sistema e as que
+        ja estao no fstab fora do nosso bloco (escritas pelo instalador)."""
+        foreign = self._foreign_uuids()
+        candidates: list[Partition] = []
+        for part in self._probe_partitions():
+            if part.fstype in self.skip_fstypes:
                 continue
-            self._found_labels.append(label)
-            uuid = self._blkid_value(device, "UUID")
-            fs = self._blkid_value(device, "TYPE")
-            if not uuid or not fs:
+            if part.parttype in self.skip_parttypes:
                 continue
-            if fs.startswith("ntfs"):
-                opts = f"rw,nofail,x-systemd.device-timeout=5,uid={self.ctx.user.uid},gid={self.ctx.user.gid},umask=022,windows_names,noatime"
-                passno = "0"
-            else:
-                opts = "defaults,nofail,x-systemd.device-timeout=5,noatime,commit=60"
-                passno = "2"
-            lines.append(f"UUID={uuid} {self._mountpoint(label)} {fs} {opts} 0 {passno}")
+            if part.uuid in foreign:
+                continue
+            if part.mountpoint and self._is_system_mount(part.mountpoint):
+                continue
+            candidates.append(part)
+        return candidates
+
+    def _is_system_mount(self, mountpoint: str) -> bool:
+        for mount in self.system_mounts:
+            if mountpoint == mount:
+                return True
+            # "/" nao propaga: senao qualquer caminho seria "do sistema".
+            if mount != "/" and mountpoint.startswith(f"{mount.rstrip('/')}/"):
+                return True
+        return False
+
+    def _fstab_text(self) -> str:
+        try:
+            return self.fstab_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return ""
+
+    def _foreign_uuids(self) -> set[str]:
+        """UUIDs ja declarados no fstab FORA do nosso bloco (raiz, /boot, swap...)."""
+        outside = self._without_block(self._fstab_text())
+        return set(re.findall(r"UUID=(\S+)", outside))
+
+    def _managed_entries(self) -> dict[str, str]:
+        """UUID -> ponto de montagem, para o bloco que este step gerencia."""
+        match = re.search(rf"{re.escape(self.begin)}(.*?){re.escape(self.end)}", self._fstab_text(), flags=re.S)
+        if not match:
+            return {}
+        entries: dict[str, str] = {}
+        for line in match.group(1).splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[0].startswith("UUID="):
+                entries[fields[0][len("UUID=") :]] = fields[1]
+        return entries
+
+    # --- interacao ---------------------------------------------------------------
+
+    def _select_partitions(self, partitions: list[Partition], existing: dict[str, str]) -> list[Partition]:
+        options = [self._describe(part, existing) for part in partitions]
+        if existing:
+            preselected = [index for index, part in enumerate(partitions) if part.uuid in existing]
+        else:
+            preselected = [index for index, part in enumerate(partitions) if part.label in self.legacy_labels]
+        chosen = select_many(
+            "Quais discos montar automaticamente no boot?",
+            options,
+            self.ctx.logger,
+            detail="Marcados = ja no fstab. Nada marcado = remove todas as montagens gerenciadas.",
+            preselected=preselected,
+        )
+        selection = [partitions[index] for index in chosen]
+        for part in selection:
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {part.path} -> {self._mountpoint(part, existing)}")
+        # O mountpoint escolhido antes (se houver) prevalece sobre a sugestao.
+        return [replace(part, mountpoint=self._mountpoint(part, existing)) for part in selection]
+
+    def _describe(self, part: Partition, existing: dict[str, str]) -> str:
+        pieces = [f"{part.path}", part.size, part.fstype or "?"]
+        if part.label:
+            pieces.append(f'"{part.label}"')
+        elif part.model:
+            pieces.append(f"({part.model})")
+        if part.removable:
+            pieces.append("[externo]")
+        pieces.append(f"-> {self._mountpoint(part, existing)}")
+        if part.uuid in existing:
+            pieces.append("(ja no fstab)")
+        return "  ".join(pieces)
+
+    def _review_mountpoints(self, selection: list[Partition]) -> list[Partition]:
+        if not selection:
+            return selection
+        options = [f"{part.path} -> {part.mountpoint}" for part in selection]
+        chosen = select_many(
+            "Quer trocar algum ponto de montagem? (nada marcado = aceita os sugeridos)",
+            options,
+            self.ctx.logger,
+            detail="Marque so os que quiser digitar um caminho diferente.",
+        )
+        reviewed = list(selection)
+        for index in chosen:
+            part = reviewed[index]
+            answer = prompt_user(
+                f"Ponto de montagem para {part.path} ({part.label or part.fstype})",
+                self.ctx.logger,
+                detail=f"Sugerido: {part.mountpoint}. Precisa ser um caminho absoluto em /mnt ou /media.",
+                prompt_label="Caminho",
+                allow_empty=True,
+            ).strip()
+            if not answer:
+                continue
+            if not self._valid_mountpoint(answer):
+                self.ctx.logger.write(
+                    f"{badge('aviso', Color.WARNING)} Caminho invalido: {answer}. Mantendo {part.mountpoint}."
+                )
+                continue
+            reviewed[index] = replace(part, mountpoint=answer.rstrip("/"))
+        return reviewed
+
+    def _valid_mountpoint(self, path: str) -> bool:
+        if not path.startswith("/"):
+            return False
+        if self._is_system_mount(path.rstrip("/") or "/"):
+            return False
+        return path.startswith("/mnt/") or path.startswith("/media/")
+
+    def _preview(self, lines: list[str]) -> None:
+        self.ctx.logger.write(f"{badge('info', Color.INFO)} Bloco que sera gravado no /etc/fstab:")
+        self.ctx.logger.write(paint(self.begin, Color.MUTED))
+        for line in lines or ["# (vazio: nenhuma montagem gerenciada)"]:
+            self.ctx.logger.write(paint(line, Color.INFO))
+        self.ctx.logger.write(paint(self.end, Color.MUTED))
+
+    # --- geracao das linhas ------------------------------------------------------
+
+    def _mountpoint(self, part: Partition, existing: dict[str, str]) -> str:
+        if part.uuid in existing:
+            return existing[part.uuid]
+        base = part.label or part.model or part.uuid[:8]
+        return f"/mnt/{self._slug(base)}"
+
+    @staticmethod
+    def _slug(value: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+        return slug or "disco"
+
+    def _build_lines(self, selection: list[Partition]) -> list[str]:
+        lines: list[str] = []
+        for part in selection:
+            opts, passno = self._options_for(part)
+            lines.append(f"UUID={part.uuid} {part.mountpoint} {part.fstype} {opts} 0 {passno}")
         return lines
 
-    def _blkid_label(self, label: str) -> str:
-        result = self.ctx.runner.run(["blkid", "-L", label], check=False)
-        return result.stdout.strip() if result and result.stdout else ""
+    def _options_for(self, part: Partition) -> tuple[str, str]:
+        ntfs_opts = f"uid={self.ctx.user.uid},gid={self.ctx.user.gid},umask=022,windows_names"
+        # commit= so existe nos ext2/3/4; em outros FS o mount recusaria a opcao.
+        commit = ",commit=60" if part.is_ext else ""
+        if part.removable:
+            # noauto + automount: o boot nao espera nem falha sem o disco; ele monta
+            # sozinho no primeiro acesso a pasta e desmonta quando fica ocioso.
+            opts = "noauto,nofail,x-systemd.automount,x-systemd.device-timeout=5s,x-systemd.idle-timeout=60,noatime"
+            if part.is_ntfs:
+                opts = f"rw,{opts},{ntfs_opts}"
+            # Sem fsck no boot para disco que pode nao estar presente.
+            return opts, "0"
+        if part.is_ntfs:
+            return f"rw,nofail,x-systemd.device-timeout=5s,{ntfs_opts},noatime", "0"
+        return f"defaults,nofail,x-systemd.device-timeout=5s,noatime{commit}", "2" if part.is_ext else "0"
 
-    def _blkid_value(self, device: str, key: str) -> str:
-        result = self.ctx.runner.run(["blkid", "-s", key, "-o", "value", device], check=False)
-        return result.stdout.strip() if result and result.stdout else ""
+    # --- escrita -----------------------------------------------------------------
 
-    def _mountpoint(self, label: str) -> str:
-        return {
-            "WINDOWS": "/mnt/windows",
-            "DADOS WINDOWS": "/mnt/dados-windows",
-            "JOGOS LINUX": "/mnt/jogos-linux",
-            "BACKUP": "/mnt/backup",
-        }[label]
-
-    def _ensure_mountpoints(self) -> None:
-        for label in getattr(self, "_found_labels", self.labels):
-            mountpoint = self._mountpoint(label)
-            if Path(mountpoint).exists():
-                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {mountpoint} ja existe")
-            else:
-                self.ctx.runner.run(["mkdir", "-p", mountpoint], sudo=True)
+    def _with_block(self, current: str, lines: list[str]) -> str:
+        cleaned = self._without_block(current)
+        return cleaned.rstrip() + "\n\n" + "\n".join([self.begin, *lines, self.end]) + "\n"
 
     def _without_block(self, text: str) -> str:
         return re.sub(rf"\n?{re.escape(self.begin)}.*?{re.escape(self.end)}\n?", "\n", text, flags=re.S)
 
+    def _ensure_mountpoints(self, selection: list[Partition]) -> None:
+        for part in selection:
+            if Path(part.mountpoint).exists():
+                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {part.mountpoint} ja existe")
+            else:
+                self.ctx.runner.run(["mkdir", "-p", part.mountpoint], sudo=True)
+
+    def _verify_fstab(self) -> bool:
+        result = self.ctx.runner.run(
+            ["findmnt", "--verify"],
+            sudo=True,
+            check=False,
+            action="Validando o /etc/fstab",
+            show_progress=False,
+        )
+        if result is None:  # dry-run
+            return True
+        return result.returncode == 0
+
+    def _restore(self, backup: Path | None) -> None:
+        if backup is None:
+            self.ctx.logger.write(f"{badge('erro', Color.ERROR)} Sem backup para restaurar; revise o /etc/fstab a mao")
+            return
+        self.ctx.runner.run(["cp", "-a", str(backup), str(self.fstab_path)], sudo=True, check=False)
+        self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} /etc/fstab restaurado a partir de {backup}")
+
+    def _mount_all(self) -> None:
+        result = self.ctx.runner.run(["mount", "-a"], sudo=True, check=False, action="Aplicando montagens do fstab")
+        if result is not None and result.returncode != 0:
+            self.add_hint("`mount -a` reclamou de alguma montagem; confira o log e rode `sudo mount -a` a mao.")
+
+    # --- status / undo -----------------------------------------------------------
+
     def status(self) -> None:
         header(self, self.title)
-        self.ctx.runner.run(["lsblk", "-f"], check=False)
-        self.ctx.runner.run(
-            [
-                "grep",
-                "-n",
-                "pos-formatacao-cachyos\\|/mnt/windows\\|/mnt/dados-windows\\|/mnt/jogos-linux\\|/mnt/backup",
-                "/etc/fstab",
-            ],
-            check=False,
-        )
-        fstab = Path("/etc/fstab")
-        text = fstab.read_text(encoding="utf-8", errors="ignore")
-        if self.begin in text and self.end in text:
-            self.mark_applied("Bloco de montagem persistente esta presente no /etc/fstab.")
-        else:
+        entries = self._managed_entries()
+        text = self._fstab_text()
+        if self.begin not in text or self.end not in text:
             self.mark_pending(
-                "Bloco esperado ainda nao esta presente no /etc/fstab.", missing=["bloco de montagem no fstab"]
+                "Bloco de montagem ainda nao esta presente no /etc/fstab.",
+                missing=["bloco de montagem no fstab"],
             )
+            return
+        if not entries:
+            # Exatamente o caso do bug antigo: bloco presente, porem vazio.
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} O bloco existe no /etc/fstab mas esta VAZIO: "
+                f"nenhum disco esta sendo montado no boot."
+            )
+            self.mark_pending(
+                "Bloco presente no /etc/fstab, porem sem nenhuma montagem.",
+                missing=["nenhuma montagem no bloco do fstab"],
+            )
+            return
+
+        present = {part.uuid for part in self._probe_partitions()}
+        applied: list[str] = []
+        attention: list[str] = []
+        for uuid, mountpoint in entries.items():
+            if not self._is_mounted(mountpoint):
+                if uuid in present:
+                    attention.append(f"{mountpoint}: no fstab, disco presente, mas nao montado")
+                    self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} {mountpoint}: no fstab e nao montado")
+                else:
+                    # Disco externo desconectado e o comportamento esperado.
+                    applied.append(f"{mountpoint}: no fstab (disco desconectado agora)")
+                    self.ctx.logger.write(f"{badge('info', Color.INFO)} {mountpoint}: disco desconectado no momento")
+                continue
+            applied.append(f"{mountpoint}: montado")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {mountpoint}: montado")
+
+        if attention:
+            self.mark_attention(f"{len(entries)} montagem(ns) no fstab, com pendencias.", attention=attention)
+        else:
+            self.mark_applied(f"{len(entries)} montagem(ns) configurada(s) no /etc/fstab.", items=applied)
+
+    def _is_mounted(self, mountpoint: str) -> bool:
+        return capture(["findmnt", "-n", "--target", mountpoint, "--mountpoint", mountpoint]).returncode == 0
 
     def undo(self) -> None:
+        header(self, self.title, "Removendo as montagens gerenciadas")
         if not self.ctx.runner.dry_run and not confirm_phrase("REMOVER-FSTAB", self.ctx.logger):
+            self.mark_skipped("Confirmacao nao conferiu; /etc/fstab nao foi alterado.")
             return
-        fstab = Path("/etc/fstab")
-        backup_existing(fstab, self.ctx.runner, sudo=True)
-        write_text_sudo(fstab, self._without_block(fstab.read_text(encoding="utf-8")), self.ctx.runner)
+        entries = self._managed_entries()
+        backup_existing(self.fstab_path, self.ctx.runner, sudo=True)
+        write_text_sudo(self.fstab_path, self._without_block(self._fstab_text()), self.ctx.runner)
+        for mountpoint in entries.values():
+            # Nao apagamos os diretorios: se algo ainda estiver montado ali, seria perigoso.
+            self.ctx.runner.run(["umount", mountpoint], sudo=True, check=False)
         self.ctx.runner.run(
             ["systemctl", "daemon-reload"],
             sudo=True,
             action="Recarregando systemd apos remocao do bloco fstab",
             show_progress=False,
         )
+        self.mark_done("Bloco de montagem removido do /etc/fstab.")

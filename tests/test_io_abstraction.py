@@ -17,6 +17,7 @@ class FakeInteraction:
         self.text_calls: list[str] = []
         self.confirm_calls: list[str] = []
         self.choose_calls: list[tuple[str, list[str]]] = []
+        self.preselected_calls: list[list[int]] = []
 
     def ask_text(self, prompt, *, detail=None, prompt_label="Resposta", allow_empty=True) -> str:
         self.text_calls.append(prompt)
@@ -26,8 +27,9 @@ class FakeInteraction:
         self.confirm_calls.append(phrase)
         return self.confirm
 
-    def choose_many(self, prompt, options, *, detail=None) -> list[int]:
+    def choose_many(self, prompt, options, *, detail=None, preselected=()) -> list[int]:
         self.choose_calls.append((prompt, list(options)))
+        self.preselected_calls.append(list(preselected))
         return self.choices
 
 
@@ -65,14 +67,23 @@ def test_select_many_fallback_usa_tui_quando_sem_interaction(tmp_path: Path, mon
     logger = Logger(tmp_path, "test")  # interaction=None -> fallback do terminal
     capturado: dict[str, object] = {}
 
-    def fake_choose_multiple(*, title, logger, prompt, options, detail=None, footer=None):
+    def fake_choose_multiple(*, title, logger, prompt, options, detail=None, footer=None, preselected=()):
         capturado["labels"] = [option.label for option in options]
+        capturado["preselected"] = list(preselected)
         return [1]
 
     monkeypatch.setattr("reforja.tui.choose_multiple", fake_choose_multiple)
     indices = select_many("Quais itens", ["a", "b", "c"], logger)
     assert indices == [1]
     assert capturado["labels"] == ["a", "b", "c"]
+    assert capturado["preselected"] == []
+
+
+def test_select_many_repassa_preselected_e_descarta_indices_invalidos(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    logger.interaction = FakeInteraction(choices=[0])
+    select_many("Quais itens", ["a", "b", "c"], logger, preselected=[1, 9, -1])
+    assert logger.interaction.preselected_calls == [[1]]
 
 
 def test_runner_askpass_usa_sudo_dash_a(tmp_path: Path) -> None:

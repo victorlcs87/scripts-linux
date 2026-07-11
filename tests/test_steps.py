@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -28,6 +29,7 @@ from reforja.steps import (
     SunshineStep,
     UpdateAppImagesStep,
 )
+from reforja.steps.storage import Partition
 from reforja.steps_base import StepContext
 
 
@@ -37,7 +39,7 @@ def _select_all(monkeypatch):
     preservar as assercoes de "instala tudo" dos testes existentes. Testes que
     querem uma selecao especifica podem sobrescrever o patch."""
 
-    def _all(prompt, options, logger, *, detail=None):
+    def _all(prompt, options, logger, *, detail=None, preselected=()):
         return list(range(len(list(options))))
 
     for module in ("gaming", "appimage", "browser", "kde"):
@@ -1331,37 +1333,237 @@ def test_gestures_status_marks_attention_when_group_or_service_are_missing(tmp_p
     assert "gestos up/down" in step.result.attention_items
 
 
-def test_fstab_includes_backup_label_and_mountpoint(tmp_path: Path) -> None:
-    ctx = make_ctx(tmp_path)
-    step = FstabStep(ctx)
+# --- fstab (etapa 08) --------------------------------------------------------
 
-    assert "BACKUP" in step.labels
-    assert step._mountpoint("BACKUP") == "/mnt/backup"
-    assert step._mountpoint("WINDOWS") == "/mnt/windows"
+FSTAB_BASE = (
+    "UUID=root-uuid / btrfs subvol=/@,defaults 0 0\n"
+    "UUID=boot-uuid /boot vfat defaults,umask=0077 0 2\n"
+    "UUID=swap-uuid swap swap defaults 0 0\n"
+)
+
+# Espelha a maquina real: NVMe interno com Windows, SATA interno com BACKUP,
+# SSD externo USB e mais a raiz/boot/swap (que nunca podem ser oferecidos).
+LSBLK_PARTS = [
+    Partition("/dev/nvme0n1p3", "918G", "btrfs", "", "root-uuid", "/", False, "", "Linux filesystem"),
+    Partition("/dev/nvme0n1p1", "4G", "vfat", "", "boot-uuid", "/boot", False, "", "EFI System"),
+    Partition("/dev/nvme0n1p2", "31,9G", "swap", "swap", "swap-uuid", "[SWAP]", False, "", "Linux swap"),
+    # ESP e particao de recuperacao do disco do Windows: nao sao dados do usuario.
+    Partition("/dev/nvme1n1p1", "100M", "vfat", "", "esp-uuid", "", False, "Force MP600", "EFI System"),
+    Partition(
+        "/dev/nvme1n1p4", "828M", "ntfs", "", "rec-uuid", "", False, "Force MP600", "Windows recovery environment"
+    ),
+    Partition(
+        "/dev/nvme1n1p3", "464,8G", "ntfs", "WINDOWS", "win-uuid", "", False, "Force MP600", "Microsoft basic data"
+    ),
+    Partition("/dev/sda1", "476,9G", "ntfs", "BACKUP", "bkp-uuid", "", False, "SATA3 512GB SSD", "HPFS/NTFS/exFAT"),
+    Partition("/dev/sdb1", "1,8T", "ext4", "SSD EXTERNO", "ext-uuid", "", True, "Portable SSD", "Linux filesystem"),
+]
 
 
-def test_fstab_build_lines_skips_missing_labels(tmp_path: Path, monkeypatch) -> None:
-    ctx = make_ctx(tmp_path)
-    step = FstabStep(ctx)
-    devices = {"WINDOWS": "/dev/nvme1n1p3", "BACKUP": "/dev/sda1"}
-    values = {
-        ("/dev/nvme1n1p3", "UUID"): "1111-AAAA",
-        ("/dev/nvme1n1p3", "TYPE"): "ntfs",
-        ("/dev/sda1", "UUID"): "2222-BBBB",
-        ("/dev/sda1", "TYPE"): "ntfs",
-    }
+def make_fstab_step(tmp_path: Path, *, fstab: str = FSTAB_BASE, parts=None) -> FstabStep:
+    """FstabStep apontando para um fstab de teste, com a sondagem de discos stubada."""
+    step = FstabStep(make_ctx(tmp_path))
+    fstab_file = tmp_path / "fstab"
+    fstab_file.write_text(fstab, encoding="utf-8")
+    step.fstab_path = fstab_file
+    step._probe_partitions = lambda: list(LSBLK_PARTS if parts is None else parts)  # type: ignore[method-assign]
+    return step
 
-    monkeypatch.setattr(step, "_blkid_label", lambda label: devices.get(label, ""))
-    monkeypatch.setattr(step, "_blkid_value", lambda device, key: values[(device, key)])
 
-    lines = step._build_lines()
-    log = ctx.logger.path.read_text(encoding="utf-8")
+def test_fstab_candidates_exclude_system_partitions(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
 
-    assert any("UUID=1111-AAAA /mnt/windows ntfs" in line for line in lines)
-    assert any("UUID=2222-BBBB /mnt/backup ntfs" in line for line in lines)
-    assert len(lines) == 2
-    assert "Label nao encontrado: DADOS WINDOWS" in log
-    assert "Label nao encontrado: JOGOS LINUX" in log
+    paths = [part.path for part in step._candidates()]
+
+    # Raiz/boot/swap ja estao no fstab fora do bloco; ESP e recuperacao do Windows
+    # sao particoes de servico. So sobram os discos de dados de verdade.
+    assert paths == ["/dev/nvme1n1p3", "/dev/sda1", "/dev/sdb1"]
+
+
+def test_fstab_ext4_gets_commit_and_fsck_but_vfat_does_not(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+    ext4 = Partition("/dev/sdc1", "1T", "ext4", "DADOS", "e-uuid", "", False, "", "Linux filesystem")
+    exfat = Partition("/dev/sdc2", "1T", "exfat", "TROCA", "x-uuid", "", False, "", "Microsoft basic data")
+
+    linha_ext4 = step._build_lines([replace(ext4, mountpoint="/mnt/dados")])[0]
+    linha_exfat = step._build_lines([replace(exfat, mountpoint="/mnt/troca")])[0]
+
+    # commit= so existe no ext2/3/4; passar isso num exfat faria o mount recusar.
+    assert "commit=60" in linha_ext4 and linha_ext4.endswith(" 0 2")
+    assert "commit=60" not in linha_exfat and linha_exfat.endswith(" 0 0")
+
+
+def test_fstab_removable_uses_automount_and_nofail(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+    externo = next(part for part in step._candidates() if part.removable)
+
+    line = step._build_lines([replace(externo, mountpoint="/mnt/ssd-externo")])[0]
+
+    assert line.startswith("UUID=ext-uuid /mnt/ssd-externo ext4 ")
+    # Boot nunca espera nem quebra sem o disco; monta sozinho no primeiro acesso.
+    assert "noauto" in line
+    assert "nofail" in line
+    assert "x-systemd.automount" in line
+    assert line.endswith(" 0 0")
+
+
+def test_fstab_internal_ntfs_keeps_windows_options(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+    windows = next(part for part in step._candidates() if part.label == "WINDOWS")
+
+    line = step._build_lines([replace(windows, mountpoint="/mnt/windows")])[0]
+
+    assert "uid=1000,gid=1000,umask=022,windows_names" in line
+    assert "nofail" in line
+    assert "x-systemd.automount" not in line
+
+
+def test_fstab_suggested_mountpoint_is_slug_of_label(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path)
+    externo = next(part for part in step._candidates() if part.label == "SSD EXTERNO")
+
+    assert step._mountpoint(externo, {}) == "/mnt/ssd-externo"
+    # Um mountpoint ja escolhido antes prevalece sobre a sugestao.
+    assert step._mountpoint(externo, {"ext-uuid": "/mnt/jogos"}) == "/mnt/jogos"
+
+
+def test_fstab_preselects_entries_already_in_block(tmp_path: Path, monkeypatch) -> None:
+    fstab = (
+        FSTAB_BASE + "\n# BEGIN pos-formatacao-cachyos\n"
+        "UUID=bkp-uuid /mnt/backup ntfs rw,nofail 0 0\n"
+        "# END pos-formatacao-cachyos\n"
+    )
+    step = make_fstab_step(tmp_path, fstab=fstab)
+    capturado: dict[str, object] = {}
+
+    def fake_select(prompt, options, logger, *, detail=None, preselected=()):
+        capturado["options"] = list(options)
+        capturado["preselected"] = list(preselected)
+        return list(preselected)
+
+    monkeypatch.setattr("reforja.steps.storage.select_many", fake_select)
+    candidates = step._candidates()
+
+    selection = step._select_partitions(candidates, step._managed_entries())
+
+    # /dev/sda1 (BACKUP) e o indice 1 entre os candidatos e ja esta no bloco.
+    assert capturado["preselected"] == [1]
+    assert [part.path for part in selection] == ["/dev/sda1"]
+    assert selection[0].mountpoint == "/mnt/backup"
+    assert "(ja no fstab)" in capturado["options"][1]
+    assert "[externo]" in capturado["options"][2]
+
+
+def test_fstab_preselects_legacy_labels_on_first_run(tmp_path: Path, monkeypatch) -> None:
+    step = make_fstab_step(tmp_path)  # sem bloco no fstab
+    capturado: dict[str, object] = {}
+
+    def fake_select(prompt, options, logger, *, detail=None, preselected=()):
+        capturado["preselected"] = list(preselected)
+        return []
+
+    monkeypatch.setattr("reforja.steps.storage.select_many", fake_select)
+    step._select_partitions(step._candidates(), {})
+
+    # WINDOWS e BACKUP sao labels historicas; o SSD externo nao e.
+    assert capturado["preselected"] == [0, 1]
+
+
+def test_fstab_apply_writes_block_with_selected_disks(tmp_path: Path, monkeypatch) -> None:
+    step = make_fstab_step(tmp_path)
+    # Marca o BACKUP e o SSD externo; nenhuma troca de mountpoint.
+    calls = iter([[1, 2], []])
+    monkeypatch.setattr("reforja.steps.storage.select_many", lambda *a, **k: next(calls))
+    written: dict[str, str] = {}
+    monkeypatch.setattr(
+        "reforja.steps.storage.write_text_sudo",
+        lambda path, content, runner, **k: written.update({"content": content}),
+    )
+
+    step.apply()
+
+    content = written["content"]
+    assert "UUID=bkp-uuid /mnt/backup ntfs" in content
+    assert "UUID=ext-uuid /mnt/ssd-externo ext4" in content
+    assert "x-systemd.automount" in content
+    assert "UUID=win-uuid" not in content  # nao foi marcado
+    assert "UUID=root-uuid / btrfs" in content  # o resto do fstab e preservado
+    assert step.result.compliance == "aplicado"
+
+
+def test_fstab_apply_respects_edited_mountpoint(tmp_path: Path, monkeypatch) -> None:
+    step = make_fstab_step(tmp_path)
+    calls = iter([[2], [0]])  # marca o SSD externo; depois pede pra trocar o caminho dele
+    monkeypatch.setattr("reforja.steps.storage.select_many", lambda *a, **k: next(calls))
+    monkeypatch.setattr("reforja.steps.storage.prompt_user", lambda *a, **k: "/mnt/jogos-externos")
+    written: dict[str, str] = {}
+    monkeypatch.setattr(
+        "reforja.steps.storage.write_text_sudo",
+        lambda path, content, runner, **k: written.update({"content": content}),
+    )
+
+    step.apply()
+
+    assert "UUID=ext-uuid /mnt/jogos-externos ext4" in written["content"]
+
+
+def test_fstab_apply_rejects_mountpoint_outside_mnt(tmp_path: Path, monkeypatch) -> None:
+    step = make_fstab_step(tmp_path)
+    calls = iter([[2], [0]])
+    monkeypatch.setattr("reforja.steps.storage.select_many", lambda *a, **k: next(calls))
+    monkeypatch.setattr("reforja.steps.storage.prompt_user", lambda *a, **k: "/home/tester/disco")
+    written: dict[str, str] = {}
+    monkeypatch.setattr(
+        "reforja.steps.storage.write_text_sudo",
+        lambda path, content, runner, **k: written.update({"content": content}),
+    )
+
+    step.apply()
+
+    # Caminho invalido -> mantem o sugerido em vez de escrever dentro da /home.
+    assert "UUID=ext-uuid /mnt/ssd-externo ext4" in written["content"]
+    assert "/home/tester/disco" not in written["content"]
+
+
+def test_fstab_apply_flags_attention_when_no_partition_found(tmp_path: Path) -> None:
+    step = make_fstab_step(tmp_path, parts=[])
+
+    step.apply()
+
+    # Regressao do bug antigo: sondagem vazia nunca pode virar "bloco gravado".
+    assert step.result.compliance == "atencao"
+    assert step.result.status == "skipped"
+
+
+def test_fstab_status_flags_empty_managed_block(tmp_path: Path) -> None:
+    # Exatamente o estado em que o bug antigo deixava a maquina.
+    fstab = FSTAB_BASE + "\n# BEGIN pos-formatacao-cachyos\n# END pos-formatacao-cachyos\n"
+    step = make_fstab_step(tmp_path, fstab=fstab)
+
+    step.status()
+
+    assert step.result.compliance == "pendente"
+    assert "nenhuma montagem no bloco do fstab" in step.result.missing_items
+
+
+def test_fstab_undo_removes_block_and_keeps_rest(tmp_path: Path, monkeypatch) -> None:
+    fstab = (
+        FSTAB_BASE + "\n# BEGIN pos-formatacao-cachyos\n"
+        "UUID=bkp-uuid /mnt/backup ntfs rw,nofail 0 0\n"
+        "# END pos-formatacao-cachyos\n"
+    )
+    step = make_fstab_step(tmp_path, fstab=fstab)
+    written: dict[str, str] = {}
+    monkeypatch.setattr(
+        "reforja.steps.storage.write_text_sudo",
+        lambda path, content, runner, **k: written.update({"content": content}),
+    )
+
+    step.undo()
+
+    assert "pos-formatacao-cachyos" not in written["content"]
+    assert "UUID=bkp-uuid" not in written["content"]
+    assert "UUID=root-uuid / btrfs" in written["content"]
 
 
 def test_kde_apply_gestures_skips_machine_without_touchpad(tmp_path: Path, monkeypatch) -> None:

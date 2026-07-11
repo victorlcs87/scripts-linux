@@ -8,6 +8,7 @@ a thread de trabalho ate a resposta (via threading.Event).
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from typing import Any
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -94,11 +95,13 @@ class GuiInteraction(QObject):
             detail.setWordWrap(True)
             detail.setObjectName("statusLine")
             layout.addWidget(detail)
+        preselected = set(req.get("preselected") or ())
         listing = QListWidget()
-        for text in req["options"]:
+        for index, text in enumerate(req["options"]):
             item = QListWidgetItem(text)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Unchecked)  # nada marcado por padrao
+            # Marcado apenas o que ja esta configurado no sistema; o resto vem vazio.
+            item.setCheckState(Qt.CheckState.Checked if index in preselected else Qt.CheckState.Unchecked)
             listing.addItem(item)
         layout.addWidget(listing)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -150,6 +153,14 @@ class GuiInteraction(QObject):
         options: list[str],
         *,
         detail: str | None = None,
+        preselected: Sequence[int] = (),
     ) -> list[int]:
-        req = self._request_blocking("multi", [], prompt=prompt, options=list(options), detail=detail)
+        req = self._request_blocking(
+            "multi",
+            [],
+            prompt=prompt,
+            options=list(options),
+            detail=detail,
+            preselected=list(preselected),
+        )
         return list(req["result"])

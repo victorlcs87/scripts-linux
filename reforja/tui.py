@@ -86,17 +86,22 @@ def choose_multiple(
     footer: str | None = None,
     detail: str | None = None,
     prompt_label: str = "Selecione",
+    preselected: Sequence[int] = (),
 ) -> list[int]:
-    """Selecao multipla (checkbox). Retorna os indices escolhidos. Vazio = nenhum."""
+    """Selecao multipla (checkbox). Retorna os indices escolhidos. Vazio = nenhum.
+
+    `preselected` deixa itens ja marcados por padrao.
+    """
     if not options:
         return []
+    marked = {index for index in preselected if 0 <= index < len(options)}
     logger.log_only(divider(char="~", tone=Color.ACCENT))
     logger.log_only(f"{badge('waiting', Color.WAITING)} {prompt}")
     if detail:
         logger.log_only(paint(detail, Color.MUTED))
     if _supports_interactive_tui():
         selected = _choose_multiple_tty(
-            title=title, logger=logger, prompt=prompt, options=options, footer=footer, detail=detail
+            title=title, logger=logger, prompt=prompt, options=options, footer=footer, detail=detail, marked=marked
         )
     else:
         selected = _choose_multiple_fallback(
@@ -107,13 +112,21 @@ def choose_multiple(
             footer=footer,
             detail=detail,
             prompt_label=prompt_label,
+            marked=marked,
         )
     logger.log_only(f"{badge('choice', Color.CHOICE)} {len(selected)} selecionada(s)")
     return selected
 
 
 def _choose_multiple_tty(
-    *, title: str, logger: Logger, prompt: str, options: Sequence[MenuOption], footer: str | None, detail: str | None
+    *,
+    title: str,
+    logger: Logger,
+    prompt: str,
+    options: Sequence[MenuOption],
+    footer: str | None,
+    detail: str | None,
+    marked: set[int],
 ) -> list[int]:
     inquirer, get_style = load_tui_deps()
     print(_build_prompt_message(title, logger, footer=footer, detail=detail))
@@ -122,7 +135,11 @@ def _choose_multiple_tty(
         selected = inquirer.checkbox(
             message=prompt,
             choices=[
-                {"name": f"{option.display_key or option.key}. {option.label}", "value": index, "enabled": False}
+                {
+                    "name": f"{option.display_key or option.key}. {option.label}",
+                    "value": index,
+                    "enabled": index in marked,
+                }
                 for index, option in enumerate(options)
             ],
             instruction="espaco marca/desmarca | Enter confirma | nada marcado = nada",
@@ -143,17 +160,25 @@ def _choose_multiple_fallback(
     footer: str | None,
     detail: str | None,
     prompt_label: str,
+    marked: set[int] | None = None,
 ) -> list[int]:
-    print(render_menu(title, logger, options, footer=footer))
+    marked = marked or set()
+    print(render_menu(title, logger, options, footer=footer, marked=marked))
+    if marked:
+        hint = "vazio = mantem os marcados com [x]; digite 0 para nao marcar nenhuma"
+    else:
+        hint = "numeros separados por virgula; vazio = nenhuma"
     while True:
         answer = prompt_user(
-            f"{prompt} (numeros separados por virgula; vazio = nenhuma)",
+            f"{prompt} ({hint})",
             logger,
             detail=detail,
             prompt_label=prompt_label,
             allow_empty=True,
         ).strip()
         if not answer:
+            return sorted(marked)
+        if answer == "0":
             return []
         keys = [piece.strip() for piece in answer.split(",") if piece.strip()]
         indices: list[int] = []
@@ -169,9 +194,16 @@ def _choose_multiple_fallback(
         print(paint("Selecao invalida", Color.ERROR))
 
 
-def render_menu(title: str, logger: Logger, options: Sequence[MenuOption], *, footer: str | None = None) -> str:
+def render_menu(
+    title: str,
+    logger: Logger,
+    options: Sequence[MenuOption],
+    *,
+    footer: str | None = None,
+    marked: set[int] | None = None,
+) -> str:
     body = _menu_frame(title, logger, footer=footer)
-    body.extend(_render_menu_lines(options))
+    body.extend(_render_menu_lines(options, marked=marked))
     body.append(divider())
     return "\n".join(body)
 
@@ -192,11 +224,14 @@ def _menu_frame(title: str, logger: Logger, *, footer: str | None = None) -> lis
     return body
 
 
-def _render_menu_lines(options: Sequence[MenuOption]) -> list[str]:
+def _render_menu_lines(options: Sequence[MenuOption], *, marked: set[int] | None = None) -> list[str]:
     lines: list[str] = []
-    for option in options:
+    for index, option in enumerate(options):
         display_key = option.display_key or option.key
-        lines.append(f"{paint(f'{display_key}.', Color.CHOICE)} {paint(option.label, Color.INFO)}")
+        prefix = ""
+        if marked is not None:
+            prefix = paint("[x] " if index in marked else "[ ] ", Color.SUCCESS if index in marked else Color.MUTED)
+        lines.append(f"{prefix}{paint(f'{display_key}.', Color.CHOICE)} {paint(option.label, Color.INFO)}")
     return lines
 
 

@@ -160,6 +160,7 @@ class InteractionProvider(Protocol):
         options: Sequence[str],
         *,
         detail: str | None = None,
+        preselected: Sequence[int] = (),
     ) -> list[int]: ...
 
 
@@ -325,9 +326,13 @@ def select_many(
     logger: Logger,
     *,
     detail: str | None = None,
+    preselected: Sequence[int] = (),
 ) -> list[int]:
     """Selecao multipla (checkbox) abstraida da apresentacao. Retorna os indices
     escolhidos; lista vazia = nada marcado.
+
+    `preselected` marca itens ja escolhidos por padrao (ex.: o que ja esta
+    configurado no sistema), para que reaplicar nao exija remarcar tudo.
 
     Quando ha um InteractionProvider grafico com choose_many (GUI), delega a ele.
     Caso contrario (CLI) cai no checkbox de terminal (tui.choose_multiple). O
@@ -336,9 +341,10 @@ def select_many(
     options = list(options)
     if not options:
         return []
+    preselected = [index for index in preselected if 0 <= index < len(options)]
     interaction = logger.interaction
     if interaction is not None and hasattr(interaction, "choose_many"):
-        return list(interaction.choose_many(prompt, options, detail=detail))
+        return list(interaction.choose_many(prompt, options, detail=detail, preselected=preselected))
     from .tui import choose_multiple
 
     menu_options = [MenuOption(str(index + 1), label) for index, label in enumerate(options)]
@@ -348,6 +354,7 @@ def select_many(
         prompt=prompt,
         options=menu_options,
         detail=detail,
+        preselected=preselected,
     )
 
 
