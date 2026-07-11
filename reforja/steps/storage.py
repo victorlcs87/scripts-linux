@@ -842,7 +842,9 @@ class FstabStep(Step):
             self.mark_applied(f"{len(entries)} montagem(ns) configurada(s) no /etc/fstab.", items=applied)
 
     def _is_mounted(self, mountpoint: str) -> bool:
-        return capture(["findmnt", "-n", "--target", mountpoint, "--mountpoint", mountpoint]).returncode == 0
+        # Nao dava pra combinar --target com --mountpoint: o findmnt recusa as duas
+        # juntas e devolvia rc=1 sempre, ou seja, TODO ponto parecia desmontado.
+        return self._mount_options(mountpoint) is not None
 
     def undo(self) -> None:
         header(self, self.title, "Removendo as montagens gerenciadas")

@@ -1533,6 +1533,22 @@ def test_fstab_apply_removes_mountpoint_that_left_the_block(tmp_path: Path, monk
     assert "rm -rf" not in log
 
 
+def test_fstab_is_mounted_asks_findmnt_a_question_it_accepts(tmp_path: Path, monkeypatch) -> None:
+    step = make_fstab_step(tmp_path)
+    visto: dict[str, list[str]] = {}
+
+    def fake_capture(cmd, **kwargs):
+        visto["cmd"] = list(cmd)
+        return CompletedProcess(cmd, 0, "rw,noatime\n", "")
+
+    monkeypatch.setattr("reforja.steps.storage.capture", fake_capture)
+
+    assert step._is_mounted("/mnt/backup") is True
+    # O findmnt recusa --target junto com --mountpoint ("impossivel combinar"), e
+    # o rc=1 resultante fazia TODO ponto de montagem parecer desmontado.
+    assert not {"--target", "--mountpoint"} <= set(visto["cmd"])
+
+
 def test_fstab_never_removes_mountpoint_outside_mnt(tmp_path: Path) -> None:
     step = make_fstab_step(tmp_path)
 
