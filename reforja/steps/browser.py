@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
+from functools import partial
 
 from ..core import (
     Color,
     badge,
     command_exists,
-    select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..platform import (
@@ -17,7 +17,7 @@ from ..platform import (
     system_package_exists,
     system_query_command,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import header
 
 WEBAPPS = (
@@ -37,39 +37,50 @@ class BrowserStep(Step):
         "num unico menu de selecao, com fallback para WebApp Manager ou atalho .desktop."
     )
 
+    def tasks(self) -> list[StepTask]:
+        items = [
+            StepTask(
+                key="navegador",
+                label=_BROWSER_ITEM,
+                description=(
+                    "Instala o Firefox e o FirefoxPWA, que e o que permite transformar sites em "
+                    "aplicativos com janela propria (os WebApps abaixo dependem dele)."
+                ),
+                detect=self._browser_ready,
+                run=self._install_browser,
+            )
+        ]
+        for name, slug, url, _manifest in WEBAPPS:
+            items.append(
+                StepTask(
+                    key=f"webapp-{slug}",
+                    label=f"WebApp {name}",
+                    description=(
+                        f"Cria um app de janela propria para {url}, com atalho no menu. Usa o FirefoxPWA; "
+                        "se ele falhar, tenta o WebApp Manager e, por ultimo, um atalho .desktop simples."
+                    ),
+                    detect=partial(self._webapp_detail, name, slug),
+                    run=partial(self._create_one_webapp, name, slug),
+                    detail="nao criado",
+                )
+            )
+        return items
+
     def apply(self) -> None:
         header(self, self.title, "Navegador principal + WebApps num unico passo")
-        labels = [self._browser_label(), *(self._webapp_label(name, slug) for name, slug, _url, _m in WEBAPPS)]
-        indices = select_many(
-            "O que instalar/criar?",
-            labels,
-            self.ctx.logger,
-            detail="Marque um ou mais. Nada marcado = nada a fazer.",
-        )
-        if not indices:
-            self.mark_skipped("Nada selecionado.")
-            return
-        chosen = set(indices)
-        partes: list[str] = []
-        if 0 in chosen:
-            self._install_browser()
-            partes.append("navegador (Firefox + FirefoxPWA)")
-        chosen_webapps = [WEBAPPS[i - 1] for i in sorted(chosen) if i >= 1]
-        if chosen_webapps:
-            msg = self._create_webapps(chosen_webapps)
-            if msg:
-                partes.append(msg)
-        if partes:
-            self.mark_done(" | ".join(partes))
-            self.result.applied_items = partes
-        else:
-            self.mark_skipped("Nada novo para fazer.")
+        super().apply()
 
     # ------------------------------------------------------------------ navegador
 
-    def _browser_label(self) -> str:
-        ready = system_installed("firefox") and (system_installed("firefoxpwa") or command_exists("firefoxpwa"))
-        return f"{_BROWSER_ITEM} {'(ja instalado)' if ready else '(nao instalado)'}"
+    def _browser_ready(self) -> bool:
+        return system_installed("firefox") and (system_installed("firefoxpwa") or command_exists("firefoxpwa"))
+
+    def _webapp_detail(self, name: str, slug: str) -> str | bool:
+        return "ja criado" if self._webapp_present(name, slug) else False
+
+    def _create_one_webapp(self, name: str, slug: str) -> None:
+        entry = next(item for item in WEBAPPS if item[1] == slug)
+        self._create_webapps([entry])
 
     def _install_browser(self) -> None:
         install_system_package("firefox", self.ctx.runner)

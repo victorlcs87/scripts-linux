@@ -1,9 +1,75 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .core import Logger, Runner, UserInfo
+from .core import (
+    Color,
+    CommandInterruptedError,
+    Logger,
+    PrivilegeEscalationBlockedError,
+    PromptInterruptedError,
+    Runner,
+    UserInfo,
+    badge,
+    paint,
+    select_many,
+)
+
+# Estados de uma tarefa dentro de uma etapa.
+# aplicado    -> ja esta feito na maquina (vem pre-marcado no Aplicar)
+# pendente    -> ainda nao foi feito
+# acao        -> nao tem estado (ex.: "atualizar o sistema"); sempre pode rodar
+# indisponivel-> nao faz sentido nesta maquina (ex.: gestos sem touchpad)
+TASK_STATES = ("aplicado", "pendente", "acao", "indisponivel", "desconhecido")
+
+
+@dataclass
+class StepTask:
+    """Uma coisa concreta que a etapa sabe fazer, com explicacao e deteccao propria.
+
+    E a unidade que o usuario ve na lista do Aplicar: cada tarefa e marcavel
+    individualmente, vem pre-marcada quando ja esta aplicada, e carrega o texto
+    que explica exatamente o que ela faz.
+
+    `detect` responde "isso ja esta feito?": devolve bool ou uma string (verdade +
+    detalhe, ex.: "instalado via flatpak") que aparece ao lado do rotulo.
+    """
+
+    key: str
+    label: str
+    description: str = ""
+    run: Callable[[], None] | None = None
+    detect: Callable[[], bool | str | None] | None = None
+    stateless: bool = False
+    available: bool = True
+    unavailable_reason: str = ""
+    # Tarefa que REMOVE coisas: nunca vem pre-marcada, nem no "Aplicar tudo".
+    # Marcar tem de ser um ato deliberado do usuario.
+    destructive: bool = False
+    state: str = "desconhecido"
+    detail: str = ""
+
+    @property
+    def runnable(self) -> bool:
+        return self.run is not None and self.state != "indisponivel"
+
+    @property
+    def preselectable(self) -> bool:
+        return not self.destructive
+
+    def menu_label(self) -> str:
+        """Rotulo com o estado atual embutido, usado no checkbox e nos resumos."""
+        aviso = " [DESTRUTIVO]" if self.destructive else ""
+        if self.state == "indisponivel":
+            reason = self.unavailable_reason or "nao se aplica a esta maquina"
+            return f"{self.label} (indisponivel: {reason})"
+        if self.state == "aplicado":
+            return f"{self.label}{aviso} ({self.detail or 'ja aplicado'})"
+        if self.state == "acao":
+            return f"{self.label}{aviso} ({self.detail or 'acao sob demanda'})"
+        return f"{self.label}{aviso} ({self.detail or 'nao aplicado'})"
 
 
 @dataclass
@@ -44,20 +110,195 @@ class Step:
     id = "00"
     title = "Etapa"
     description = ""
+    # Quando True, o apply/status default derivam o compliance (aplicado/pendente)
+    # do estado das tarefas. Etapas cujo veredito vem de diagnostico proprio
+    # (ex.: GPU) desligam isso e chamam seus proprios mark_*.
+    compliance_from_plan = True
 
     def __init__(self, ctx: StepContext) -> None:
         self.ctx = ctx
         self.result = StepResult()
+        # Seleccao pre-resolvida (chaves de StepTask) vinda da tela consolidada do
+        # "Aplicar tudo"; quando presente, o apply nao abre o checkbox proprio.
+        self.selection: tuple[str, ...] | None = None
+        # Marca tudo por padrao no checkbox (em vez de so o que ja esta aplicado).
+        self.select_all = False
+
+    # ------------------------------------------------------------------
+    # Contrato novo: a etapa declara suas tarefas e o resto vem de graca.
+    # ------------------------------------------------------------------
+    def tasks(self) -> list[StepTask]:
+        """Tarefas que a etapa sabe executar. Etapa sem tarefas precisa de apply() proprio."""
+        return []
+
+    def plan(self) -> list[StepTask]:
+        """Sonda a maquina e devolve as tarefas com `state`/`detail` preenchidos."""
+        tasks = self.tasks()
+        for task in tasks:
+            self._probe(task)
+        return tasks
+
+    def _probe(self, task: StepTask) -> None:
+        if not task.available:
+            task.state = "indisponivel"
+            return
+        if task.stateless:
+            task.state = "acao"
+            return
+        if task.detect is None:
+            task.state = "desconhecido"
+            return
+        try:
+            outcome = task.detect()
+        except Exception as exc:  # sonda nunca derruba a etapa
+            task.state = "desconhecido"
+            task.detail = f"nao consegui verificar: {exc}"
+            return
+        if isinstance(outcome, str):
+            task.state = "aplicado" if outcome else "pendente"
+            if outcome:
+                task.detail = outcome
+        else:
+            task.state = "aplicado" if outcome else "pendente"
+
+    # ------------------------------------------------------------------
+    # Acoes
+    # ------------------------------------------------------------------
+    def declares_tasks(self) -> bool:
+        """Distingue 'etapa sem tarefas declaradas' de 'nenhuma tarefa se aplica agora'."""
+        return type(self).tasks is not Step.tasks
 
     def apply(self) -> None:
-        raise NotImplementedError
+        if not self.declares_tasks():
+            raise NotImplementedError
+        self.run_tasks(self.plan())
 
     def status(self) -> None:
-        self.ctx.logger.write("Status ainda nao implementado para esta etapa.")
+        if not self.declares_tasks():
+            self.ctx.logger.write("Status ainda nao implementado para esta etapa.")
+            return
+        self.report_plan(self.plan())
 
     def undo(self) -> None:
         self.ctx.logger.write("Undo nao disponivel para esta etapa.")
 
+    # ------------------------------------------------------------------
+    # Motor de tarefas (usado pelo apply default)
+    # ------------------------------------------------------------------
+    def choose_tasks(self, tasks: Sequence[StepTask]) -> list[StepTask]:
+        """Decide quais tarefas rodar: selecao injetada, tudo, ou checkbox interativo.
+
+        No checkbox, vem pre-marcado o que JA esta aplicado na maquina — marcar
+        significa executar/reaplicar; desmarcar significa apenas nao mexer.
+        """
+        runnable = [task for task in tasks if task.runnable]
+        if not runnable:
+            return []
+        if self.selection is not None:
+            keys = set(self.selection)
+            return [task for task in runnable if task.key in keys]
+        if self.select_all:
+            return [task for task in runnable if task.preselectable]
+        if len(runnable) == 1 and runnable[0].preselectable:
+            # Etapa de item unico: escolher a etapa ja e escolher o item.
+            return list(runnable)
+        preselected = [index for index, task in enumerate(runnable) if task.state == "aplicado" and task.preselectable]
+        indices = select_many(
+            f"{type(self).title}: o que executar?",
+            [task.menu_label() for task in runnable],
+            self.ctx.logger,
+            detail=explain_tasks(runnable),
+            preselected=preselected,
+        )
+        return [runnable[index] for index in indices]
+
+    def run_tasks(self, tasks: Sequence[StepTask]) -> None:
+        logger = self.ctx.logger
+        if not tasks:
+            self.mark_skipped("Nada se aplica a esta maquina nesta etapa.")
+            return
+        for task in tasks:
+            if task.state == "indisponivel":
+                logger.write(f"{badge('pulado', Color.WARNING)} {task.menu_label()}")
+
+        chosen = self.choose_tasks(tasks)
+        if not chosen:
+            self.mark_skipped("Nenhum item marcado; nada foi alterado.")
+            if self.compliance_from_plan:
+                self.report_plan(self.plan(), quiet=True)
+            return
+
+        manual_before = self.result.manual_events
+        failures: list[str] = []
+        for task in chosen:
+            logger.write("")
+            logger.write(paint(f"-> {task.label}", Color.TITLE))
+            if task.description:
+                logger.write(paint(task.description, Color.MUTED))
+            try:
+                assert task.run is not None
+                task.run()
+            except (
+                PrivilegeEscalationBlockedError,
+                CommandInterruptedError,
+                PromptInterruptedError,
+            ):
+                raise
+            except Exception as exc:
+                failures.append(task.label)
+                logger.write(f"{badge('erro', Color.ERROR)} {task.label}: {exc}")
+                self.add_hint(f"revise '{task.label}': {exc}")
+
+        if failures:
+            self.mark_done(f"Concluido com falhas em: {', '.join(failures)}.")
+        elif self.result.manual_events > manual_before:
+            self.mark_manual("A etapa dependeu de interacao manual.")
+        elif not self.result.message:
+            # Nenhuma tarefa se pronunciou (mark_skipped/mark_done proprio): resumo generico.
+            self.mark_done(f"{len(chosen)} item(ns) processado(s).")
+
+        # Reconfere o estado real depois de agir.
+        if self.compliance_from_plan:
+            self.report_plan(self.plan(), quiet=True, attention=failures)
+
+    def report_plan(
+        self,
+        tasks: Sequence[StepTask],
+        *,
+        quiet: bool = False,
+        attention: Sequence[str] | None = None,
+    ) -> None:
+        """Traduz o plano sondado em compliance + listas por item."""
+        logger = self.ctx.logger
+        applied = [task.label for task in tasks if task.state == "aplicado"]
+        missing = [task.label for task in tasks if task.state == "pendente"]
+        unknown = [task.label for task in tasks if task.state == "desconhecido"]
+        attention_items = list(attention or []) + unknown
+
+        if not quiet:
+            for task in tasks:
+                tone = {
+                    "aplicado": Color.SUCCESS,
+                    "pendente": Color.WARNING,
+                    "acao": Color.INFO,
+                    "indisponivel": Color.MUTED,
+                }.get(task.state, Color.ERROR)
+                logger.write(f"{badge(task.state, tone)} {task.menu_label()}")
+                if task.description:
+                    logger.write(paint(f"  {task.description}", Color.MUTED))
+
+        total = len(applied) + len(missing)
+        if attention_items:
+            self.mark_attention(
+                f"{len(applied)}/{total} item(ns) aplicados; revise o que precisa de atencao.",
+                attention=attention_items,
+            )
+        elif missing:
+            self.mark_pending(f"{len(applied)}/{total} item(ns) aplicados.", missing=missing)
+        else:
+            self.mark_applied(f"Todos os {total} item(ns) aplicados." if total else "Nada a aplicar.", items=applied)
+
+    # ------------------------------------------------------------------
     def mark_done(self, message: str = "") -> None:
         self.result.status = "done"
         self.result.message = message
@@ -91,3 +332,13 @@ class Step:
 
     def add_hint(self, message: str) -> None:
         self.result.hints.append(message)
+
+
+def explain_tasks(tasks: Sequence[StepTask]) -> str:
+    """Bloco de texto que explica, item a item, o que sera feito e o estado atual."""
+    lines: list[str] = []
+    for task in tasks:
+        lines.append(f"- {task.menu_label()}")
+        if task.description:
+            lines.append(f"    {task.description}")
+    return "\n".join(lines)

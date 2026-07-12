@@ -12,6 +12,7 @@ from ..core import (
     backup_existing,
     badge,
     capture,
+    command_exists,
     confirm_phrase,
     ensure_owner,
     load_env_file,
@@ -24,7 +25,7 @@ from ..core import (
 from ..platform import (
     install_system_package,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import header
 
 
@@ -54,16 +55,84 @@ class RcloneStep(Step):
             )
         return env
 
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key="rclone",
+                label="Instalar o rclone",
+                description="Instala o rclone, a ferramenta que fala com o Google Drive.",
+                detect=lambda: command_exists("rclone"),
+                run=lambda: install_system_package("rclone", self.ctx.runner),
+            ),
+            StepTask(
+                key="remote",
+                label="Conectar a sua conta do Google Drive",
+                description=(
+                    "Abre o rclone config para autorizar a conta no navegador e cria o remote "
+                    "'Google Drive:'. Se o token ja existir mas estiver expirado, faz a reconexao."
+                ),
+                detect=self._remote_ready,
+                run=self._configure_remote,
+            ),
+            StepTask(
+                key="servico",
+                label="Montar o Drive em ~/GoogleDrive automaticamente",
+                description=(
+                    "Cria um servico systemd de usuario que monta o Google Drive em ~/GoogleDrive e o "
+                    "remonta sozinho se cair, com notificacao na area de trabalho em caso de falha."
+                ),
+                detect=self._service_ready,
+                run=self._install_service,
+            ),
+            StepTask(
+                key="linger",
+                label="Manter a montagem ativa no boot (linger)",
+                description=(
+                    "Habilita o linger da sessao: sem isso o servico so sobe depois que voce faz login "
+                    "no ambiente grafico."
+                ),
+                detect=lambda: Path(f"/var/lib/systemd/linger/{self.ctx.user.name}").exists(),
+                run=self._enable_linger,
+            ),
+        ]
+
     def apply(self) -> None:
         header(self, self.title, "Montando sincronizacao automatica do Google Drive")
-        install_system_package("rclone", self.ctx.runner)
+        super().apply()
         mount_dir = self.ctx.user.home / "GoogleDrive"
-        service_dir = self.ctx.user.home / ".config/systemd/user"
-        service_file = service_dir / "rclone-google-drive.service"
+        if not self.ctx.runner.dry_run and self._service_ready() and not mount_dir.is_mount():
+            time.sleep(3)
+            if not mount_dir.is_mount():
+                self.ctx.logger.write(
+                    f"{Color.WARNING}Aviso: {mount_dir} ainda nao esta montado. "
+                    f"Verifique com: systemctl --user status rclone-google-drive.service{Color.RESET}"
+                )
+                self.add_hint("Se a montagem nao aparecer, rode: rclone config reconnect 'Google Drive:'")
+
+    def _remote_ready(self) -> bool:
         rclone_env = self._rclone_env()
-        if not self.ctx.runner.dry_run:
-            mount_dir.mkdir(parents=True, exist_ok=True)
-            service_dir.mkdir(parents=True, exist_ok=True)
+        remotes = self.ctx.runner.run(
+            ["rclone", "listremotes"],
+            check=False,
+            action="Verificando remotes do rclone",
+            show_progress=False,
+            quiet_success=True,
+            env_extra=rclone_env,
+        )
+        if not remotes or self.remote not in (remotes.stdout or ""):
+            return False
+        token = self.ctx.runner.run(
+            ["rclone", "lsd", self.remote, "--max-depth", "0"],
+            check=False,
+            action="Validando token do Google Drive",
+            show_progress=False,
+            quiet_success=True,
+            env_extra=rclone_env,
+        )
+        return bool(token and token.returncode == 0)
+
+    def _configure_remote(self) -> None:
+        rclone_env = self._rclone_env()
         remotes = self.ctx.runner.run(
             ["rclone", "listremotes"],
             check=False,
@@ -71,7 +140,7 @@ class RcloneStep(Step):
             show_progress=False,
             env_extra=rclone_env,
         )
-        if remotes and self.remote not in remotes.stdout:
+        if remotes and self.remote not in (remotes.stdout or ""):
             self.ctx.logger.write("Remote 'Google Drive:' nao encontrado. Abrindo rclone config.")
             self.ctx.runner.run(
                 ["rclone", "config"],
@@ -89,11 +158,9 @@ class RcloneStep(Step):
                 show_progress=False,
                 env_extra=rclone_env,
             )
-            if not remotes_after or self.remote not in remotes_after.stdout:
-                self.mark_manual("Remote do Google Drive ainda nao foi configurado; servico nao sera habilitado.")
-                self.mark_pending("Remote do Google Drive ainda nao foi configurado.", missing=["remote Google Drive"])
+            if not remotes_after or self.remote not in (remotes_after.stdout or ""):
+                self.mark_manual("Remote do Google Drive ainda nao foi configurado.")
                 return
-            self.mark_done("Remote do Google Drive configurado manualmente e pronto para ativacao.")
         token_test = self.ctx.runner.run(
             ["rclone", "lsd", self.remote, "--max-depth", "0"],
             check=False,
@@ -123,9 +190,17 @@ class RcloneStep(Step):
             )
             if recheck and recheck.returncode != 0:
                 self.mark_manual("Token ainda invalido apos reconexao. Verifique as permissoes OAuth.")
-                self.mark_pending("Token do Google Drive invalido.", missing=["token valido"])
-                return
-        service_content = """[Unit]
+
+    def _enable_linger(self) -> None:
+        self.ctx.runner.run(
+            ["loginctl", "enable-linger", self.ctx.user.name],
+            check=False,
+            action="Habilitando persistencia de sessao para servicos ao boot",
+        )
+
+    @property
+    def _service_content(self) -> str:
+        return """[Unit]
 Description=Rclone Google Drive mount
 After=network-online.target
 Wants=network-online.target
@@ -143,8 +218,10 @@ RestartSec=30
 [Install]
 WantedBy=default.target
 """
-        notify_service_file = service_dir / "rclone-google-drive-notify.service"
-        notify_service_content = """\
+
+    @property
+    def _notify_content(self) -> str:
+        return """\
 [Unit]
 Description=Notificacao de falha na montagem do Google Drive
 
@@ -152,49 +229,46 @@ Description=Notificacao de falha na montagem do Google Drive
 Type=oneshot
 ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao montado" "Token pode ter expirado. Para corrigir, execute:\\npython -m reforja step 07 apply"
 """
-        service_was_current = (
+
+    @property
+    def _service_dir(self) -> Path:
+        return self.ctx.user.home / ".config/systemd/user"
+
+    def _service_ready(self) -> bool:
+        service_file = self._service_dir / "rclone-google-drive.service"
+        notify_file = self._service_dir / "rclone-google-drive-notify.service"
+        files_current = (
             service_file.exists()
-            and service_file.read_text(encoding="utf-8", errors="ignore") == service_content
-            and notify_service_file.exists()
-            and notify_service_file.read_text(encoding="utf-8", errors="ignore") == notify_service_content
+            and service_file.read_text(encoding="utf-8", errors="ignore") == self._service_content
+            and notify_file.exists()
+            and notify_file.read_text(encoding="utf-8", errors="ignore") == self._notify_content
         )
-        write_text(service_file, service_content, self.ctx.runner)
-        write_text(notify_service_file, notify_service_content, self.ctx.runner)
-        if not service_was_current or self.ctx.runner.dry_run:
-            self.ctx.runner.run(
-                ["systemctl", "--user", "daemon-reload"],
-                check=False,
-                action="Recarregando servicos do usuario",
-                show_progress=False,
-            )
-        if self._user_service_active("rclone-google-drive.service") and self._user_service_enabled(
+        if not files_current:
+            return False
+        return self._user_service_enabled("rclone-google-drive.service") and self._user_service_active(
             "rclone-google-drive.service"
-        ):
-            self.ctx.logger.write(
-                f"{badge('ok', Color.SUCCESS)} rclone-google-drive.service ja esta habilitado e ativo"
-            )
-        else:
-            self.ctx.runner.run(
-                ["systemctl", "--user", "enable", "--now", "rclone-google-drive.service"],
-                check=False,
-                action="Habilitando montagem automatica do Google Drive",
-            )
-        self.ctx.runner.run(
-            ["loginctl", "enable-linger", self.ctx.user.name],
-            check=False,
-            action="Habilitando persistencia de sessao para servicos ao boot",
         )
+
+    def _install_service(self) -> None:
+        mount_dir = self.ctx.user.home / "GoogleDrive"
+        service_file = self._service_dir / "rclone-google-drive.service"
+        notify_file = self._service_dir / "rclone-google-drive-notify.service"
         if not self.ctx.runner.dry_run:
-            time.sleep(3)
-            if not mount_dir.is_mount():
-                self.ctx.logger.write(
-                    f"{Color.WARNING}Aviso: {mount_dir} ainda nao esta montado. "
-                    f"Verifique com: systemctl --user status rclone-google-drive.service{Color.RESET}"
-                )
-                self.add_hint("Se a montagem nao aparecer, rode: rclone config reconnect 'Google Drive:'")
-        if self.result.status != "manual":
-            self.mark_done("Montagem automatica do Google Drive configurada.")
-            self.mark_applied("Montagem automatica do Google Drive configurada e persistente no boot.")
+            mount_dir.mkdir(parents=True, exist_ok=True)
+            self._service_dir.mkdir(parents=True, exist_ok=True)
+        write_text(service_file, self._service_content, self.ctx.runner)
+        write_text(notify_file, self._notify_content, self.ctx.runner)
+        self.ctx.runner.run(
+            ["systemctl", "--user", "daemon-reload"],
+            check=False,
+            action="Recarregando servicos do usuario",
+            show_progress=False,
+        )
+        self.ctx.runner.run(
+            ["systemctl", "--user", "enable", "--now", "rclone-google-drive.service"],
+            check=False,
+            action="Habilitando montagem automatica do Google Drive",
+        )
 
     def _user_service_active(self, name: str) -> bool:
         result = self.ctx.runner.run(["systemctl", "--user", "is-active", "--quiet", name], check=False)
@@ -317,9 +391,37 @@ class FstabStep(Step):
     # Pontos de montagem do proprio sistema: se a particao ja esta ai, nao mexemos.
     system_mounts = ("/", "/boot", "/home", "/root", "/srv", "/usr", "/var", "/efi", "[SWAP]")
 
+    # O veredito vem da conferencia do bloco gerenciado do /etc/fstab.
+    compliance_from_plan = False
+
     # --- fluxo principal ---------------------------------------------------------
 
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key="fstab",
+                label="Configurar a montagem automatica dos discos",
+                description=(
+                    "Sonda os discos com lsblk, deixa voce marcar quais montar no boot (ja vem marcado o "
+                    "que hoje esta no bloco gerenciado do /etc/fstab), permite trocar o ponto de montagem "
+                    "de cada um e so grava depois de mostrar o preview e voce digitar APLICAR-FSTAB. "
+                    "Faz backup do /etc/fstab antes e reverte sozinho se a validacao falhar."
+                ),
+                detect=self._fstab_block_ready,
+                run=self._configure_fstab,
+            )
+        ]
+
     def apply(self) -> None:
+        super().apply()
+
+    def _fstab_block_ready(self) -> str | bool:
+        entries = self._managed_entries()
+        if not entries:
+            return False
+        return f"{len(entries)} ponto(s) de montagem no fstab"
+
+    def _configure_fstab(self) -> None:
         header(self, self.title, "Escolha o que montar automaticamente no boot")
         partitions = self._candidates()
         if not partitions:

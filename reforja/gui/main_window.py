@@ -26,12 +26,13 @@ from PySide6.QtWidgets import (
 
 from ..cli import render_run_summary, render_status_overview, synthetic_result
 from ..core import StepRunResult
+from ..planning import describe_step_plain
 from ..steps import ALL_GROUPS
 from ..steps_base import Step as _StepBase
 from .askpass import resolve_askpass
 from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
-from .step_runner import StepWorker
+from .step_runner import StepWorker, build_gui_step
 from .terminal import TerminalExecutor, TerminalWidget
 from .updater import CheckWorker, DownloadWorker, UpdateChecker, running_appimage
 
@@ -391,14 +392,34 @@ class MainWindow(QMainWindow):
             return
         self._console.clear()
         self._append(f"[info] {step.title}")
-        desc = getattr(step, "description", "") or "Sem descricao disponivel para esta etapa."
-        self._append(desc)
+        for line in describe_step_plain(step, self._step_tasks(step)):
+            self._append(line)
         self._append("")
-        acoes = "Aplicar executa a etapa. Status apenas verifica o estado."
+        acoes = "Aplicar deixa voce marcar quais itens executar (ja vem marcado o que existe hoje na maquina)."
+        acoes += " Status apenas verifica o estado."
         if self._has_undo(step):
             acoes += " Undo desfaz o que a etapa criou."
         self._append(acoes)
         self._append("Marque a(s) etapa(s) e clique em Aplicar / Status / Undo.")
+
+    def _step_tasks(self, step_cls: type) -> list:
+        """Tarefas declaradas pela etapa, SEM sondar o sistema.
+
+        Sondar aqui (plan()) rodaria comandos — alguns com sudo — so por clicar na
+        etapa. O estado real aparece pre-marcado no dialogo do Aplicar.
+        """
+        try:
+            instance = build_gui_step(
+                step_cls,
+                self._logger,
+                dry_run=True,
+                askpass=self._askpass,
+                interactive_executor=self._terminal_executor,
+                run_dir=self._run_dir,
+            )
+            return list(instance.tasks())
+        except Exception:
+            return []
 
     @staticmethod
     def _has_undo(step: type) -> bool:

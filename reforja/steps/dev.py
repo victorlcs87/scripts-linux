@@ -30,7 +30,7 @@ from ..platform import (
     install_system_package,
     system_installed,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import header
 
 
@@ -60,46 +60,54 @@ class GitStep(Step):
         "Adicionar um repositorio (clonar + configurar autor)",
     )
 
+    # O veredito vem do status() proprio (ferramentas + contas + repos registrados).
+    compliance_from_plan = False
+
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key="ferramentas",
+                label=self._ACTIONS[0],
+                description=(
+                    "Instala o git e o GitHub CLI (gh), que e quem faz o login pelo navegador e cuida "
+                    "da chave SSH por voce."
+                ),
+                detect=lambda: command_exists("git") and command_exists("gh"),
+                run=self._install_tooling,
+            ),
+            StepTask(
+                key="conta",
+                label=self._ACTIONS[1],
+                description=(
+                    "Faz o login no GitHub pelo navegador, gera uma chave SSH dedicada para a conta, "
+                    "envia a chave para o GitHub e cria um alias no ~/.ssh/config (permite ter mais de "
+                    "uma conta na mesma maquina)."
+                ),
+                detect=self._accounts_detail,
+                run=self._login_account,
+            ),
+            StepTask(
+                key="repos",
+                label=self._ACTIONS[2],
+                description=(
+                    "Clona um repositorio da sua conta em ~/repositorios e ja configura nome e e-mail "
+                    "do autor dos commits naquele repositorio. Pode repetir para varios."
+                ),
+                stateless=True,
+                detail="adiciona mais um repositorio",
+                run=self._add_repos,
+            ),
+        ]
+
     def apply(self) -> None:
         header(self, self.title, "GitHub facil: instalar o gh, conectar a conta e clonar repositorios")
-        indices = select_many(
-            "O que voce quer fazer?",
-            self._ACTIONS,
-            self.ctx.logger,
-            detail="Marque uma ou mais acoes. Nada marcado = nada a fazer. Na primeira vez, marque as tres em ordem.",
-        )
-        if not indices:
-            self.mark_skipped("Nenhuma acao selecionada.")
-            return
-        chosen = set(indices)
-        partes: list[str] = []
-        # Cada acao isola a propria falha: reporta a causa e segue para a proxima.
-        if 0 in chosen:
-            try:
-                self._install_tooling()
-                partes.append("ferramentas (git + gh)")
-            except Exception as exc:  # noqa: BLE001 - reportar e continuar
-                self._report_failure("instalar ferramentas", exc)
-        if 1 in chosen:
-            try:
-                msg = self._login_account()
-                if msg:
-                    partes.append(msg)
-            except Exception as exc:  # noqa: BLE001
-                self._report_failure("conectar conta", exc)
-        if 2 in chosen:
-            try:
-                added = self._add_repos()
-                if added:
-                    partes.append("repositorios: " + ", ".join(added))
-            except Exception as exc:  # noqa: BLE001
-                self._report_failure("adicionar repositorio", exc)
-        if partes:
-            resumo = " | ".join(partes)
-            self.mark_done(resumo)
-            self.mark_applied(resumo)
-        else:
-            self.mark_skipped("Nenhuma acao concluida.")
+        super().apply()
+        # O compliance vem do status() completo (contas logadas + repos registrados).
+        self._evaluate_compliance()
+
+    def _accounts_detail(self) -> str | bool:
+        contas = self._logged_accounts()
+        return f"conectado: {', '.join(contas)}" if contas else False
 
     def _report_failure(self, acao: str, exc: Exception) -> None:
         self.ctx.logger.write(f"{badge('erro', Color.ERROR)} ao {acao}: {type(exc).__name__}: {exc}")
@@ -595,7 +603,6 @@ class GitStep(Step):
             self.ctx.runner.run(["gh", "auth", "status"], check=False, action="Contas GitHub conectadas")
         else:
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} GitHub CLI (gh) nao instalado.")
-        contas = self._logged_accounts() if gh_ok else []
 
         repos = self._load_state().get("repos", [])
         self.ctx.logger.write("")
@@ -615,7 +622,12 @@ class GitStep(Step):
             self.ctx.logger.write("Nenhum repositorio configurado ainda.")
 
         self._status_legacy_ssh()
+        self._evaluate_compliance()
 
+    def _evaluate_compliance(self) -> None:
+        gh_ok = command_exists("gh")
+        contas = self._logged_accounts() if gh_ok else []
+        repos_ok = [r for r in self._load_state().get("repos", []) if (Path(r.get("path", "")) / ".git").exists()]
         if gh_ok and contas and repos_ok:
             self.mark_applied(
                 f"gh instalado, {len(contas)} conta(s) e {len(repos_ok)} repo(s) configurados.",
@@ -714,7 +726,35 @@ class AntigravityStep(Step):
         distro = current_distro()
         return distro.family in ("debian", "fedora") and not distro.immutable
 
-    def apply(self) -> None:
+    def tasks(self) -> list[StepTask]:
+        if self._use_native():
+            mgr = "apt" if current_distro().is_debian else "dnf"
+            description = (
+                f"Adiciona o repositorio oficial do Google e instala/atualiza o pacote antigravity pelo {mgr}."
+            )
+        else:
+            description = (
+                "Baixa o tarball oficial do Antigravity (checando o sha256), instala em ~/Antigravity IDE, "
+                "cria o atalho no menu de aplicativos e o comando 'antigravity-ide' no terminal. "
+                "Rodar de novo atualiza para a ultima versao."
+            )
+        return [
+            StepTask(
+                key="antigravity",
+                label="Instalar/atualizar o Antigravity IDE",
+                description=description,
+                detect=self._detect_installed,
+                run=self._install,
+            )
+        ]
+
+    def _detect_installed(self) -> str | bool:
+        if self._use_native():
+            return "instalado via pacote nativo" if system_installed(self.package) else False
+        installed = self._installed_version()
+        return f"instalado (versao {installed})" if installed else False
+
+    def _install(self) -> None:
         if self._use_native():
             self._apply_native()
         else:

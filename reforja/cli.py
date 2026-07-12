@@ -25,6 +25,7 @@ from .core import (
     prompt_user,
 )
 from .dispatch import dispatch_action, finalize_result
+from .planning import collect_plans, prompt_global_selection, render_step_explanation
 from .steps import ALL_STEPS
 from .steps_base import Step, StepContext
 from .tui import TuiDependencyError, choose_multiple, choose_option
@@ -128,15 +129,53 @@ def synthetic_result(step_cls: type[Step], status: str, exc: Exception) -> StepR
     )
 
 
+def plan_selection(steps: list[type[Step]], logger: Logger, *, select_all: bool) -> dict[str, tuple[str, ...]] | None:
+    """Sonda as etapas e abre a tela unica de selecao. None = usuario nao marcou nada."""
+    clear_screen()
+    logger.write(paint("Verificando o que ja esta aplicado nesta maquina...", Color.MUTED))
+    plans = collect_plans(steps, logger, lambda step_cls: build_step(step_cls, logger))
+    if not plans:
+        return {}
+    try:
+        selection = prompt_global_selection(plans, logger, select_all=select_all)
+    except (PromptInterruptedError, TuiDependencyError) as exc:
+        logger.write(f"{badge('aviso', Color.WARNING)} {exc}")
+        return None
+    if not any(selection.values()):
+        logger.write(f"{badge('aviso', Color.WARNING)} Nenhum item marcado; nada a executar.")
+        prompt_return_to_menu(logger)
+        return None
+    return selection
+
+
 def run_all(action: str, logger: Logger) -> None:
-    run_steps(list(ALL_STEPS), action, logger)
+    steps = list(ALL_STEPS)
+    if action != "apply":
+        run_steps(steps, action, logger)
+        return
+    # Aplicar tudo: uma tela so, com tudo pre-marcado.
+    selection = plan_selection(steps, logger, select_all=True)
+    if selection is None:
+        return
+    run_steps(steps, action, logger, selection=selection)
 
 
-def run_steps(steps: list[type[Step]], action: str, logger: Logger) -> None:
+def run_steps(
+    steps: list[type[Step]],
+    action: str,
+    logger: Logger,
+    *,
+    selection: dict[str, tuple[str, ...]] | None = None,
+) -> None:
     clear_screen()
     total = len(steps)
     results: list[StepRunResult] = []
     overall_started = time.monotonic()
+
+    def configure(step: Step) -> None:
+        if selection is not None:
+            step.selection = selection.get(type(step).id, ())
+
     for index, step_cls in enumerate(steps, 1):
         percent = index / total
         logger.write("")
@@ -146,7 +185,7 @@ def run_steps(steps: list[type[Step]], action: str, logger: Logger) -> None:
         )
         logger.write(paint(step_cls.title, Color.TITLE))
         try:
-            result = run_action(step_cls, action, logger)
+            result = run_action(step_cls, action, logger, configure=configure)
             results.append(result)
         except PrivilegeEscalationBlockedError as exc:
             logger.write(f"{badge('erro', Color.ERROR)} {exc}")
@@ -253,7 +292,25 @@ def select_and_run(logger: Logger) -> None:
     action = choose_action(logger, chosen)
     if action is None:
         return
+    if action == "apply":
+        # Antes de aplicar: mostra os itens de cada etapa, ja marcando o que existe hoje.
+        selection = plan_selection(chosen, logger, select_all=False)
+        if selection is None:
+            return
+        run_steps(chosen, action, logger, selection=selection)
+        return
     run_steps(chosen, action, logger)
+
+
+def describe_step(step_cls: type[Step], logger: Logger) -> list[str]:
+    """Explicacao completa da etapa (descricao + tarefas com o estado atual)."""
+    try:
+        step = build_step(step_cls, logger)
+        tasks = step.plan()
+    except Exception as exc:
+        logger.write(f"{badge('aviso', Color.WARNING)} nao consegui sondar esta etapa: {exc}")
+        tasks = []
+    return render_step_explanation(step_cls, tasks)
 
 
 def step_menu(step_cls: type[Step], logger: Logger) -> None:
@@ -265,6 +322,11 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
     ]
     while True:
         clear_screen()
+        # Explica por completo o que a etapa faz e como ela esta agora, antes de agir.
+        explanation = describe_step(step_cls, logger)
+        for line in explanation:
+            logger.write(line)
+        logger.write("")
         try:
             option = choose_option(
                 title=step_cls.title,

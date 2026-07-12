@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import time
+from functools import partial
 from pathlib import Path
 
 from ..core import (
@@ -11,14 +12,13 @@ from ..core import (
     badge,
     capture,
     clean_subprocess_env,
-    select_many,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
     copy_asset,
     fetch_json,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import header
 
 
@@ -72,51 +72,48 @@ class UpdateAppImagesStep(Step):
     # quando nao-vazia, pula o menu de selecao e processa apenas os nomes listados.
     preselect_names: tuple[str, ...] = ()
 
+    def tasks(self) -> list[StepTask]:
+        items = []
+        for app in self._APPIMAGES:
+            if app["installable"]:
+                what = (
+                    f"Instala o {app['name']} (AppImage) em ~/{app['path']}, com atalho no menu e icone. "
+                    "Rodar de novo baixa a ultima versao publicada no GitHub."
+                )
+            else:
+                what = (
+                    f"Atualiza o {app['name']} para a ultima versao do GitHub, se ja estiver instalado. "
+                    "Nao instala do zero."
+                )
+            items.append(
+                StepTask(
+                    key=app["name"],
+                    label=app["name"],
+                    description=what,
+                    detect=partial(self._version_detail, app),
+                    run=partial(self._process_one_task, app),
+                    detail="nao instalado",
+                )
+            )
+        return items
+
     def apply(self) -> None:
         header(self, self.title, "Verificando e atualizando AppImages instalados")
-        if self.preselect_names:
-            selected = [app for app in self._APPIMAGES if app["name"] in self.preselect_names]
-        else:
-            labels = [self._choice_label(app) for app in self._APPIMAGES]
-            indices = select_many(
-                "Quais AppImages instalar/atualizar",
-                labels,
-                self.ctx.logger,
-                detail="Marque um ou mais. Nada marcado = nada a fazer.",
-            )
-            selected = [self._APPIMAGES[i] for i in indices]
-        if not selected:
-            self.mark_skipped("Nenhum AppImage selecionado.")
-            return
-        updated: list[str] = []
-        skipped: list[str] = []
-        missing: list[str] = []
-        failed: list[str] = []
-        for app in selected:
-            # Isola cada AppImage: uma falha (permissao, rede, disco) reporta a causa
-            # e segue para o proximo, sem derrubar a etapa inteira.
-            try:
-                self._process_one(app, updated, skipped, missing)
-            except Exception as exc:  # noqa: BLE001 - reportar e continuar
-                failed.append(app["name"])
-                self.ctx.logger.write(f"{badge('erro', Color.ERROR)} {app['name']}: {type(exc).__name__}: {exc}")
-                self.add_hint(self._failure_hint(app, exc))
-        if failed:
-            self.mark_attention(
-                f"Falha ao processar: {', '.join(failed)}.",
-                attention=failed,
-            )
-            return
-        if not updated and not skipped and missing:
-            self.mark_skipped("Nenhum AppImage instalado para atualizar.")
-            return
-        parts = []
-        if updated:
-            parts.append(f"atualizados: {', '.join(updated)}")
-        if skipped:
-            parts.append(f"ja atualizados: {', '.join(skipped)}")
-        self.mark_done("; ".join(parts) if parts else "Nenhuma atualizacao necessaria.")
-        self.result.applied_items = updated + skipped
+        if self.preselect_names and self.selection is None:
+            self.selection = tuple(self.preselect_names)
+        super().apply()
+
+    def _version_detail(self, app: dict) -> str | bool:
+        installed = self._installed_version(app)
+        return f"instalado: {installed}" if installed else False
+
+    def _process_one_task(self, app: dict) -> None:
+        try:
+            self._process_one(app, [], [], [])
+        except Exception as exc:
+            # Dica especifica do AppImage (permissao, rede, disco) antes de propagar.
+            self.add_hint(self._failure_hint(app, exc))
+            raise
 
     def _installed_version(self, app: dict) -> str | None:
         """Retorna a versao registrada do AppImage instalado, ou None se ausente."""

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from functools import partial
 from pathlib import Path
 
 from .. import hardware
@@ -16,7 +17,6 @@ from ..core import (
     confirm_phrase,
     paint,
     print_lines,
-    select_many,
     write_text,
     write_text_sudo,
 )
@@ -36,7 +36,7 @@ from ..platform import (
     remove_system_packages,
     system_installed,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import InputGroupMixin, ProbeResult, header
 
 # Pacotes de driver por fabricante e familia de distro. Em Arch, os `lib32-*`
@@ -97,14 +97,64 @@ class GpuStep(Step):
     _NVIDIA_MODPROBE = Path("/etc/modprobe.d/nvidia-drm.conf")
     _ENVIRONMENT = Path("/etc/environment")
 
+    # O veredito vem dos probes de diagnostico (glxinfo/vulkaninfo/nvidia-smi),
+    # nao da simples presenca dos pacotes.
+    compliance_from_plan = False
+
+    def tasks(self) -> list[StepTask]:
+        vendors = hardware.gpu_vendors(self._list_gpus())
+        distro = current_distro()
+        present = sorted(vendors & {"amd", "nvidia"})
+        absent = sorted({"amd", "nvidia"} - vendors)
+        items: list[StepTask] = []
+
+        for vendor in present:
+            packages = self._vendor_packages(vendor, distro)
+            listed = ", ".join(packages) if packages else "nenhum pacote mapeado para esta distro"
+            extra = ""
+            if vendor == "nvidia" and distro.is_arch:
+                extra = " Tambem instala o modulo de kernel nvidia-open-dkms."
+            items.append(
+                StepTask(
+                    key=f"driver-{vendor}",
+                    label=f"Instalar os drivers da GPU {vendor.upper()}",
+                    description=f"Instala: {listed}.{extra}",
+                    available=not distro.immutable,
+                    unavailable_reason="sistema imutavel: os drivers vem na imagem base",
+                    detect=partial(self._driver_ready, vendor, distro),
+                    run=partial(self._install_vendor, vendor, distro),
+                )
+            )
+
+        if self._should_cleanup_absent(vendors):
+            for vendor in absent:
+                items.append(
+                    StepTask(
+                        key=f"limpeza-{vendor}",
+                        label=f"Remover residuos do driver {vendor.upper()}",
+                        destructive=True,
+                        description=(
+                            f"Nao ha GPU {vendor.upper()} nesta maquina (desktop de GPU unica). Remove os pacotes "
+                            "que sobraram do fabricante ausente. E destrutivo: pede confirmacao digitada."
+                            + (
+                                " Em NVIDIA/Arch tambem limpa o mkinitcpio, o modprobe.d e o /etc/environment."
+                                if vendor == "nvidia"
+                                else ""
+                            )
+                        ),
+                        detect=partial(self._absent_vendor_clean, vendor),
+                        run=partial(self._remove_absent_vendor, vendor, distro),
+                    )
+                )
+
+        return items
+
     def apply(self) -> None:
         header(self, self.title, "Instala e valida os drivers da GPU")
         vendors = hardware.gpu_vendors(self._list_gpus())
-        distro = current_distro()
-        present = vendors & {"amd", "nvidia"}
-        absent = {"amd", "nvidia"} - vendors
+        present = sorted(vendors & {"amd", "nvidia"})
         self.ctx.logger.write(
-            f"Fabricante(s) de GPU detectado(s): {', '.join(sorted(present)).upper() or 'nenhum dedicado (apenas integrada?)'}."
+            f"Fabricante(s) de GPU detectado(s): {', '.join(present).upper() or 'nenhum dedicado (apenas integrada?)'}."
         )
         if not present:
             announce(
@@ -112,12 +162,7 @@ class GpuStep(Step):
                 "warning",
                 "Nenhuma GPU dedicada AMD/NVIDIA detectada; pulando instalacao de driver dedicado.",
             )
-        for vendor in sorted(present):
-            self._install_vendor(vendor, distro)
-        if self._should_cleanup_absent(vendors):
-            for vendor in sorted(absent):
-                self._remove_absent_vendor(vendor, distro)
-        elif absent:
+        if not self._should_cleanup_absent(vendors) and ({"amd", "nvidia"} - vendors):
             announce(
                 self.ctx.logger,
                 "info",
@@ -127,10 +172,30 @@ class GpuStep(Step):
                 "Maquina hibrida (ou laptop): a limpeza automatica de driver so roda em desktop de GPU unica. "
                 "Se tiver certeza de que quer remover o driver do fabricante ausente, faca manualmente."
             )
-
+        super().apply()
+        # A validacao roda sempre: e diagnostico, nao altera nada, e e ela que dita
+        # o veredito da etapa (por isso compliance_from_plan = False).
         results = self._collect_gpu_results(vendors)
         self._render_gpu_summary(results)
-        self._finalize(results, done=True)
+        self._finalize(results, done=False)
+
+    def _vendor_packages(self, vendor: str, distro) -> list[str]:
+        table = _AMD_INSTALL if vendor == "amd" else _NVIDIA_INSTALL
+        return list(table.get(distro.family, []))
+
+    def _driver_ready(self, vendor: str, distro) -> bool:
+        packages = self._vendor_packages(vendor, distro)
+        if not packages:
+            return False
+        return all(system_installed(pkg) for pkg in packages)
+
+    def _absent_vendor_clean(self, vendor: str) -> str | bool:
+        targets = (
+            [pkg for pkg in _AMD_SPECIFIC if system_installed(pkg)]
+            if vendor == "amd"
+            else installed_packages_matching("nvidia")
+        )
+        return "nada sobrou para remover" if not targets else False
 
     def _should_cleanup_absent(self, vendors: set[str]) -> bool:
         """A remocao do fabricante ausente so e segura em desktop de GPU unica.
@@ -599,98 +664,86 @@ class AppsStep(Step):
             "kind": "system",
         },
     }
+    # Explicacao mostrada ao usuario ao lado de cada app na lista do Aplicar.
+    app_help = {
+        "Steam": "Loja e launcher de jogos da Valve. Em Fedora habilita o RPM Fusion antes; se nao houver pacote nativo, cai no Flatpak.",
+        "Heroic": "Launcher para jogos da Epic Games, GOG e Amazon. Pacote nativo/AUR com fallback para Flatpak.",
+        "Discord": "Chat de voz e texto. Instalado via Flatpak.",
+        "TeamSpeak": "Chat de voz para jogos. Instalado via Flatpak.",
+        "ZapZap": "Cliente de WhatsApp para desktop. Pacote nativo/AUR com fallback para Flatpak.",
+        "ONLYOFFICE": "Suite de escritorio compativel com Word/Excel/PowerPoint. Instalado via Flatpak.",
+        "Google Chrome": "Navegador do Google. Instalado via Flatpak.",
+        "Minecraft Bedrock Launcher": "Roda a versao Bedrock do Minecraft no Linux. Instalado via Flatpak.",
+        "Codex CLI": "Assistente de codigo da OpenAI no terminal. Instala nodejs + npm e o pacote global @openai/codex.",
+        "auto-cpufreq": "Gerencia a frequencia da CPU automaticamente (economiza bateria no notebook). Instala o pacote e habilita o daemon; sem pacote nativo, usa o instalador oficial do GitHub.",
+        "Bitwarden": "Gerenciador de senhas. Instalado via Flatpak.",
+        "Linux Toys": "Colecao de utilitarios e tweaks. Instalado pelo script oficial (curl | bash).",
+        "Solaar": "Gerenciador de dispositivos Logitech (Unifying). Se nao houver pacote nem Flatpak, instala o Piper como alternativa.",
+        "Flatseal": "Editor grafico de permissoes dos apps Flatpak. Instalado via Flatpak.",
+        "LocalSend": "Envia arquivos entre dispositivos na mesma rede (tipo AirDrop). Pacote nativo/AUR com fallback para Flatpak.",
+    }
+
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key=name,
+                label=name,
+                description=self.app_help.get(name, ""),
+                detect=partial(self._detect_source_label, name),
+                run=partial(self._install_app, name),
+                detail="nao instalado",
+            )
+            for name in self.apps
+        ]
+
+    def _detect_source_label(self, name: str) -> str | bool:
+        source = self._detect_install_source(name)
+        return f"instalado via {source}" if source else False
 
     def apply(self) -> None:
         header(self, self.title, "Instalando apps principais e Codex CLI")
-        names = list(self.apps.keys())
-        labels = [self._choice_label(name) for name in names]
-        indices = select_many(
-            "Quais apps instalar/atualizar",
-            labels,
-            self.ctx.logger,
-            detail="Marque um ou mais. Nada marcado = nada a fazer.",
-        )
-        if not indices:
-            self.mark_skipped("Nenhum app selecionado.")
-            return
-        selected = {names[i] for i in indices}
+        super().apply()
 
-        if "Steam" in selected:
-            if self._detect_install_source("Steam"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Steam ja detectado via {self._detect_install_source('Steam')}"
-                )
-            else:
-                self._install_steam()
-        if "Heroic" in selected:
-            if self._detect_install_source("Heroic"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Heroic ja detectado via {self._detect_install_source('Heroic')}"
-                )
-            else:
-                self._install_system_or_flatpak(
-                    "heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl"
-                )
-        if "ZapZap" in selected:
-            if self._detect_install_source("ZapZap"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} ZapZap ja detectado via {self._detect_install_source('ZapZap')}"
-                )
-            else:
-                self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
-        if "Solaar" in selected:
-            if self._detect_install_source("Solaar"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Solaar ja detectado via {self._detect_install_source('Solaar')}"
-                )
-            else:
-                self._install_solaar()
-        if "LocalSend" in selected:
-            if self._detect_install_source("LocalSend"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} LocalSend ja detectado via {self._detect_install_source('LocalSend')}"
-                )
-            else:
-                self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
-        for name, definition in self.apps.items():
-            if definition["kind"] != "flatpak" or name not in selected:
-                continue
-            source = self._detect_install_source(name)
-            if source:
-                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja detectado via {source}")
-                continue
+    def status(self) -> None:
+        header(self, self.title, "Verificando origem detectada de cada app")
+        super().status()
+
+    def _install_app(self, name: str) -> None:
+        definition = self.apps[name]
+        if name == "Steam":
+            self._install_steam()
+        elif name == "Heroic":
+            self._install_system_or_flatpak(
+                "heroic-games-launcher", "heroic-games-launcher-bin", "com.heroicgameslauncher.hgl"
+            )
+        elif name == "ZapZap":
+            self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
+        elif name == "LocalSend":
+            self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
+        elif name == "Solaar":
+            self._install_solaar()
+        elif name == "Linux Toys":
+            self._install_linuxtoys()
+        elif name == "Codex CLI":
+            self._install_codex()
+        elif name == "auto-cpufreq":
+            self._install_auto_cpufreq()
+        elif definition["kind"] == "flatpak":
             header(self, f"{name} - Flatpak")
             install_flatpak(str(definition["flatpak_id"]), self.ctx.runner)
-        if "Linux Toys" in selected:
-            if self._detect_install_source("Linux Toys"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Linux Toys ja detectado via {self._detect_install_source('Linux Toys')}"
-                )
-            else:
-                self._install_linuxtoys()
-        if "Codex CLI" in selected:
-            header(self, "Codex CLI")
-            if self._detect_install_source("Codex CLI"):
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Codex CLI ja detectado via {self._detect_install_source('Codex CLI')}"
-                )
-            else:
-                install_system_package("nodejs", self.ctx.runner)
-                install_system_package("npm", self.ctx.runner)
-                if npm_global_installed("@openai/codex"):
-                    self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} @openai/codex ja instalado globalmente")
-                else:
-                    self.ctx.runner.run(
-                        ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
-                    )
-        if "auto-cpufreq" in selected:
-            self._install_auto_cpufreq()
-        self.mark_done(f"Processados: {', '.join(sorted(selected))}.")
-        self.result.applied_items = sorted(selected)
+        else:
+            raise RuntimeError(f"sem instalador definido para {name}")
 
-    def _choice_label(self, name: str) -> str:
-        source = self._detect_install_source(name)
-        return f"{name} (instalado via {source})" if source else f"{name} (nao instalado)"
+    def _install_codex(self) -> None:
+        header(self, "Codex CLI")
+        install_system_package("nodejs", self.ctx.runner)
+        install_system_package("npm", self.ctx.runner)
+        if npm_global_installed("@openai/codex"):
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} @openai/codex ja instalado globalmente")
+            return
+        self.ctx.runner.run(
+            ["npm", "install", "-g", "@openai/codex"], sudo=True, action="Instalando Codex CLI globalmente"
+        )
 
     def _install_linuxtoys(self) -> None:
         header(self, "Linux Toys", "Instalando pelo script oficial (colecao de utilitarios e tweaks)")
@@ -815,23 +868,6 @@ class AppsStep(Step):
     def _install_system_or_flatpak(self, system_pkg: str, aur_pkg: str | None, flatpak_id: str) -> None:
         install_system_or_flatpak(system_pkg, aur_pkg, flatpak_id, self.ctx.runner)
 
-    def status(self) -> None:
-        header(self, self.title, "Verificando origem detectada de cada app")
-        for name in self.apps:
-            source = self._detect_install_source(name)
-            tone = Color.SUCCESS if source else Color.WARNING
-            self.ctx.logger.write(f"{badge(name.lower().replace(' ', '-'), tone)} {name}: {source or 'ausente'}")
-        present = [name for name in self.apps if self._detect_install_source(name)]
-        missing = [name for name in self.apps if not self._detect_install_source(name)]
-        if not missing:
-            self.mark_applied("Todos os apps monitorados estao presentes.", items=present)
-        elif present:
-            self.mark_attention(
-                f"Alguns apps estao presentes e outros faltam: {', '.join(missing)}.", attention=missing
-            )
-        else:
-            self.mark_pending("Nenhum dos apps monitorados foi detectado.", missing=missing)
-
     def _detect_install_source(self, app_name: str) -> str | None:
         definition = self.apps[app_name]
         for alias in definition["system_aliases"]:
@@ -889,19 +925,84 @@ class SunshineStep(InputGroupMixin, Step):
     def user_service_file(self) -> Path:
         return self.ctx.user.home / ".config/systemd/user/sunshine.service"
 
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key="pacote",
+                label="Instalar o Sunshine",
+                description=(
+                    "Instala o pacote sunshine, o servidor de streaming de jogos que o Moonlight "
+                    "acessa a partir de outro PC, TV ou celular."
+                ),
+                detect=lambda: system_installed("sunshine") or command_exists("sunshine"),
+                run=lambda: install_system_package("sunshine", self.ctx.runner),
+            ),
+            StepTask(
+                key="grupo-input",
+                label="Adicionar seu usuario ao grupo 'input'",
+                description=(
+                    "Sem isso o Sunshine nao consegue emular teclado/mouse/controle do cliente remoto. "
+                    "Exige logout/login para valer."
+                ),
+                detect=lambda: self._user_in_group("input"),
+                run=self._ensure_input_group_task,
+            ),
+            StepTask(
+                key="udev",
+                label="Criar a regra udev do /dev/uinput",
+                description=(
+                    f"Escreve {self.udev_rule_file} dando ao grupo input acesso ao uinput (necessario para "
+                    "o controle remoto funcionar) e recarrega as regras."
+                ),
+                detect=self._udev_rule_ready,
+                run=self._write_udev_rule,
+            ),
+            StepTask(
+                key="autostart",
+                label="Iniciar o Sunshine junto com o KDE",
+                description=f"Cria {self.autostart_file} para o Sunshine subir sozinho no login.",
+                detect=self._autostart_ready,
+                run=self._write_autostart,
+            ),
+            StepTask(
+                key="launcher",
+                label="Criar o atalho no menu de aplicativos",
+                description="Cria um .desktop do Sunshine caso o pacote do sistema nao traga um.",
+                detect=lambda: self._find_existing_launcher() is not None,
+                run=self._ensure_menu_launcher,
+            ),
+            StepTask(
+                key="ufw",
+                label="Liberar as portas do Sunshine no firewall",
+                description=(
+                    "Libera no UFW as portas 47984-47990/tcp, 48010/tcp e 47998-48000/udp usadas pelo "
+                    "Moonlight. Se o UFW nao estiver ativo, nada e feito."
+                ),
+                detect=self._ufw_rules_ready,
+                run=self._configure_ufw,
+            ),
+            StepTask(
+                key="iniciar",
+                label="Iniciar o Sunshine agora",
+                description="Sobe o Sunshine em segundo plano; a interface web fica em https://localhost:47990.",
+                detect=self._sunshine_running,
+                run=self._start_sunshine,
+            ),
+        ]
+
     def apply(self) -> None:
         header(self, self.title, "Instalando Sunshine e integrando com KDE/Moonlight")
-        install_system_package("sunshine", self.ctx.runner)
-        input_group_ready = self._ensure_input_group()
-        self._write_udev_rule()
-        self._write_autostart()
-        self._ensure_menu_launcher()
-        self._configure_ufw()
-        self._start_sunshine()
-        if not input_group_ready:
+        super().apply()
+
+    def _autostart_ready(self) -> bool:
+        return (
+            self.autostart_file.exists()
+            and self.autostart_file.read_text(encoding="utf-8", errors="ignore") == self._autostart_content()
+        )
+
+    def _ensure_input_group_task(self) -> None:
+        if not self._ensure_input_group():
             self.mark_manual(f"Execute logout/login ou reinicie para o grupo input valer para {self.ctx.user.name}.")
-            return
-        self.mark_done("Sunshine instalado/configurado com autostart, UFW e integracao KDE.")
 
     def _write_udev_rule(self) -> None:
         if self._udev_rule_ready():

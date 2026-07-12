@@ -18,7 +18,7 @@ from ..platform import (
     install_system_or_aur,
     system_installed,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import InputGroupMixin, header
 
 
@@ -36,32 +36,60 @@ class KdeStep(InputGroupMixin, Step):
         "Fixar Num Lock (KDE + SDDM)",
     )
 
+    def tasks(self) -> list[StepTask]:
+        return [
+            StepTask(
+                key="gestos",
+                label=self._ITEMS[0],
+                description=(
+                    "Instala o libinput-gestures e configura gestos de 3 dedos no touchpad: deslizar para "
+                    "cima abre a visao geral das janelas (como no GNOME), para baixo mostra a area de "
+                    "trabalho, e para os lados troca de area de trabalho. Adiciona voce ao grupo 'input'."
+                ),
+                available=hardware.has_touchpad(),
+                unavailable_reason="nenhum touchpad detectado nesta maquina",
+                detect=self._gestures_ready,
+                run=self._run_gestures,
+            ),
+            StepTask(
+                key="numlock",
+                label=self._ITEMS[1],
+                description=(
+                    "Deixa o Num Lock ligado por padrao: no KDE (kcminputrc) e tambem na tela de login, "
+                    f"escrevendo {self.sddm_file}."
+                ),
+                detect=self._numlock_ready,
+                run=self._run_numlock,
+            ),
+        ]
+
     def apply(self) -> None:
         header(self, self.title, "Gestos do touchpad e Num Lock num unico passo")
-        indices = select_many(
-            "Quais ajustes aplicar?",
-            self._ITEMS,
-            self.ctx.logger,
-            detail="Marque um ou mais. Nada marcado = nada a fazer.",
+        super().apply()
+
+    def _run_gestures(self) -> None:
+        # _apply_gestures devolve (status, mensagem); so o 'manual' precisa subir.
+        status, message = self._apply_gestures()
+        if status == "manual":
+            self.mark_manual(message)
+
+    def _run_numlock(self) -> None:
+        status, message = self._apply_numlock()
+        if status == "manual":
+            self.mark_manual(message)
+
+    def _gestures_ready(self) -> bool:
+        config_file = self.ctx.user.home / ".config/libinput-gestures.conf"
+        return (
+            system_installed("libinput-gestures")
+            and self._user_in_group("input")
+            and self._libinput_gestures_running()
+            and self._libinput_config_ready(config_file)
+            and (self.ctx.user.home / ".local/bin/kde-gnome-like-overview").exists()
         )
-        if not indices:
-            self.mark_skipped("Nenhum ajuste selecionado.")
-            return
-        chosen = set(indices)
-        resultados: list[tuple[str, str]] = []
-        if 0 in chosen:
-            resultados.append(self._apply_gestures())
-        if 1 in chosen:
-            resultados.append(self._apply_numlock())
-        mensagens = " | ".join(msg for _status, msg in resultados)
-        estados = {status for status, _msg in resultados}
-        if "manual" in estados:
-            self.mark_manual(mensagens)
-        elif estados == {"skipped"}:
-            self.mark_skipped(mensagens)
-        else:
-            self.mark_done(mensagens)
-            self.mark_applied(mensagens)
+
+    def _numlock_ready(self) -> bool:
+        return self._kde_numlock_ready(self.ctx.user.home / ".config/kcminputrc") and self.sddm_file.exists()
 
     # ------------------------------------------------------------------ gestos
 

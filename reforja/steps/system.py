@@ -17,7 +17,7 @@ from ..platform import (
     system_package_exists,
     update_system,
 )
-from ..steps_base import Step
+from ..steps_base import Step, StepTask
 from ._common import header
 
 
@@ -30,11 +30,58 @@ class ShellyStep(Step):
         "Rode antes das demais etapas."
     )
 
+    def tasks(self) -> list[StepTask]:
+        distro = current_distro()
+        gerenciador = {"arch": "pacman", "fedora": "dnf/rpm-ostree", "debian": "apt"}.get(distro.family, "gerenciador")
+        return [
+            StepTask(
+                key="atualizar",
+                label="Atualizar todos os pacotes do sistema",
+                description=(
+                    f"Roda a atualizacao completa do sistema pelo {gerenciador}. Pode demorar e pode exigir "
+                    "reinicio se atualizar o kernel."
+                ),
+                stateless=True,
+                detail="sempre disponivel",
+                run=lambda: self._update_system_first(distro),
+            ),
+            StepTask(
+                key="flatpak",
+                label="Preparar Flatpak + repositorio Flathub",
+                description=(
+                    "Instala o flatpak e adiciona o remote Flathub, de onde vem a maioria dos apps das "
+                    "outras etapas (e a unica fonte em sistemas imutaveis)."
+                ),
+                detect=lambda: command_exists("flatpak") and self._flathub_ready(),
+                run=lambda: ensure_flatpak(self.ctx.runner),
+            ),
+            StepTask(
+                key="appimage-fuse",
+                label="Habilitar suporte a AppImage (FUSE)",
+                description=(
+                    "Instala a biblioteca FUSE que os AppImages precisam para rodar (fuse2 no Arch, "
+                    "fuse/fuse-libs no Fedora, libfuse2 no Debian/Ubuntu)."
+                ),
+                detect=self._appimage_fuse_ready,
+                run=self._ensure_appimage_fuse,
+            ),
+            StepTask(
+                key="aur",
+                label="Instalar um helper AUR (paru ou yay)",
+                description=(
+                    "O helper AUR permite instalar pacotes da AUR nas outras etapas (Heroic, ZapZap, "
+                    "auto-cpufreq...). So faz sentido em Arch/CachyOS."
+                ),
+                available=distro.is_arch and not distro.immutable,
+                unavailable_reason="a AUR so existe em Arch/CachyOS mutavel",
+                detect=aur_helper,
+                run=self._ensure_aur_helper,
+            ),
+        ]
+
     def apply(self) -> None:
         distro = current_distro()
-        self._update_system_first(distro)
         header(self, self.title, "Preparando base de pacotes, Flatpak e suporte AppImage")
-        ready_before = self._basic_support_ready()
         if distro.immutable:
             sistema = "SteamOS" if distro.is_arch else "Fedora atomico/Bazzite"
             self.ctx.logger.write(
@@ -56,25 +103,15 @@ class ShellyStep(Step):
             self.ctx.logger.write(
                 f"{badge('info', Color.INFO)} Debian/Ubuntu detectado. Vou usar apt e opcoes do sistema, sem Shelly/AUR."
             )
-        ensure_flatpak(self.ctx.runner)
-        self._ensure_appimage_fuse()
-        if distro.is_arch and not distro.immutable:
-            self._ensure_aur_helper()
+        super().apply()
+        if self.result.status == "skipped":
+            # Usuario nao marcou nada: nao abrir o fallback assistido por conta propria.
+            return
         if self._basic_support_ready():
-            if ready_before:
-                self.ctx.logger.write(
-                    f"{badge('ok', Color.SUCCESS)} Flatpak, flathub e suporte AppImage ja estavam prontos."
-                )
-                self.mark_skipped("Flatpak, flathub e suporte AppImage ja estavam prontos.")
-                self.mark_applied("Flatpak, flathub e suporte AppImage estao prontos.")
-            else:
-                self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Ecossistema preparado com sucesso.")
-                self.mark_done("Ecossistema base preparado com sucesso.")
-                self.mark_applied("Ecossistema base preparado com sucesso.")
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Ecossistema base pronto.")
             return
         if not distro.is_arch or distro.immutable:
             self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos do ecossistema.")
-            self.mark_pending("Faltam requisitos do ecossistema.", missing=self._missing_basic_support())
             return
         self.ctx.logger.write(
             f"{badge('aviso', Color.WARNING)} Ainda faltam requisitos. Vou abrir o fallback assistido do Shelly."

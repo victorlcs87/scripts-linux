@@ -43,7 +43,10 @@ def _select_all(monkeypatch):
     def _all(prompt, options, logger, *, detail=None, preselected=()):
         return list(range(len(list(options))))
 
-    for module in ("gaming", "appimage", "browser", "kde"):
+    # steps_base.select_many atende o apply dirigido por tarefas (todas as etapas);
+    # os modulos abaixo ainda chamam select_many direto nos fluxos interativos (undo, fstab).
+    monkeypatch.setattr("reforja.steps_base.select_many", _all)
+    for module in ("dev", "kde", "storage"):
         monkeypatch.setattr(f"reforja.steps.{module}.select_many", _all)
 
 
@@ -314,7 +317,8 @@ def test_ecosystem_step_on_debian_does_not_open_shelly_or_require_aur(tmp_path: 
 
     assert "Debian/Ubuntu detectado" in log
     assert "Shelly UI" not in log
-    assert "helper AUR" not in log
+    # A tarefa do helper AUR aparece, mas explicitamente como indisponivel nesta distro.
+    assert "indisponivel: a AUR so existe em Arch/CachyOS mutavel" in log
     assert step.result.compliance == "aplicado"
 
 
@@ -587,12 +591,12 @@ class _RecordingRunner(Runner):
 
 def test_git_step_menu_empty_is_skipped(tmp_path: Path, monkeypatch) -> None:
     step = GitStep(make_ctx(tmp_path))
-    monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [])
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [])
 
     step.apply()
 
     assert step.result.status == "skipped"
-    assert "Nenhuma acao selecionada" in step.result.message
+    assert "Nenhum item marcado" in step.result.message
 
 
 def test_git_step_add_repo_clones_configures_author_and_records_state(tmp_path: Path, monkeypatch) -> None:
@@ -601,7 +605,9 @@ def test_git_step_add_repo_clones_configures_author_and_records_state(tmp_path: 
     ctx.runner = runner
     step = GitStep(ctx)
 
-    # So a acao "Adicionar repositorio" (indice 2) marcada.
+    # So a acao "Adicionar repositorio" (indice 2) marcada no menu da etapa.
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [2])
+    # Sub-menus internos de _add_repos (alias/conta/repo) continuam em dev.select_many.
     monkeypatch.setattr("reforja.steps.dev.select_many", lambda *a, **k: [2])
     # gh ausente no ambiente de teste: sem contas nem listagem de repos.
     monkeypatch.setattr("reforja.steps.dev.command_exists", lambda name: False)
@@ -1030,7 +1036,7 @@ def test_apps_detect_install_source_prefers_existing_flatpak(tmp_path: Path, mon
 def test_apps_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
-    monkeypatch.setattr("reforja.steps.gaming.select_many", lambda *a, **k: [])
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [])
     step.apply()
     assert step.result.status == "skipped"
     assert "@openai/codex" not in ctx.logger.path.read_text(encoding="utf-8")
@@ -1041,7 +1047,7 @@ def test_apps_apply_respeita_selecao_parcial(tmp_path: Path, monkeypatch) -> Non
     step = AppsStep(ctx)
     # Seleciona apenas o "Codex CLI" (indice na ordem de step.apps).
     codex_index = list(step.apps).index("Codex CLI")
-    monkeypatch.setattr("reforja.steps.gaming.select_many", lambda *a, **k: [codex_index])
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [codex_index])
     monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
     monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
@@ -1050,13 +1056,14 @@ def test_apps_apply_respeita_selecao_parcial(tmp_path: Path, monkeypatch) -> Non
     log = ctx.logger.path.read_text(encoding="utf-8")
     assert "@openai/codex" in log  # Codex foi processado
     assert "com.discordapp.Discord" not in log  # Discord (nao selecionado) foi ignorado
-    assert step.result.applied_items == ["Codex CLI"]
+    assert step.result.status == "done"
+    assert "1 item(ns) processado(s)" in step.result.message
 
 
 def test_appimages_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = UpdateAppImagesStep(ctx)
-    monkeypatch.setattr("reforja.steps.appimage.select_many", lambda *a, **k: [])
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [])
     step.apply()
     assert step.result.status == "skipped"
 
@@ -1116,7 +1123,8 @@ def test_step15_failure_on_one_item_does_not_abort(tmp_path: Path, monkeypatch) 
     # Ambos os itens foram processados; a falha de um nao abortou a etapa.
     assert processed == ["Hydra Launcher", "Reforja"]
     assert step.result.compliance == "atencao"
-    assert "Hydra Launcher" in step.result.summary
+    assert "Hydra Launcher" in step.result.attention_items
+    assert "Hydra Launcher" in step.result.message
     assert "[erro]" in log
     assert any("chown" in hint for hint in step.result.hints)
 
@@ -1667,13 +1675,17 @@ def test_kde_apply_gestures_skips_machine_without_touchpad(tmp_path: Path, monke
         "reforja.steps.kde.install_system_or_aur",
         lambda *_args, **_kwargs: pytest.fail("nao deveria instalar sem touchpad"),
     )
-    # So o item de gestos marcado no menu do passo fundido.
-    monkeypatch.setattr("reforja.steps.kde.select_many", lambda *a, **k: [0])
+    # Sem touchpad, a tarefa de gestos nem chega a ser oferecida: vem como indisponivel.
+    gestos = {task.key: task for task in step.plan()}["gestos"]
+    assert gestos.state == "indisponivel"
+    assert "touchpad" in gestos.unavailable_reason
 
+    # Aplicar a etapa nao instala nada de gestos: so o Num Lock, que e o unico item
+    # aplicavel aqui. O motivo do descarte dos gestos fica registrado no log.
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")
 
-    assert step.result.status == "skipped"
+    assert step.result.status == "done"
     assert "nenhum touchpad detectado" in log
 
 
@@ -1800,7 +1812,7 @@ def test_appimages_preselecao_pula_menu_e_processa_so_reforja(tmp_path: Path, mo
     def fail_select(*_args, **_kwargs):
         raise AssertionError("select_many nao deveria ser chamado com preselecao")
 
-    monkeypatch.setattr("reforja.steps.appimage.select_many", fail_select)
+    monkeypatch.setattr("reforja.steps_base.select_many", fail_select)
     fake_fetch, fake_capture, _calls = _fake_github_release("v1.0.9", "Reforja-1.0.9-x86_64.AppImage")
     monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
     monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
@@ -1823,7 +1835,9 @@ def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> N
     target_index = next(i for i, s in enumerate(ALL_STEPS) if s.id == "15")
     monkeypatch.setattr("reforja.cli.choose_multiple", lambda **_kwargs: [target_index])
     monkeypatch.setattr("reforja.cli.choose_action", lambda *_a, **_k: "apply")
-    monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger: ran.append((steps, action)))
+    # A tela de selecao de itens sonda a maquina real; nos testes ela e neutralizada.
+    monkeypatch.setattr("reforja.cli.plan_selection", lambda *_a, **_k: {})
+    monkeypatch.setattr("reforja.cli.run_steps", lambda steps, action, _logger, **_k: ran.append((steps, action)))
 
     select_and_run(logger)
 
@@ -1916,6 +1930,7 @@ def test_run_all_clears_screen_before_first_step(tmp_path: Path, monkeypatch) ->
     )
     monkeypatch.setattr("reforja.cli.render_run_summary", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("reforja.cli.prompt_return_to_menu", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("reforja.cli.plan_selection", lambda *_a, **_k: {})
 
     run_all("apply", logger)
 
