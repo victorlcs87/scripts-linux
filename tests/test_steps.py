@@ -8,6 +8,7 @@ import pytest
 from reforja import hardware
 from reforja.cli import (
     choose_step,
+    install_reforja_gui,
     main_menu,
     render_run_summary,
     render_status_overview,
@@ -1728,8 +1729,8 @@ def test_choose_step_returns_selected_stage(tmp_path: Path, monkeypatch) -> None
 
 def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    # opcao 0 = Aplicar tudo; opcao 3 = Sair (menu plano de 4 itens)
-    choices = iter([0, 3])
+    # opcao 0 = Aplicar tudo; opcao 4 = Sair (menu plano de 5 itens)
+    choices = iter([0, 4])
     called: list[str] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
@@ -1743,8 +1744,8 @@ def test_main_menu_runs_selected_bulk_action(tmp_path: Path, monkeypatch) -> Non
 
 def test_main_menu_opens_executar_etapas(tmp_path: Path, monkeypatch) -> None:
     logger = Logger(tmp_path, "test")
-    # opcao 2 = Executar etapas...; depois opcao 3 = Sair
-    choices = iter([2, 3])
+    # opcao 2 = Executar etapas...; depois opcao 4 = Sair
+    choices = iter([2, 4])
     opened: list[bool] = []
 
     monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
@@ -1754,6 +1755,63 @@ def test_main_menu_opens_executar_etapas(tmp_path: Path, monkeypatch) -> None:
     main_menu(logger)
 
     assert opened == [True]
+
+
+def test_main_menu_instala_gui_do_reforja(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    # opcao 3 = Instalar GUI do Reforja no sistema; depois opcao 4 = Sair
+    choices = iter([3, 4])
+    installed: list[bool] = []
+
+    monkeypatch.setattr("reforja.cli.clear_screen", lambda: None)
+    monkeypatch.setattr("reforja.cli.choose_option", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr("reforja.cli.install_reforja_gui", lambda _logger: installed.append(True))
+
+    main_menu(logger)
+
+    assert installed == [True]
+
+
+def test_install_reforja_gui_dispara_passo_15_preselecionado(tmp_path: Path, monkeypatch) -> None:
+    logger = Logger(tmp_path, "test")
+    captured: dict = {}
+
+    def fake_run_action_safe(step_cls, action, _logger, *, configure=None):
+        step = step_cls(make_ctx(tmp_path))
+        if configure is not None:
+            configure(step)
+        captured["id"] = step_cls.id
+        captured["action"] = action
+        captured["preselect"] = step.preselect_names
+        return None
+
+    monkeypatch.setattr("reforja.cli.run_action_safe", fake_run_action_safe)
+
+    install_reforja_gui(logger)
+
+    assert captured == {"id": "15", "action": "apply", "preselect": ("Reforja",)}
+
+
+def test_appimages_preselecao_pula_menu_e_processa_so_reforja(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)  # dry-run
+    step = UpdateAppImagesStep(ctx)
+    step.preselect_names = ("Reforja",)
+
+    def fail_select(*_args, **_kwargs):
+        raise AssertionError("select_many nao deveria ser chamado com preselecao")
+
+    monkeypatch.setattr("reforja.steps.appimage.select_many", fail_select)
+    fake_fetch, fake_capture, _calls = _fake_github_release("v1.0.9", "Reforja-1.0.9-x86_64.AppImage")
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", fake_fetch)
+    monkeypatch.setattr("reforja.steps.appimage.capture", fake_capture)
+    monkeypatch.setattr("reforja.steps.appimage.copy_asset", lambda *_a, **_k: None)
+    monkeypatch.setattr("reforja.steps.appimage.install_desktop_entry", lambda *_a, **_k: None)
+
+    step.apply()
+    log = ctx.logger.path.read_text(encoding="utf-8")
+
+    assert "Reforja: nao instalado; instalando." in log
+    assert "Hydra" not in log  # nao preselecionado: nem processado, nem listado
 
 
 def test_select_and_run_runs_only_chosen_steps(tmp_path: Path, monkeypatch) -> None:

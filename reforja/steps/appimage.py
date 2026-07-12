@@ -68,19 +68,26 @@ class UpdateAppImagesStep(Step):
         },
     ]
 
+    # Preselecao programatica (ex.: opcao "Instalar GUI do Reforja" do menu principal):
+    # quando nao-vazia, pula o menu de selecao e processa apenas os nomes listados.
+    preselect_names: tuple[str, ...] = ()
+
     def apply(self) -> None:
         header(self, self.title, "Verificando e atualizando AppImages instalados")
-        labels = [self._choice_label(app) for app in self._APPIMAGES]
-        indices = select_many(
-            "Quais AppImages instalar/atualizar",
-            labels,
-            self.ctx.logger,
-            detail="Marque um ou mais. Nada marcado = nada a fazer.",
-        )
-        if not indices:
+        if self.preselect_names:
+            selected = [app for app in self._APPIMAGES if app["name"] in self.preselect_names]
+        else:
+            labels = [self._choice_label(app) for app in self._APPIMAGES]
+            indices = select_many(
+                "Quais AppImages instalar/atualizar",
+                labels,
+                self.ctx.logger,
+                detail="Marque um ou mais. Nada marcado = nada a fazer.",
+            )
+            selected = [self._APPIMAGES[i] for i in indices]
+        if not selected:
             self.mark_skipped("Nenhum AppImage selecionado.")
             return
-        selected = [self._APPIMAGES[i] for i in indices]
         updated: list[str] = []
         skipped: list[str] = []
         missing: list[str] = []

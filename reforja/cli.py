@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .core import (
@@ -73,18 +74,32 @@ def step_by_id(step_id: str) -> type[Step] | None:
     return None
 
 
-def run_action(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult:
+def run_action(
+    step_cls: type[Step],
+    action: str,
+    logger: Logger,
+    *,
+    configure: Callable[[Step], None] | None = None,
+) -> StepRunResult:
     step = build_step(step_cls, logger, dry_run=action == "dry-run")
+    if configure is not None:
+        configure(step)
     started = time.monotonic()
     dispatch_action(step, action)
     return finalize_result(step, action, time.monotonic() - started)
 
 
-def run_action_safe(step_cls: type[Step], action: str, logger: Logger) -> StepRunResult | None:
+def run_action_safe(
+    step_cls: type[Step],
+    action: str,
+    logger: Logger,
+    *,
+    configure: Callable[[Step], None] | None = None,
+) -> StepRunResult | None:
     # A pausa "ENTER para voltar" acontece UMA vez, no finally, para todo desfecho.
     try:
         clear_screen()
-        result = run_action(step_cls, action, logger)
+        result = run_action(step_cls, action, logger, configure=configure)
         render_step_summary(logger, action, result)
         return result
     except (PrivilegeEscalationBlockedError, CommandInterruptedError) as exc:
@@ -276,12 +291,27 @@ def step_menu(step_cls: type[Step], logger: Logger) -> None:
             return
 
 
+def install_reforja_gui(logger: Logger) -> None:
+    """Instala/atualiza a GUI do Reforja no sistema: baixa o AppImage mais recente
+    das GitHub Releases e cria o atalho .desktop + icone (via passo 15, so o Reforja)."""
+    step_cls = step_by_id("15")
+    if step_cls is None:
+        logger.write(f"{badge('erro', Color.ERROR)} etapa de AppImages nao encontrada.")
+        return
+
+    def only_reforja(step: Step) -> None:
+        step.preselect_names = ("Reforja",)
+
+    run_action_safe(step_cls, "apply", logger, configure=only_reforja)
+
+
 def main_menu(logger: Logger) -> None:
     options = [
         MenuOption("1", "Aplicar tudo"),
         MenuOption("2", "Status geral"),
         MenuOption("3", "Executar etapas..."),
-        MenuOption("4", "Sair"),
+        MenuOption("4", "Instalar GUI do Reforja no sistema"),
+        MenuOption("5", "Sair"),
     ]
     while True:
         clear_screen()
@@ -308,6 +338,8 @@ def main_menu(logger: Logger) -> None:
         elif option == 2:
             select_and_run(logger)
         elif option == 3:
+            install_reforja_gui(logger)
+        elif option == 4:
             return
 
 

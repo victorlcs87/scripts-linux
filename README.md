@@ -91,11 +91,15 @@ O menu principal e plano e direto:
 - `Aplicar tudo`
 - `Status geral`
 - `Executar etapas...`
+- `Instalar GUI do Reforja no sistema`
 - `Sair`
 
 Em `Executar etapas...` voce ve a lista de etapas (so pelo titulo) e **marca uma ou varias** por
 checkbox; em seguida escolhe a acao **uma unica vez**: `Aplicar`, `Status` ou `Undo`. Para atualizar
 apenas os AppImages, por exemplo, marque so "Atualizar AppImages" e escolha `Aplicar` — nada mais roda.
+
+`Instalar GUI do Reforja no sistema` e um atalho: baixa o AppImage mais recente do Reforja das
+GitHub Releases e cria o atalho no menu de aplicativos (mesmo mecanismo do passo 15, so o Reforja).
 
 Cada wrapper (`scripts/NN-*.sh`) continua abrindo o menu da propria etapa, e
 `python -m reforja step <id> <acao>` segue funcionando (o `id` interno e preservado para scripting).
