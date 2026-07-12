@@ -110,6 +110,8 @@ class GuiInteraction(QObject):
         layout.addWidget(buttons)
         dialog.resize(420, 360)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            # Cancelar NAO e "desmarquei tudo": aborta a etapa.
+            req["cancelled"] = True
             req["result"] = []
             return
         req["result"] = [
@@ -163,4 +165,6 @@ class GuiInteraction(QObject):
             detail=detail,
             preselected=list(preselected),
         )
+        if req["cancelled"]:
+            raise PromptInterruptedError(f"selecao cancelada pelo usuario: {prompt}")
         return list(req["result"])

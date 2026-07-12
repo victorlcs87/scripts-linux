@@ -226,6 +226,7 @@ class Step:
             self.mark_skipped("Nenhum item marcado; nada foi alterado.")
             if self.compliance_from_plan:
                 self.report_plan(self.plan(), quiet=True)
+                self._prefix_summary_with_outcome()
             return
 
         manual_before = self.result.manual_events
@@ -260,6 +261,18 @@ class Step:
         # Reconfere o estado real depois de agir.
         if self.compliance_from_plan:
             self.report_plan(self.plan(), quiet=True, attention=failures)
+            self._prefix_summary_with_outcome()
+
+    def _prefix_summary_with_outcome(self) -> None:
+        """No apply, o resumo tem de dizer o que FOI FEITO antes do estado da maquina.
+
+        Sem isso um 'nada foi alterado' aparecia no resumo final como
+        '2/3 itens aplicados', que se le como se a etapa tivesse feito o trabalho.
+        """
+        estado = self.result.summary
+        feito = self.result.message
+        if feito and estado:
+            self.result.summary = f"{feito} Estado atual: {estado}"
 
     def report_plan(
         self,
@@ -290,13 +303,15 @@ class Step:
         total = len(applied) + len(missing)
         if attention_items:
             self.mark_attention(
-                f"{len(applied)}/{total} item(ns) aplicados; revise o que precisa de atencao.",
+                f"{len(applied)} de {total} item(ns) presentes; revise o que precisa de atencao.",
                 attention=attention_items,
             )
         elif missing:
-            self.mark_pending(f"{len(applied)}/{total} item(ns) aplicados.", missing=missing)
+            self.mark_pending(f"{len(applied)} de {total} item(ns) presentes na maquina.", missing=missing)
         else:
-            self.mark_applied(f"Todos os {total} item(ns) aplicados." if total else "Nada a aplicar.", items=applied)
+            self.mark_applied(
+                f"Todos os {total} item(ns) presentes na maquina." if total else "Nada a aplicar.", items=applied
+            )
 
     # ------------------------------------------------------------------
     def mark_done(self, message: str = "") -> None:

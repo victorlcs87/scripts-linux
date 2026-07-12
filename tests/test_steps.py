@@ -16,11 +16,12 @@ from reforja.cli import (
     select_and_run,
     step_menu,
 )
-from reforja.core import Logger, MenuOption, Runner, StepRunResult, UserInfo
+from reforja.core import Logger, MenuOption, PromptInterruptedError, Runner, StepRunResult, UserInfo
 from reforja.steps import (
     ALL_STEPS,
     AntigravityStep,
     AppsStep,
+    BrowserStep,
     FstabStep,
     GitStep,
     GpuStep,
@@ -1066,6 +1067,33 @@ def test_appimages_apply_nada_selecionado_pula(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [])
     step.apply()
     assert step.result.status == "skipped"
+
+
+def test_apply_cancelado_no_dialogo_nao_conta_como_executado(tmp_path: Path, monkeypatch) -> None:
+    """Cancelar a selecao aborta a etapa; nao pode virar 'nada marcado' e seguir."""
+    ctx = make_ctx(tmp_path)
+    step = BrowserStep(ctx)
+
+    def cancela(*_a, **_k):
+        raise PromptInterruptedError("selecao cancelada pelo usuario")
+
+    monkeypatch.setattr("reforja.steps_base.select_many", cancela)
+
+    with pytest.raises(PromptInterruptedError):
+        step.apply()
+
+
+def test_apply_sem_nada_marcado_nao_se_apresenta_como_trabalho_feito(tmp_path: Path, monkeypatch) -> None:
+    """O resumo tem de dizer que nada foi alterado ANTES do estado da maquina."""
+    ctx = make_ctx(tmp_path)
+    step = BrowserStep(ctx)
+    monkeypatch.setattr("reforja.steps_base.select_many", lambda *a, **k: [])
+
+    step.apply()
+
+    assert step.result.status == "skipped"
+    assert step.result.summary.startswith("Nenhum item marcado; nada foi alterado.")
+    assert "Estado atual:" in step.result.summary
 
 
 def test_apps_manage_bitwarden_and_linuxtoys_but_not_hydra(tmp_path: Path) -> None:
