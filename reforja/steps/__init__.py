@@ -2,6 +2,7 @@
 
 from ..steps_base import Step, StepGroup
 from .appimage import UpdateAppImagesStep
+from .backup import BackupStep
 from .browser import BrowserStep
 from .dev import AntigravityStep, GitStep
 from .gaming import AppsStep, GpuStep, SunshineStep
@@ -23,6 +24,7 @@ ALL_STEPS: tuple[type[Step], ...] = (
     SunshineStep,
     HardwareStep,
     UpdateAppImagesStep,
+    BackupStep,
 )
 
 # Camada de categorias para navegacao (CLI/GUI). Orthogonal a ALL_STEPS, que
@@ -35,7 +37,7 @@ ALL_GROUPS: tuple[StepGroup, ...] = (
     StepGroup("dev", "Dev", (GitStep, AntigravityStep)),
     StepGroup("jogos", "Jogos e streaming", (GpuStep, SunshineStep)),
     StepGroup("kde", "Desktop / KDE", (KdeStep,)),
-    StepGroup("armazenamento", "Armazenamento", (RcloneStep, FstabStep)),
+    StepGroup("armazenamento", "Armazenamento", (RcloneStep, FstabStep, BackupStep)),
     StepGroup("info", "Hardware / Info", (HardwareStep,)),
 )
 
@@ -52,6 +54,7 @@ __all__ = [
     "SunshineStep",
     "HardwareStep",
     "UpdateAppImagesStep",
+    "BackupStep",
     "ALL_STEPS",
     "ALL_GROUPS",
     "StepGroup",

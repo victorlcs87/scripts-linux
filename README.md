@@ -126,6 +126,7 @@ Nos menus interativos, use as setas para navegar e `espaco`/`Enter` para marcar 
 | `13` | Sunshine / Moonlight | Instala Sunshine, configura permissoes, autostart KDE, UFW e launcher quando necessario. |
 | `14` | Inventario de Hardware | Coleta CPU, RAM, GPUs, discos, PCI/USB e dmidecode/inxi e salva um relatorio estavel para suporte e para outras etapas consultarem. |
 | `15` | Atualizar AppImages | Instala/atualiza os AppImages geridos (Hydra Launcher e o proprio Reforja) a partir dos GitHub Releases, com atalho e icone. |
+| `16` | Backup e restore de configuracoes | Faz backup so das **configuracoes** (nao dos apps) dos programas que o Reforja instala num `.tar.gz` (grava em `~/GoogleDrive/reforja-backups` quando o Drive esta montado, senao em `~/reforja-backups`; exclui caches, saves de jogos e perfis pesados). O restore pergunta o caminho do backup (util quando o rclone ainda nao esta configurado), mostra o conteudo, pede confirmacao digitada e faz copia de seguranca das configs atuais antes de sobrescrever. |
 
 ## Detalhes Importantes
 

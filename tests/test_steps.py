@@ -21,6 +21,7 @@ from reforja.steps import (
     ALL_STEPS,
     AntigravityStep,
     AppsStep,
+    BackupStep,
     BrowserStep,
     FstabStep,
     GitStep,
@@ -2364,3 +2365,120 @@ def test_antigravity_undo_removes_artifacts(tmp_path: Path, monkeypatch) -> None
     assert not install_dir.exists()
     assert not desktop.exists()
     assert not wrapper.exists()
+
+
+# --------------------------------------------------------------------------- backup
+
+
+def _make_backup_step(tmp_path: Path, monkeypatch, *, flatpaks=()):
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False
+    monkeypatch.setattr("reforja.steps.backup.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.backup.flatpak_installed", lambda app_id: app_id in set(flatpaks))
+    return ctx, BackupStep(ctx)
+
+
+def _write(path: Path, content: str = "x") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_backup_manifest_picks_only_existing_paths_and_excludes(tmp_path: Path, monkeypatch) -> None:
+    ctx, step = _make_backup_step(tmp_path, monkeypatch, flatpaks={"com.rtosta.zapzap"})
+    home = ctx.user.home
+    _write(home / ".gitconfig", "[user]\n")
+    _write(home / ".config/heroic/games.json")
+    _write(home / ".config/heroic/Cache/blob")
+    _write(home / ".var/app/com.rtosta.zapzap/config/prefs")
+    # Sunshine nao existe -> nao deve entrar.
+
+    entries = step._present_entries()
+    apps = {entry.app for entry, _paths in entries}
+    relpaths, excludes = step._relpaths_and_excludes()
+
+    assert {"Git", "Heroic (nativo)", "ZapZap"} <= apps
+    assert "Sunshine" not in apps
+    assert ".gitconfig" in relpaths
+    assert ".config/heroic" in relpaths
+    assert ".config/heroic/Cache" in excludes
+    assert ".var/app/com.rtosta.zapzap/cache" in excludes
+
+
+def test_backup_creates_archive_with_manifest_and_honors_excludes(tmp_path: Path, monkeypatch) -> None:
+    import tarfile
+
+    ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    home = ctx.user.home
+    _write(home / ".gitconfig", "[user]\n\tname = tester\n")
+    _write(home / ".config/heroic/games.json", "{}")
+    _write(home / ".config/heroic/Cache/blob", "junk")
+
+    step._do_backup()
+
+    archives = list((home / "reforja-backups").glob("reforja-configs-*.tar.gz"))
+    assert len(archives) == 1
+    with tarfile.open(archives[0]) as tar:
+        names = tar.getnames()
+    assert ".gitconfig" in names
+    assert ".config/heroic/games.json" in names
+    assert "reforja-backup.json" in names
+    assert ".config/heroic/Cache/blob" not in names
+    assert step.result.status == "done"
+
+
+def test_backup_skips_when_nothing_present(tmp_path: Path, monkeypatch) -> None:
+    _ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    step._do_backup()
+    assert step.result.status == "skipped"
+
+
+def test_restore_empty_path_skips(tmp_path: Path, monkeypatch) -> None:
+    _ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: "")
+
+    step._do_restore()
+
+    assert step.result.status == "skipped"
+
+
+def test_restore_round_trip(tmp_path: Path, monkeypatch) -> None:
+    ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    home = ctx.user.home
+    _write(home / ".gitconfig", "original\n")
+    step._do_backup()
+    archive = next((home / "reforja-backups").glob("reforja-configs-*.tar.gz"))
+
+    (home / ".gitconfig").write_text("modificado depois\n", encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: str(archive))
+    monkeypatch.setattr("reforja.steps.backup.confirm_phrase", lambda phrase, logger: True)
+
+    step._do_restore()
+
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == "original\n"
+    # O manifesto interno nunca deve vazar para o HOME.
+    assert not (home / "reforja-backup.json").exists()
+    assert step.result.status == "done"
+
+
+def test_restore_rejects_non_reforja_archive(tmp_path: Path, monkeypatch) -> None:
+    import tarfile
+
+    _ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    bogus = tmp_path / "aleatorio.tar.gz"
+    payload = tmp_path / "algo.txt"
+    payload.write_text("nada a ver\n", encoding="utf-8")
+    with tarfile.open(bogus, "w:gz") as tar:
+        tar.add(payload, arcname="algo.txt")
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: str(bogus))
+    confirmed = {"called": False}
+
+    def _confirm(phrase, logger):
+        confirmed["called"] = True
+        return True
+
+    monkeypatch.setattr("reforja.steps.backup.confirm_phrase", _confirm)
+
+    step._do_restore()
+
+    assert step.result.status == "manual"
+    assert confirmed["called"] is False  # aborta antes de pedir confirmacao
