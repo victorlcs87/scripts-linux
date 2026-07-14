@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 from .core import Color, Runner, announce, badge, capture, command_exists
-from .platform import _quiet, install_system_or_aur, install_system_package
+from .platform import _quiet, install_system_or_aur, install_system_package, system_installed
 
 # Memo por processo: no "Aplicar tudo" varios steps instalam Flatpaks em
 # sequencia; garantir o flathub uma unica vez evita reexecutar o remote-add.
@@ -60,6 +60,25 @@ def install_system_or_flatpak(system_pkg: str, aur_pkg: str | None, flatpak_id: 
     install_flatpak(flatpak_id, runner)
 
 
+def install_flatpak_or_system(flatpak_id: str, system_pkg: str, aur_pkg: str | None, runner: Runner) -> bool:
+    """Padrao Flatpak → nativo → AUR, para apps onde o Flatpak e a versao preferida.
+
+    Devolve False so quando nenhuma das origens conseguiu instalar, para o chamador
+    decidir o que fazer (por exemplo, cair num app alternativo).
+    """
+    if flatpak_installed(flatpak_id):
+        announce(runner.logger, "skipped", f"{flatpak_id} ja instalado via Flatpak")
+        return True
+    if system_installed(system_pkg) or (aur_pkg and system_installed(aur_pkg)):
+        announce(runner.logger, "skipped", f"{system_pkg} ja instalado pelo sistema")
+        return True
+    install_flatpak(flatpak_id, runner)
+    if runner.dry_run or flatpak_installed(flatpak_id):
+        return True
+    announce(runner.logger, "warning", f"Flatpak {flatpak_id} indisponivel; tentando pacote nativo/AUR.")
+    return install_system_or_aur(system_pkg, aur_pkg, runner)
+
+
 def copy_asset(source: Path, target: Path, runner: Runner) -> None:
     if target.exists() and source.exists() and target.read_bytes() == source.read_bytes():
         announce(runner.logger, "skipped", f"{target} ja esta atualizado")
@@ -102,6 +121,7 @@ __all__ = [
     "fetch_json",
     "flatpak_installed",
     "install_flatpak",
+    "install_flatpak_or_system",
     "install_system_or_flatpak",
     "npm_global_installed",
     "remove_flatpak",

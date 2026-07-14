@@ -24,6 +24,7 @@ from ..desktop import DesktopEntry, install_desktop_entry
 from ..installers import (
     flatpak_installed,
     install_flatpak,
+    install_flatpak_or_system,
     install_system_or_flatpak,
     npm_global_installed,
 )
@@ -647,7 +648,7 @@ class AppsStep(Step):
             "flatpak_id": "io.github.pwr_solaar.solaar",
             "appimage_paths": (),
             "desktop_paths": (),
-            "kind": "system",
+            "kind": "flatpak",
         },
         "Flatseal": {
             "system_aliases": (),
@@ -661,7 +662,7 @@ class AppsStep(Step):
             "flatpak_id": "org.localsend.localsend_app",
             "appimage_paths": (),
             "desktop_paths": (),
-            "kind": "system",
+            "kind": "flatpak",
         },
     }
     # Explicacao mostrada ao usuario ao lado de cada app na lista do Aplicar.
@@ -678,9 +679,9 @@ class AppsStep(Step):
         "auto-cpufreq": "Gerencia a frequencia da CPU automaticamente (economiza bateria no notebook). Instala o pacote e habilita o daemon; sem pacote nativo, usa o instalador oficial do GitHub.",
         "Bitwarden": "Gerenciador de senhas. Instalado via Flatpak.",
         "Linux Toys": "Colecao de utilitarios e tweaks. Instalado pelo script oficial (curl | bash).",
-        "Solaar": "Gerenciador de dispositivos Logitech (Unifying). Se nao houver pacote nem Flatpak, instala o Piper como alternativa.",
+        "Solaar": "Gerenciador de dispositivos Logitech (Unifying). Prioriza o Flatpak, com fallback para pacote nativo/AUR; se nao houver nenhum, instala o Piper como alternativa.",
         "Flatseal": "Editor grafico de permissoes dos apps Flatpak. Instalado via Flatpak.",
-        "LocalSend": "Envia arquivos entre dispositivos na mesma rede (tipo AirDrop). Pacote nativo/AUR com fallback para Flatpak.",
+        "LocalSend": "Envia arquivos entre dispositivos na mesma rede (tipo AirDrop). Prioriza o Flatpak, com fallback para pacote nativo/AUR.",
     }
 
     def tasks(self) -> list[StepTask]:
@@ -719,7 +720,7 @@ class AppsStep(Step):
         elif name == "ZapZap":
             self._install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap")
         elif name == "LocalSend":
-            self._install_system_or_flatpak("localsend", "localsend-bin", "org.localsend.localsend_app")
+            install_flatpak_or_system("org.localsend.localsend_app", "localsend", "localsend-bin", self.ctx.runner)
         elif name == "Solaar":
             self._install_solaar()
         elif name == "Linux Toys":
@@ -851,11 +852,7 @@ class AppsStep(Step):
 
     def _install_solaar(self) -> None:
         header(self, "Solaar", "Gerenciador de dispositivos Logitech")
-        if install_system_or_aur("solaar", "solaar", self.ctx.runner):
-            return
-        install_flatpak("io.github.pwr_solaar.solaar", self.ctx.runner)
-        # Em dry-run nada e instalado de fato; nao acionar o fallback.
-        if self.ctx.runner.dry_run or flatpak_installed("io.github.pwr_solaar.solaar"):
+        if install_flatpak_or_system("io.github.pwr_solaar.solaar", "solaar", "solaar", self.ctx.runner):
             return
         self.ctx.logger.write(
             f"{badge('aviso', Color.WARNING)} Solaar indisponivel nos repositorios; instalando Piper como alternativa."
