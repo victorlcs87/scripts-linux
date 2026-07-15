@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -2370,11 +2372,20 @@ def test_antigravity_undo_removes_artifacts(tmp_path: Path, monkeypatch) -> None
 # --------------------------------------------------------------------------- backup
 
 
-def _make_backup_step(tmp_path: Path, monkeypatch, *, flatpaks=()):
+def _select_all_backup(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "reforja.steps.backup.select_many",
+        lambda prompt, options, logger, *, detail=None, preselected=(): list(range(len(list(options)))),
+    )
+
+
+def _make_backup_step(tmp_path: Path, monkeypatch, *, flatpaks=(), encrypt=False):
     ctx = make_ctx(tmp_path)
     ctx.runner.dry_run = False
     monkeypatch.setattr("reforja.steps.backup.system_installed", lambda pkg: False)
     monkeypatch.setattr("reforja.steps.backup.flatpak_installed", lambda app_id: app_id in set(flatpaks))
+    _select_all_backup(monkeypatch)
+    monkeypatch.setattr("reforja.steps.backup.BackupStep._want_encryption", lambda self: encrypt)
     return ctx, BackupStep(ctx)
 
 
@@ -2401,7 +2412,16 @@ def test_backup_manifest_picks_only_existing_paths_and_excludes(tmp_path: Path, 
     assert ".gitconfig" in relpaths
     assert ".config/heroic" in relpaths
     assert ".config/heroic/Cache" in excludes
-    assert ".var/app/com.rtosta.zapzap/cache" in excludes
+    assert any(e.startswith(".var/app/com.rtosta.zapzap/") and e.endswith("/cache") for e in excludes)
+
+
+def test_backup_manifest_stays_in_sync_with_apps_step(tmp_path: Path, monkeypatch) -> None:
+    # Todo flatpak_id declarado na etapa 10 deve entrar no manifesto de backup.
+    from reforja.steps.backup import _manifest_entries
+
+    manifest_ids = {e.flatpak_id for e in _manifest_entries() if e.flatpak_id}
+    step_ids = {d["flatpak_id"] for d in AppsStep.apps.values() if d["flatpak_id"]}
+    assert step_ids <= manifest_ids
 
 
 def test_backup_creates_archive_with_manifest_and_honors_excludes(tmp_path: Path, monkeypatch) -> None:
@@ -2432,6 +2452,28 @@ def test_backup_skips_when_nothing_present(tmp_path: Path, monkeypatch) -> None:
     assert step.result.status == "skipped"
 
 
+def test_backup_prune_keeps_only_recent(tmp_path: Path, monkeypatch) -> None:
+    import reforja.steps.backup as backup_mod
+
+    monkeypatch.setattr(backup_mod, "KEEP_BACKUPS", 2)
+    _ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    backup_dir = step._backup_dir()
+    backup_dir.mkdir(parents=True)
+    for i in range(5):
+        archive = backup_dir / f"reforja-configs-2026010{i}-000000.tar.gz"
+        archive.write_text("x", encoding="utf-8")
+        os.utime(archive, (1000 + i, 1000 + i))
+
+    step._do_prune()
+
+    remaining = sorted(p.name for p in backup_dir.glob("reforja-configs-*.tar.gz"))
+    assert remaining == [
+        "reforja-configs-20260103-000000.tar.gz",
+        "reforja-configs-20260104-000000.tar.gz",
+    ]
+    assert step.result.status == "done"
+
+
 def test_restore_empty_path_skips(tmp_path: Path, monkeypatch) -> None:
     _ctx, step = _make_backup_step(tmp_path, monkeypatch)
     monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: "")
@@ -2460,6 +2502,27 @@ def test_restore_round_trip(tmp_path: Path, monkeypatch) -> None:
     assert step.result.status == "done"
 
 
+def test_restore_only_selected_apps(tmp_path: Path, monkeypatch) -> None:
+    ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    home = ctx.user.home
+    _write(home / ".gitconfig", "git original\n")
+    _write(home / ".config/sunshine/sunshine.conf", "sun original\n")
+    step._do_backup()
+    archive = next((home / "reforja-backups").glob("reforja-configs-*.tar.gz"))
+
+    (home / ".gitconfig").write_text("git novo\n", encoding="utf-8")
+    (home / ".config/sunshine/sunshine.conf").write_text("sun novo\n", encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: str(archive))
+    monkeypatch.setattr("reforja.steps.backup.confirm_phrase", lambda phrase, logger: True)
+    # Restaura so o app "Git".
+    monkeypatch.setattr(step, "_choose_apps_to_restore", lambda apps: [a for a in apps if a["app"] == "Git"])
+
+    step._do_restore()
+
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == "git original\n"
+    assert (home / ".config/sunshine/sunshine.conf").read_text(encoding="utf-8") == "sun novo\n"
+
+
 def test_restore_rejects_non_reforja_archive(tmp_path: Path, monkeypatch) -> None:
     import tarfile
 
@@ -2482,3 +2545,29 @@ def test_restore_rejects_non_reforja_archive(tmp_path: Path, monkeypatch) -> Non
 
     assert step.result.status == "manual"
     assert confirmed["called"] is False  # aborta antes de pedir confirmacao
+
+
+def test_encrypted_backup_round_trip(tmp_path: Path, monkeypatch) -> None:
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg nao disponivel")
+    ctx, step = _make_backup_step(tmp_path, monkeypatch, encrypt=True)
+    monkeypatch.setattr("reforja.steps.backup.BackupStep._read_passphrase", lambda self, *, confirm: "senha-secreta")
+    home = ctx.user.home
+    _write(home / ".gitconfig", "conteudo cifrado\n")
+
+    step._do_backup()
+
+    encrypted = list((home / "reforja-backups").glob("reforja-configs-*.tar.gz.gpg"))
+    assert len(encrypted) == 1
+    # Nenhum .tar.gz em claro deve sobrar no diretorio do Drive.
+    assert not list((home / "reforja-backups").glob("reforja-configs-*.tar.gz"))
+    assert step.result.status == "done"
+
+    (home / ".gitconfig").write_text("mudou\n", encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: str(encrypted[0]))
+    monkeypatch.setattr("reforja.steps.backup.confirm_phrase", lambda phrase, logger: True)
+
+    step._do_restore()
+
+    assert (home / ".gitconfig").read_text(encoding="utf-8") == "conteudo cifrado\n"
+    assert step.result.status == "done"

@@ -48,6 +48,10 @@ class StepTask:
     # Tarefa que REMOVE coisas: nunca vem pre-marcada, nem no "Aplicar tudo".
     # Marcar tem de ser um ato deliberado do usuario.
     destructive: bool = False
+    # Acao que existe mas nao deve vir pre-marcada automaticamente (ex.: fazer um
+    # backup durante o "Aplicar tudo" nao faz sentido numa maquina recem-formatada).
+    # Continua selecionavel manualmente; so nao entra na pre-selecao.
+    autoselect: bool = True
     state: str = "desconhecido"
     detail: str = ""
 
@@ -57,7 +61,7 @@ class StepTask:
 
     @property
     def preselectable(self) -> bool:
-        return not self.destructive
+        return not self.destructive and self.autoselect
 
     def menu_label(self) -> str:
         """Rotulo com o estado atual embutido, usado no checkbox e nos resumos."""
