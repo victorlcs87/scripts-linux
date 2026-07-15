@@ -32,7 +32,7 @@ ARCHIVE_PREFIX = "reforja-configs-"
 PLAIN_SUFFIX = ".tar.gz"
 ENC_SUFFIX = ".tar.gz.gpg"
 # Quantos backups/copias de seguranca manter (os mais antigos sao removidos).
-KEEP_BACKUPS = 5
+KEEP_BACKUPS = 3
 KEEP_SAFETY = 3
 # Flatpaks cujo `data` e gigante/regeneravel: guarda so a config.
 HEAVY_DATA_FLATPAKS = frozenset({"io.mrarm.mcpelauncher", "com.valvesoftware.Steam"})
