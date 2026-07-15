@@ -2385,7 +2385,7 @@ def _make_backup_step(tmp_path: Path, monkeypatch, *, flatpaks=(), encrypt=False
     monkeypatch.setattr("reforja.steps.backup.system_installed", lambda pkg: False)
     monkeypatch.setattr("reforja.steps.backup.flatpak_installed", lambda app_id: app_id in set(flatpaks))
     _select_all_backup(monkeypatch)
-    monkeypatch.setattr("reforja.steps.backup.BackupStep._want_encryption", lambda self: encrypt)
+    monkeypatch.setattr("reforja.steps.backup.BackupStep._want_encryption", lambda self, sensitive: encrypt)
     return ctx, BackupStep(ctx)
 
 
@@ -2545,6 +2545,47 @@ def test_restore_rejects_non_reforja_archive(tmp_path: Path, monkeypatch) -> Non
 
     assert step.result.status == "manual"
     assert confirmed["called"] is False  # aborta antes de pedir confirmacao
+
+
+def test_encryption_is_forced_when_sensitive_and_user_declines(tmp_path: Path, monkeypatch) -> None:
+    if shutil.which("gpg") is None:
+        pytest.skip("gpg nao disponivel")
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = False
+    monkeypatch.setattr("reforja.steps.backup.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.backup.flatpak_installed", lambda app_id: False)
+    # Usuario DESMARCA a criptografia (select_many devolve vazio)...
+    monkeypatch.setattr(
+        "reforja.steps.backup.select_many",
+        lambda prompt, options, logger, *, detail=None, preselected=(): [],
+    )
+    # ...e nao digita a frase de confirmacao para gravar sem cifrar.
+    monkeypatch.setattr("reforja.steps.backup.confirm_phrase", lambda phrase, logger: False)
+    step = BackupStep(ctx)
+
+    # Com dado sensivel presente, a criptografia e mantida a forca.
+    assert step._want_encryption(sensitive=True) is True
+    # Sem dado sensivel, respeita a escolha de nao cifrar.
+    assert step._want_encryption(sensitive=False) is False
+
+
+def test_upload_runs_rclone_copy(tmp_path: Path, monkeypatch) -> None:
+    ctx, step = _make_backup_step(tmp_path, monkeypatch)
+    backup_dir = step._backup_dir()
+    backup_dir.mkdir(parents=True)
+    archive = backup_dir / "reforja-configs-20260101-000000.tar.gz"
+    archive.write_text("x", encoding="utf-8")
+    monkeypatch.setattr("reforja.steps.backup.command_exists", lambda name: True)
+    monkeypatch.setattr("reforja.steps.backup.prompt_user", lambda *a, **k: "")
+    recorded = []
+    monkeypatch.setattr(ctx.runner, "run", lambda cmd, **k: recorded.append(cmd))
+
+    step._do_upload()
+
+    assert recorded and recorded[0][:2] == ["rclone", "copy"]
+    assert str(archive) in recorded[0]
+    assert recorded[0][-1] == "Google Drive:reforja-backups"
+    assert step.result.status == "done"
 
 
 def test_encrypted_backup_round_trip(tmp_path: Path, monkeypatch) -> None:

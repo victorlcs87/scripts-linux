@@ -53,11 +53,12 @@ class GuiInteraction(QObject):
         label = req["prompt"]
         if req.get("detail"):
             label = f"{label}\n\n{req['detail']}"
+        echo = QLineEdit.EchoMode.Password if req.get("secret") else QLineEdit.EchoMode.Normal
         text, ok = QInputDialog.getText(
             self._window,
             "Reforja - entrada necessaria",
             label,
-            QLineEdit.EchoMode.Normal,
+            echo,
         )
         if not ok:
             req["cancelled"] = True
@@ -141,6 +142,12 @@ class GuiInteraction(QObject):
         allow_empty: bool = True,
     ) -> str:
         req = self._request_blocking("text", "", prompt=prompt, detail=detail, allow_empty=allow_empty)
+        if req["cancelled"]:
+            raise PromptInterruptedError(f"entrada cancelada pelo usuario: {prompt}")
+        return req["result"]
+
+    def ask_secret(self, prompt: str, *, detail: str | None = None, prompt_label: str = "Senha") -> str:
+        req = self._request_blocking("text", "", prompt=prompt, detail=detail, allow_empty=False, secret=True)
         if req["cancelled"]:
             raise PromptInterruptedError(f"entrada cancelada pelo usuario: {prompt}")
         return req["result"]

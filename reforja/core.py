@@ -152,6 +152,10 @@ class InteractionProvider(Protocol):
         allow_empty: bool = True,
     ) -> str: ...
 
+    def ask_secret(self, prompt: str, *, detail: str | None = None, prompt_label: str = "Senha") -> str:
+        """Como ask_text, mas para segredos: a entrada nao deve aparecer na tela."""
+        ...
+
     def confirm_phrase(self, phrase: str, *, detail: str | None = None) -> bool: ...
 
     def choose_many(

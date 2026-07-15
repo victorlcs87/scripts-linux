@@ -39,6 +39,9 @@ HEAVY_DATA_FLATPAKS = frozenset({"io.mrarm.mcpelauncher", "com.valvesoftware.Ste
 # Flatpaks que o Reforja instala mas nao carregam flatpak_id no dicionario da
 # etapa 10 (Steam so cai no Flatpak como fallback).
 EXTRA_FLATPAKS = {"Steam": "com.valvesoftware.Steam"}
+# Apps cuja config guarda segredos (tokens/sessoes): a criptografia vira padrao
+# forte quando algum deles entra no backup.
+SENSITIVE_APPS = frozenset({"rclone", "Bitwarden", "Google Chrome", "Discord", "Discord (nativo)", "GitHub CLI"})
 # Cache/dados regeneraveis que nunca entram no backup, para qualquer app Flatpak.
 GLOBAL_FLATPAK_EXCLUDES = (
     "cache",
@@ -185,6 +188,17 @@ class BackupStep(Step):
                 destructive=True,
             ),
             StepTask(
+                key="upload",
+                label="Enviar ultimo backup para o Google Drive (rclone)",
+                description=(
+                    "Faz 'rclone copy' do backup mais recente para um caminho remoto do Drive. Funciona "
+                    "mesmo sem ~/GoogleDrive montado; precisa do rclone configurado (etapa 07)."
+                ),
+                run=self._do_upload,
+                stateless=True,
+                autoselect=False,
+            ),
+            StepTask(
                 key="limpar",
                 label="Limpar backups antigos",
                 description=(
@@ -312,7 +326,7 @@ class BackupStep(Step):
 
     # ------------------------------------------------------------------ cripto
 
-    def _want_encryption(self) -> bool:
+    def _want_encryption(self, sensitive: bool) -> bool:
         chosen = select_many(
             "Cifrar o backup com senha?",
             ["Cifrar com senha (recomendado: o backup guarda tokens e sessoes)"],
@@ -320,7 +334,18 @@ class BackupStep(Step):
             detail="Se desmarcar, o arquivo fica em texto puro.",
             preselected=[0],
         )
-        if not chosen:
+        encrypt = bool(chosen)
+        if not encrypt and sensitive:
+            announce(
+                self.ctx.logger,
+                "warning",
+                "Este backup inclui tokens/sessoes (rclone, Bitwarden ou navegador). Gravar SEM cifrar "
+                "expoe esses dados no Google Drive.",
+            )
+            if not confirm_phrase("gravar sem cifrar", self.ctx.logger):
+                announce(self.ctx.logger, "done", "Mantendo a criptografia ligada.")
+                encrypt = True
+        if not encrypt:
             return False
         if not command_exists("gpg"):
             announce(self.ctx.logger, "warning", "gpg nao encontrado; tentando instalar o gnupg.")
@@ -333,11 +358,11 @@ class BackupStep(Step):
     def _read_passphrase(self, *, confirm: bool) -> str:
         logger = self.ctx.logger
         if logger.interaction is not None:
-            return logger.interaction.ask_text(
+            ask_secret = getattr(logger.interaction, "ask_secret", None) or logger.interaction.ask_text
+            return ask_secret(
                 "Senha para o backup cifrado",
                 detail="Guarde essa senha: sem ela o backup nao pode ser restaurado.",
                 prompt_label="Senha",
-                allow_empty=False,
             )
         while True:
             first = getpass.getpass("Senha para o backup cifrado: ")
@@ -427,7 +452,8 @@ class BackupStep(Step):
         for entry, _paths in present:
             self.ctx.logger.write(paint(f"  - {entry.app}", Color.MUTED))
 
-        encrypt = self._want_encryption()
+        sensitive = any(entry.app in SENSITIVE_APPS for entry, _paths in present)
+        encrypt = self._want_encryption(sensitive)
         backup_dir = self._backup_dir()
         stamp = time.strftime("%Y%m%d-%H%M%S")
         if not self.ctx.runner.dry_run:
@@ -469,11 +495,33 @@ class BackupStep(Step):
             if not self.ctx.runner.dry_run and not final.exists():
                 announce(self.ctx.logger, "warning", "gpg nao produziu o arquivo cifrado; abortando.")
                 return None
+            # Confere que o arquivo cifrado realmente abre com a senha, agora e nao
+            # so na hora do restore.
+            if passfile is not None and not self._verify_encrypted(final, passfile):
+                announce(self.ctx.logger, "warning", "O backup cifrado nao passou na verificacao; abortando.")
+                self._secure_unlink(final)
+                return None
             return final
         finally:
             self._secure_unlink(plain)
             if passfile is not None:
                 self._secure_unlink(passfile)
+
+    def _verify_encrypted(self, final: Path, passfile: Path) -> bool:
+        """Decifra para um temporario e confere que e um tar valido (round-trip)."""
+        if self.ctx.runner.dry_run:
+            return True
+        check = self._tmp_dir() / f"{final.stem}.verify"
+        result = self.ctx.runner.run(
+            self._gpg_cmd(["-o", str(check), "-d", str(final)], passfile),
+            check=False,
+            show_progress=False,
+            quiet_success=True,
+            action="Conferindo o backup cifrado",
+        )
+        ok = (result is None or result.returncode == 0) and self._verify_tar(check)
+        self._secure_unlink(check)
+        return ok
 
     def _secure_unlink(self, path: Path) -> None:
         if self.ctx.runner.dry_run:
@@ -511,6 +559,40 @@ class BackupStep(Step):
             self.mark_done(f"{removed} backup(s) antigo(s) removido(s); mantidos os {KEEP_BACKUPS} mais recentes.")
         else:
             self.mark_skipped(f"Nada a limpar; ha no maximo {KEEP_BACKUPS} backups.")
+
+    # ------------------------------------------------------------------ upload
+
+    def _default_remote(self) -> str:
+        from .storage import RcloneStep  # import tardio para nao criar ciclo
+
+        return f"{RcloneStep.remote}reforja-backups"
+
+    def _do_upload(self) -> None:
+        if not command_exists("rclone") and not self.ctx.runner.dry_run:
+            announce(self.ctx.logger, "warning", "rclone nao encontrado. Rode a etapa 07 antes de enviar.")
+            self.mark_manual("Upload abortado: rclone nao instalado.")
+            return
+        latest = self._last_backup()
+        if latest is None:
+            announce(self.ctx.logger, "skipped", "Nenhum backup local encontrado para enviar.")
+            self.mark_skipped("Nada para enviar; faca um backup primeiro.")
+            return
+        default = self._default_remote()
+        dest = (
+            prompt_user(
+                "Destino no rclone (Enter para o padrao)",
+                self.ctx.logger,
+                detail=f"Padrao: {default}. Formato: 'Remote:pasta' (o remote vem da etapa 07).",
+                prompt_label="Destino",
+            ).strip()
+            or default
+        )
+        self.ctx.runner.run(
+            ["rclone", "copy", str(latest), dest],
+            action=f"Enviando {latest.name} para {dest}",
+        )
+        announce(self.ctx.logger, "done", f"{latest.name} enviado para {dest}")
+        self.mark_done(f"Backup {latest.name} enviado para {dest} via rclone.")
 
     # ------------------------------------------------------------------ restore
 
