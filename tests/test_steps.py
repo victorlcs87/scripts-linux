@@ -93,6 +93,44 @@ def test_every_step_has_description() -> None:
         assert step.description.strip(), f"etapa {step.title} sem description"
 
 
+class _AutoInteraction:
+    """InteractionProvider que responde tudo de forma segura (seam da GUI), para
+    exercitar o apply() de cada etapa em dry-run sem travar no stdin."""
+
+    def ask_text(self, prompt, *, detail=None, prompt_label="Resposta", allow_empty=True) -> str:
+        return ""  # caminho vazio -> steps tratam como "pular"
+
+    def ask_secret(self, prompt, *, detail=None, prompt_label="Senha") -> str:
+        return "senha-dry-run"
+
+    def confirm_phrase(self, phrase, *, detail=None) -> bool:
+        return True
+
+    def choose_many(self, prompt, options, *, detail=None, preselected=()) -> list[int]:
+        return list(preselected) if preselected else list(range(len(list(options))))
+
+
+def test_all_steps_apply_clean_in_dry_run(tmp_path: Path, monkeypatch) -> None:
+    """Fumaca: toda etapa deve concluir o apply() em dry-run sem excecao.
+
+    Prompts sao respondidos por um InteractionProvider falso; chamadas de rede
+    (releases do GitHub) sao stubadas para o teste ser deterministico.
+    """
+    monkeypatch.setattr("reforja.steps.appimage.fetch_json", lambda *a, **k: None)
+    monkeypatch.setattr("reforja.steps.dev.fetch_json", lambda *a, **k: None)
+
+    ctx = make_ctx(tmp_path)
+    ctx.logger.interaction = _AutoInteraction()
+
+    for step_cls in ALL_STEPS:
+        step = step_cls(ctx)
+        step.select_all = True  # nao abrir o checkbox proprio; pegar o pre-selecionavel
+        try:
+            step.apply()
+        except Exception as exc:  # noqa: BLE001
+            raise AssertionError(f"etapa {step_cls.id} {step_cls.title} falhou no dry-run: {exc!r}") from exc
+
+
 def test_shelly_step_updates_system_before_preparing(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = ShellyStep(ctx)
