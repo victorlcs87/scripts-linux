@@ -12,7 +12,6 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPECPATH).parent
 
 datas = [
-    (str(ROOT / "reforja" / "gui" / "theme.qss"), "reforja/gui"),
     (str(ROOT / "assets"), "assets"),
     (str(ROOT / "scripts"), "scripts"),
 ]

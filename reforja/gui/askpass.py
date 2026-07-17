@@ -36,7 +36,12 @@ def run_askpass_dialog() -> int:
     from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
     app = QApplication.instance() or QApplication(sys.argv)
-    _ = app  # mantem a instancia viva
+    try:
+        from .theme import build_stylesheet
+
+        app.setStyleSheet(build_stylesheet())
+    except Exception:  # noqa: BLE001 - o dialogo funciona mesmo sem tema
+        pass
     prompt = sys.argv[1] if len(sys.argv) > 1 else "Senha do sudo:"
     text, ok = QInputDialog.getText(None, "Reforja - autenticacao", prompt, QLineEdit.EchoMode.Password)
     if not ok:

@@ -18,10 +18,15 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from reforja.gui import askpass as askpass_mod  # noqa: E402
+from reforja.gui import theme  # noqa: E402
 from reforja.gui.gui_logger import GuiLogger  # noqa: E402
-from reforja.gui.main_window import MainWindow, _format_line_html  # noqa: E402
+from reforja.gui.main_window import MainWindow, _format_line_html, _has_undo  # noqa: E402
 from reforja.gui.updater import _ssl_context, parse_release, running_appimage  # noqa: E402
 from reforja.steps import ALL_GROUPS, ALL_STEPS  # noqa: E402
+
+
+def _step(step_id: str) -> type:
+    return next(s for s in ALL_STEPS if s.id == step_id)
 
 
 @pytest.fixture(scope="module")
@@ -54,29 +59,43 @@ def test_gui_logger_transient(app, tmp_path: Path) -> None:
 
 
 def test_format_line_html_colore_badges() -> None:
-    assert "color:#2ee06a" in _format_line_html("[done] concluido")
-    assert "color:#ff5f5f" in _format_line_html("[failed] falhou")
-    assert "color:#5fe1ff" in _format_line_html("$ pacman -Syu")
+    assert f"color:{theme.BADGE_COLORS['done']}" in _format_line_html("[done] concluido")
+    assert f"color:{theme.BADGE_COLORS['failed']}" in _format_line_html("[failed] falhou")
+    assert f"color:{theme.CONSOLE_CMD_COLOR}" in _format_line_html("$ pacman -Syu")
     # Escapa HTML do conteudo
     assert "&lt;tag&gt;" in _format_line_html("[info] <tag>")
 
 
-def _check(window, step_id: str) -> None:
-    window._item_for_step(step_id).setCheckState(Qt.CheckState.Checked)
-
-
-def test_acao_roda_apenas_etapas_marcadas(app, tmp_path: Path, monkeypatch) -> None:
+def test_navegacao_menu_tem_inicio_grupos_e_atualizacoes(app, tmp_path: Path) -> None:
     window = MainWindow(tmp_path)
-    # Evita iniciar threads de verdade: so queremos inspecionar a fila montada.
+    # Inicio + um por grupo + Atualizacoes.
+    assert window._menu.count() == len(ALL_GROUPS) + 2
+    assert window._pages.count() == window._menu.count()
+    assert window._menu.item(0).text() == "Inicio"
+    assert window._menu.item(window._menu.count() - 1).text() == "Atualizacoes"
+    # Trocar de entrada no menu troca a pagina exibida.
+    window._menu.setCurrentRow(2)
+    assert window._pages.currentIndex() == 2
+
+
+def test_cartoes_cobrem_todas_as_etapas(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    assert sorted(window._cards.keys()) == sorted(s.id for s in ALL_STEPS)
+
+
+def test_aplicar_tudo_enfileira_todas_as_etapas(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
     monkeypatch.setattr(window, "_next_in_queue", lambda: None)
-
-    _check(window, "03")
-    _check(window, "10")
-    assert sorted(s.id for s in window._checked_steps()) == ["03", "10"]
-
-    window._run_action("status")
-    assert sorted(s.id for s, _ in window._queue) == ["03", "10"]
+    window._run_action("status", list(ALL_STEPS))
+    assert sorted(s.id for s, _ in window._queue) == sorted(s.id for s in ALL_STEPS)
     assert all(action == "status" for _s, action in window._queue)
+
+
+def test_acao_em_uma_etapa_enfileira_so_ela(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window, "_next_in_queue", lambda: None)
+    window._run_action("status", [_step("00")])
+    assert [s.id for s, _ in window._queue] == ["00"]
 
 
 def test_gui_nao_tem_botao_dry_run(app, tmp_path: Path) -> None:
@@ -132,52 +151,12 @@ def test_app_main_askpass_mode_nao_abre_janela(monkeypatch) -> None:
     assert called == [True]
 
 
-def test_selecionar_etapa_mostra_descricao_no_console(app, tmp_path: Path) -> None:
+def test_cartao_mostra_titulo_e_descricao_da_etapa(app, tmp_path: Path) -> None:
     window = MainWindow(tmp_path)
-    item = window._item_for_step("15")
-    window._list.setCurrentItem(item)
-    texto = window._console.toPlainText()
-    # O console mostra o titulo e a descricao da etapa selecionada.
-    assert "Atualizar AppImages" in texto
-    assert "GitHub Releases" in texto
-    # o tooltip do item tambem tem a descricao
-    assert "GitHub Releases" in item.toolTip()
-
-
-def test_acao_sem_marcacao_usa_destacada(app, tmp_path: Path, monkeypatch) -> None:
-    window = MainWindow(tmp_path)
-    monkeypatch.setattr(window, "_next_in_queue", lambda: None)
-
-    window._list.setCurrentItem(window._item_for_step("00"))
-    window._run_action("status")
-    assert [s.id for s, _ in window._queue] == ["00"]
-
-
-def test_clicar_cabecalho_marca_e_desmarca_grupo(app, tmp_path: Path) -> None:
-    window = MainWindow(tmp_path)
-    header = next(
-        window._list.item(i) for i in range(window._list.count()) if window._list.item(i).text() == "APLICATIVOS"
-    )
-    window._on_item_clicked(header)
-    assert sorted(s.id for s in window._checked_steps()) == ["03", "10", "15"]
-    window._on_item_clicked(header)
-    assert window._checked_steps() == []
-
-
-def test_sidebar_tem_cabecalhos_e_todas_as_etapas(app, tmp_path: Path) -> None:
-    window = MainWindow(tmp_path)
-    steps = [step.id for _item, step in window._step_items()]
-    assert sorted(steps) == sorted(s.id for s in ALL_STEPS)
-    # total = etapas + um cabecalho por grupo
-    assert window._list.count() == len(ALL_STEPS) + len(ALL_GROUPS)
-
-
-def test_marcar_todas_e_limpar(app, tmp_path: Path) -> None:
-    window = MainWindow(tmp_path)
-    window._set_all_checked(True)
-    assert len(window._checked_steps()) == len(ALL_STEPS)
-    window._set_all_checked(False)
-    assert window._checked_steps() == []
+    card = window._cards["15"]
+    textos = [child.text() for child in card.findChildren(type(card._status))]
+    assert any("Atualizar AppImages" in t for t in textos)
+    assert any("GitHub Releases" in t for t in textos)
 
 
 # --- atualizacao do app -----------------------------------------------------------
@@ -337,10 +316,7 @@ def test_falha_no_lote_entra_no_resumo_e_bloqueia_restantes(app, tmp_path: Path,
     window = MainWindow(tmp_path)
     monkeypatch.setattr(window, "_start_worker", lambda step, action: None)
 
-    _check(window, "00")
-    _check(window, "03")
-    _check(window, "10")
-    window._run_action("status")  # monta a fila e "inicia" o primeiro (00)
+    window._run_action("status", [_step("00"), _step("03"), _step("10")])  # monta a fila e "inicia" o primeiro (00)
 
     # O primeiro step (00) falha: vira resultado sintetico e o resto e bloqueado.
     window._on_failed("failed", "explodiu")
@@ -364,16 +340,20 @@ def test_botao_parar_bloqueia_fila_e_habilita_so_em_execucao(app, tmp_path: Path
     assert all(r.status == "blocked" for r in window._results)
 
 
-def test_undo_habilita_conforme_alvos_marcados(app, tmp_path: Path) -> None:
-    window = MainWindow(tmp_path)
+def test_undo_disponivel_so_para_etapas_que_desfazem() -> None:
     # HardwareStep (14) tem undo; AppsStep (10) usa o placeholder da base (sem undo).
-    window._list.setCurrentItem(window._item_for_step("10"))
-    window._update_undo_enabled()
-    assert window._btn_undo.isEnabled() is False
+    assert _has_undo(_step("14")) is True
+    assert _has_undo(_step("10")) is False
 
-    _check(window, "14")
-    window._update_undo_enabled()
-    assert window._btn_undo.isEnabled() is True
+
+def test_cartao_tem_desfazer_so_quando_ha_undo(app, tmp_path: Path) -> None:
+    from PySide6.QtWidgets import QPushButton
+
+    window = MainWindow(tmp_path)
+    rotulos_14 = {b.text() for b in window._cards["14"].findChildren(QPushButton)}
+    rotulos_10 = {b.text() for b in window._cards["10"].findChildren(QPushButton)}
+    assert "Desfazer" in rotulos_14
+    assert "Desfazer" not in rotulos_10
 
 
 def test_undo_pede_confirmacao(app, tmp_path: Path, monkeypatch) -> None:
@@ -388,8 +368,7 @@ def test_undo_pede_confirmacao(app, tmp_path: Path, monkeypatch) -> None:
         staticmethod(lambda *a, **k: asked.append("q") or mw.QMessageBox.StandardButton.No),
     )
 
-    _check(window, "14")
-    window._run_action("undo")
+    window._run_action("undo", [_step("14")])
     assert asked == ["q"]  # perguntou e o usuario recusou -> nada roda
 
 

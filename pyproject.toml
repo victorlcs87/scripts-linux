@@ -29,9 +29,6 @@ reforja-gui = "reforja.gui:main"
 [tool.setuptools]
 packages = ["reforja", "reforja.steps", "reforja.gui"]
 
-[tool.setuptools.package-data]
-"reforja.gui" = ["theme.qss"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

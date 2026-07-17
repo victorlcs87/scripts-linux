@@ -1,4 +1,14 @@
-"""Janela principal: sidebar de steps + painel de acao + console/terminal."""
+"""Janela principal: menu de navegacao + paginas por grupo + console/terminal.
+
+A navegacao segue o modelo "menu + paginas": a lateral e um menu (uma entrada
+por grupo, mais Inicio e Atualizacoes) e cada entrada abre uma pagina. Cada
+etapa vira um cartao com titulo, descricao, estado e as acoes Aplicar / Status /
+Desfazer. O lote continua existindo: Inicio aplica/verifica tudo e cada pagina
+de grupo aplica/verifica o grupo inteiro.
+
+O motor e o mesmo do CLI: as acoes rodam via StepWorker -> dispatch, com log ao
+vivo no console (GuiLogger) e o terminal embutido para comandos interativos.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +17,10 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -19,6 +30,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -26,52 +39,17 @@ from PySide6.QtWidgets import (
 
 from ..cli import render_run_summary, render_status_overview, synthetic_result
 from ..core import StepRunResult
-from ..planning import describe_step_plain
-from ..steps import ALL_GROUPS
+from ..steps import ALL_GROUPS, ALL_STEPS
 from ..steps_base import Step as _StepBase
+from . import theme
 from .askpass import resolve_askpass
 from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
-from .step_runner import StepWorker, build_gui_step
+from .step_runner import StepWorker
 from .terminal import TerminalExecutor, TerminalWidget
 from .updater import CheckWorker, DownloadWorker, UpdateChecker, running_appimage
 
-# Aparencia dos estados de conformidade (compliance) na sidebar.
-_COMPLIANCE = {
-    "aplicado": ("✓", "#2ee06a"),  # check verde
-    "pendente": ("●", "#f2c14e"),  # bolinha amarela
-    "atencao": ("⚠", "#ff7043"),  # alerta laranja
-    "desconhecido": ("○", "#8a8f98"),  # circulo cinza
-}
-
-_BADGE_COLORS = {
-    "done": "#2ee06a",
-    "aplicado": "#2ee06a",
-    "pendente": "#f2c14e",
-    "atencao": "#ff7043",
-    "ok": "#2ee06a",
-    "summary": "#ff8fd8",
-    "info": "#5fd7ff",
-    "action": "#5fd7ff",
-    "waiting": "#ffd24a",
-    "warning": "#ffd24a",
-    "skipped": "#ffd24a",
-    "manual": "#ffd24a",
-    "aviso": "#ffd24a",
-    "dry-run": "#ffb454",
-    "rodando": "#5fd7ff",
-    "choice": "#7dff7d",
-    "failed": "#ff5f5f",
-    "blocked": "#ff5f5f",
-    "erro": "#ff5f5f",
-}
-
 _BADGE_RE = re.compile(r"^\[(?P<name>[\w-]+)\]")
-
-# Roles dos itens da sidebar: a etapa (classe Step) ou None para cabecalhos de
-# grupo; e a string de compliance para colorir o glyph.
-_ROLE_STEP = Qt.ItemDataRole.UserRole
-_ROLE_COMPLIANCE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 def _format_line_html(line: str) -> str:
@@ -79,20 +57,107 @@ def _format_line_html(line: str) -> str:
     match = _BADGE_RE.match(line)
     if match:
         name = match.group("name")
-        color = _BADGE_COLORS.get(name)
+        color = theme.BADGE_COLORS.get(name)
         if color:
             badge_html = f'<span style="color:{color};font-weight:bold">[{html.escape(name)}]</span>'
             return badge_html + safe[len(match.group(0)) :]
     if line.startswith("$ "):
-        return f'<span style="color:#5fe1ff">{safe}</span>'
+        return f'<span style="color:{theme.CONSOLE_CMD_COLOR}">{safe}</span>'
     return safe
+
+
+def _has_undo(step: type) -> bool:
+    # Detecta undo mesmo herdado (mixin/base intermediaria), sem falso positivo
+    # do placeholder da classe base.
+    return step.undo is not _StepBase.undo
+
+
+class StepCard(QFrame):
+    """Cartao de uma etapa: titulo, descricao, estado e acoes."""
+
+    def __init__(self, step_cls: type, window: MainWindow) -> None:
+        super().__init__()
+        self.setObjectName("stepCard")
+        self._step_cls = step_cls
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        title = QLabel(step_cls.title)
+        title.setObjectName("cardTitle")
+        top.addWidget(title)
+        top.addStretch(1)
+        self._status = QLabel()
+        self._status.setObjectName("cardStatus")
+        top.addWidget(self._status)
+        layout.addLayout(top)
+
+        description = getattr(step_cls, "description", "") or ""
+        if description:
+            desc = QLabel(description)
+            desc.setObjectName("cardDesc")
+            desc.setWordWrap(True)
+            layout.addWidget(desc)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        btn_apply = QPushButton("Aplicar")
+        btn_apply.setObjectName("primary")
+        btn_apply.clicked.connect(lambda: window._run_action("apply", [step_cls]))
+        btn_status = QPushButton("Status")
+        btn_status.clicked.connect(lambda: window._run_action("status", [step_cls]))
+        window._register_button(btn_apply)
+        window._register_button(btn_status)
+        actions.addWidget(btn_apply)
+        actions.addWidget(btn_status)
+        if _has_undo(step_cls):
+            btn_undo = QPushButton("Desfazer")
+            btn_undo.setObjectName("destructive")
+            btn_undo.clicked.connect(lambda: window._run_action("undo", [step_cls]))
+            window._register_button(btn_undo)
+            actions.addWidget(btn_undo)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+
+        self.set_compliance("desconhecido")
+
+    def set_compliance(self, compliance: str) -> None:
+        glyph, color = theme.COMPLIANCE.get(compliance, theme.COMPLIANCE["desconhecido"])
+        legenda = {
+            "aplicado": "aplicado",
+            "pendente": "pendente",
+            "atencao": "atencao",
+            "desconhecido": "nao verificado",
+        }.get(compliance, compliance)
+        self._status.setText(f"{glyph}  {legenda}")
+        self._status.setStyleSheet(f"color: {color};")
+
+
+def _page_scaffold(title: str, description: str) -> tuple[QWidget, QVBoxLayout]:
+    """Cabecalho comum das paginas: titulo + subtitulo + area de conteudo."""
+    page = QWidget()
+    outer = QVBoxLayout(page)
+    outer.setContentsMargins(28, 24, 28, 24)
+    outer.setSpacing(6)
+    heading = QLabel(title)
+    heading.setObjectName("pageTitle")
+    outer.addWidget(heading)
+    if description:
+        sub = QLabel(description)
+        sub.setObjectName("pageDesc")
+        sub.setWordWrap(True)
+        outer.addWidget(sub)
+    outer.addSpacing(8)
+    return page, outer
 
 
 class MainWindow(QMainWindow):
     def __init__(self, run_dir: Path) -> None:
         super().__init__()
         self.setWindowTitle("Reforja - Pos-Formatacao")
-        self.resize(1080, 720)
+        self.resize(1080, 760)
         self._run_dir = run_dir
 
         # Logger unico da sessao (um arquivo de log), reaproveitado por todas as acoes.
@@ -111,9 +176,12 @@ class MainWindow(QMainWindow):
         self._results: list[StepRunResult] = []
         self._transient_active = False
 
+        self._cards: dict[str, StepCard] = {}
+        self._action_buttons: list[QPushButton] = []
+
         self._build_ui()
         self._terminal_executor = TerminalExecutor(self._terminal, on_activate=self._show_terminal)
-        self._select_step(0)
+        self._append("[info] Reforja pronto. Escolha uma secao no menu ao lado.")
 
         self._updating = False
         self._check_worker: CheckWorker | None = None
@@ -128,9 +196,193 @@ class MainWindow(QMainWindow):
             self._update_checker.updateAvailable.connect(self._on_update_available)
             self._update_checker.start()
 
+    def _register_button(self, button: QPushButton) -> None:
+        """Botoes de acao: desabilitados enquanto algo roda."""
+        self._action_buttons.append(button)
+
+    # --- construcao da UI --------------------------------------------------------
+    def _build_ui(self) -> None:
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Metade de cima: menu de navegacao + paginas.
+        top = QWidget()
+        top_layout = QHBoxLayout(top)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(0)
+
+        sidebar = QWidget()
+        sidebar.setObjectName("navSidebar")
+        sidebar.setFixedWidth(232)
+        side_layout = QVBoxLayout(sidebar)
+        side_layout.setContentsMargins(10, 14, 10, 12)
+        side_layout.setSpacing(2)
+        brand = QLabel("⬢ Reforja")
+        brand.setObjectName("brandMark")
+        side_layout.addWidget(brand)
+        brand_sub = QLabel("Pos-formatacao")
+        brand_sub.setObjectName("brandSub")
+        side_layout.addWidget(brand_sub)
+
+        self._menu = QListWidget()
+        self._menu.setObjectName("navMenu")
+        self._pages = QStackedWidget()
+
+        # Inicio: acoes em lote sobre tudo.
+        self._menu.addItem(QListWidgetItem("Inicio"))
+        self._pages.addWidget(self._build_home_page())
+        # Uma pagina por grupo.
+        for group in ALL_GROUPS:
+            self._menu.addItem(QListWidgetItem(group.title))
+            self._pages.addWidget(self._build_group_page(group))
+        # Atualizacoes.
+        self._menu.addItem(QListWidgetItem("Atualizacoes"))
+        self._pages.addWidget(self._build_updates_page())
+
+        self._menu.currentRowChanged.connect(self._pages.setCurrentIndex)
+        self._menu.setCurrentRow(0)
+        side_layout.addWidget(self._menu, 1)
+
+        top_layout.addWidget(sidebar)
+        top_layout.addWidget(self._pages, 1)
+
+        # Metade de baixo: console/terminal + progresso + status.
+        bottom = QWidget()
+        bottom_layout = QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(28, 8, 28, 12)
+        bottom_layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        self._btn_console = QPushButton("Console")
+        self._btn_terminal = QPushButton("Terminal")
+        self._btn_console.clicked.connect(lambda: self._stack.setCurrentWidget(self._console))
+        self._btn_terminal.clicked.connect(self._show_terminal)
+        toolbar.addWidget(self._btn_console)
+        toolbar.addWidget(self._btn_terminal)
+        toolbar.addStretch(1)
+        self._btn_stop = QPushButton("Parar")
+        self._btn_stop.setObjectName("destructive")
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.clicked.connect(self._stop_requested)
+        toolbar.addWidget(self._btn_stop)
+        self._progress = QProgressBar()
+        self._progress.setObjectName("progress")
+        self._progress.setTextVisible(True)
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        toolbar.addWidget(self._progress, 2)
+        bottom_layout.addLayout(toolbar)
+
+        self._stack = QStackedWidget()
+        self._console = QPlainTextEdit()
+        self._console.setObjectName("console")
+        self._console.setReadOnly(True)
+        self._console.setMaximumBlockCount(8000)
+        self._terminal = TerminalWidget()
+        self._terminal.setObjectName("terminal")
+        self._stack.addWidget(self._console)
+        self._stack.addWidget(self._terminal)
+        bottom_layout.addWidget(self._stack, 1)
+
+        self._status_label = QLabel(f"Log: {self._logger.path}")
+        self._status_label.setObjectName("statusLine")
+        bottom_layout.addWidget(self._status_label)
+
+        splitter.addWidget(top)
+        splitter.addWidget(bottom)
+        splitter.setSizes([470, 290])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        self.setCentralWidget(splitter)
+
+    def _build_home_page(self) -> QWidget:
+        page, layout = _page_scaffold(
+            "Inicio",
+            "Aplica ou verifica todas as etapas de uma vez. Para agir em uma etapa "
+            "especifica, escolha a secao dela no menu.",
+        )
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        btn_apply = QPushButton("Aplicar tudo")
+        btn_apply.setObjectName("primary")
+        btn_apply.clicked.connect(lambda: self._run_action("apply", list(ALL_STEPS)))
+        btn_status = QPushButton("Status geral")
+        btn_status.clicked.connect(lambda: self._run_action("status", list(ALL_STEPS)))
+        self._register_button(btn_apply)
+        self._register_button(btn_status)
+        row.addWidget(btn_apply)
+        row.addWidget(btn_status)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        hint = QLabel(
+            "Aplicar deixa voce marcar quais itens de cada etapa executar (o que ja "
+            "existe na maquina vem marcado). Status apenas verifica o estado, sem mudar nada."
+        )
+        hint.setObjectName("pageDesc")
+        hint.setWordWrap(True)
+        layout.addSpacing(6)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_group_page(self, group) -> QWidget:
+        page, layout = _page_scaffold(group.title, getattr(group, "description", "") or "")
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        children = list(group.children)
+        btn_apply = QPushButton("Aplicar grupo")
+        btn_apply.setObjectName("primary")
+        btn_apply.clicked.connect(lambda: self._run_action("apply", children))
+        btn_status = QPushButton("Status do grupo")
+        btn_status.clicked.connect(lambda: self._run_action("status", children))
+        self._register_button(btn_apply)
+        self._register_button(btn_status)
+        row.addWidget(btn_apply)
+        row.addWidget(btn_status)
+        row.addStretch(1)
+        layout.addLayout(row)
+        layout.addSpacing(6)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        holder = QWidget()
+        holder_layout = QVBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 6, 0)
+        holder_layout.setSpacing(12)
+        for step in children:
+            card = StepCard(step, self)
+            self._cards[step.id] = card
+            holder_layout.addWidget(card)
+        holder_layout.addStretch(1)
+        scroll.setWidget(holder)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _build_updates_page(self) -> QWidget:
+        from ._version import __version__
+
+        page, layout = _page_scaffold(
+            "Atualizacoes",
+            "Mantem o proprio Reforja em dia. A atualizacao automatica so funciona no "
+            "executavel (AppImage); rodando do fonte, abre a pagina de download.",
+        )
+        versao = QLabel(f"Versao instalada: v{__version__}")
+        versao.setObjectName("statusLine")
+        layout.addWidget(versao)
+        layout.addSpacing(8)
+        self._btn_update = QPushButton("Verificar atualizacoes")
+        self._btn_update.setObjectName("primary")
+        self._btn_update.clicked.connect(self._check_updates_manual)
+        self._register_button(self._btn_update)
+        row = QHBoxLayout()
+        row.addWidget(self._btn_update)
+        row.addStretch(1)
+        layout.addLayout(row)
+        layout.addStretch(1)
+        return page
+
     # --- atualizacao do app ------------------------------------------------------
     def _on_update_available(self, tag: str, url: str, sha256_url: str = "") -> None:
-        # Disparado pela checagem automatica do startup; oferece o update in-place.
         self._append(f"[info] Nova versao disponivel: {tag}")
         self._offer_update(tag, url, sha256_url)
 
@@ -173,7 +425,6 @@ class MainWindow(QMainWindow):
             return
         target = running_appimage()
         if target is None:
-            # Rodando do fonte (sem AppImage): a auto-atualizacao nao se aplica.
             self._append("[aviso] Atualizacao automatica disponivel apenas no AppImage. Abrindo a pagina de download.")
             QMessageBox.information(
                 self,
@@ -223,268 +474,17 @@ class MainWindow(QMainWindow):
                 f"{message}\n\nVoce pode baixar manualmente em:\nhttps://github.com/victorlcs87/scripts-linux/releases/latest",
             )
 
-    # --- construcao da UI --------------------------------------------------------
-    def _build_ui(self) -> None:
-        central = QWidget()
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        # Sidebar
-        sidebar = QWidget()
-        sidebar.setObjectName("sidebar")
-        side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(12, 16, 12, 16)
-        title = QLabel("Etapas")
-        title.setObjectName("sidebarTitle")
-        side_layout.addWidget(title)
-        self._list = QListWidget()
-        self._list.setObjectName("stepList")
-        self._list.setSpacing(1)
-        # Itens agrupados por categoria: cabecalho (sem checkbox) + etapas-filhas.
-        header_font = QFont()
-        header_font.setBold(True)
-        header_font.setPointSize(max(8, header_font.pointSize() - 1))
-        header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.0)
-        for group in ALL_GROUPS:
-            header = QListWidgetItem(group.title.upper())
-            header.setData(_ROLE_STEP, None)
-            header.setFlags(Qt.ItemFlag.ItemIsEnabled)  # nao selecionavel/checkavel
-            header.setForeground(QColor("#6f7788"))
-            header.setFont(header_font)
-            header.setSizeHint(QSize(0, 30))  # respiro acima de cada categoria
-            self._list.addItem(header)
-            for step in group.children:
-                item = QListWidgetItem()
-                item.setData(_ROLE_STEP, step)
-                item.setData(_ROLE_COMPLIANCE, "desconhecido")
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Unchecked)
-                item.setSizeHint(QSize(0, 32))
-                item.setToolTip(getattr(step, "description", ""))
-                self._list.addItem(item)
-        self._list.currentRowChanged.connect(self._select_step)
-        self._list.itemClicked.connect(self._on_item_clicked)
-        self._list.itemChanged.connect(lambda _item: self._update_undo_enabled())
-        side_layout.addWidget(self._list, 1)
-
-        # Marcar/limpar selecao
-        select_row = QHBoxLayout()
-        self._btn_check_all = QPushButton("Marcar todas")
-        self._btn_check_none = QPushButton("Limpar")
-        self._btn_check_all.clicked.connect(lambda: self._set_all_checked(True))
-        self._btn_check_none.clicked.connect(lambda: self._set_all_checked(False))
-        select_row.addWidget(self._btn_check_all)
-        select_row.addWidget(self._btn_check_none)
-        side_layout.addLayout(select_row)
-
-        caption = QLabel("Acoes agem nas etapas marcadas (ou na destacada). Clique no grupo para marcar a categoria.")
-        caption.setObjectName("statusLine")
-        caption.setWordWrap(True)
-        side_layout.addWidget(caption)
-        sidebar.setFixedWidth(280)
-        root.addWidget(sidebar)
-
-        # Painel principal
-        main = QWidget()
-        main_layout = QVBoxLayout(main)
-        main_layout.setContentsMargins(20, 18, 20, 18)
-        main_layout.setSpacing(12)
-
-        self._step_title = QLabel("")
-        self._step_title.setObjectName("stepTitle")
-        main_layout.addWidget(self._step_title)
-
-        actions = QHBoxLayout()
-        self._btn_apply = QPushButton("Aplicar")
-        self._btn_apply.setObjectName("primary")
-        self._btn_status = QPushButton("Status")
-        self._btn_undo = QPushButton("Undo")
-        self._btn_apply.clicked.connect(lambda: self._run_action("apply"))
-        self._btn_status.clicked.connect(lambda: self._run_action("status"))
-        self._btn_undo.clicked.connect(lambda: self._run_action("undo"))
-        for btn in (self._btn_apply, self._btn_status, self._btn_undo):
-            actions.addWidget(btn)
-        self._btn_stop = QPushButton("Parar")
-        self._btn_stop.setEnabled(False)
-        self._btn_stop.clicked.connect(self._stop_requested)
-        actions.addWidget(self._btn_stop)
-        actions.addStretch(1)
-        main_layout.addLayout(actions)
-
-        # Console + terminal empilhados
-        self._stack = QStackedWidget()
-        self._console = QPlainTextEdit()
-        self._console.setObjectName("console")
-        self._console.setReadOnly(True)
-        self._console.setMaximumBlockCount(8000)
-        self._terminal = TerminalWidget()
-        self._stack.addWidget(self._console)
-        self._stack.addWidget(self._terminal)
-        main_layout.addWidget(self._stack, 1)
-
-        bottom = QHBoxLayout()
-        self._btn_console = QPushButton("Console")
-        self._btn_terminal = QPushButton("Terminal")
-        self._btn_console.clicked.connect(lambda: self._stack.setCurrentWidget(self._console))
-        self._btn_terminal.clicked.connect(self._show_terminal)
-        bottom.addWidget(self._btn_console)
-        bottom.addWidget(self._btn_terminal)
-        bottom.addStretch(1)
-        self._btn_update = QPushButton("Verificar atualizacoes")
-        self._btn_update.clicked.connect(self._check_updates_manual)
-        bottom.addWidget(self._btn_update)
-        self._progress = QProgressBar()
-        self._progress.setObjectName("progress")
-        self._progress.setTextVisible(True)
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        bottom.addWidget(self._progress, 2)
-        main_layout.addLayout(bottom)
-
-        self._status_label = QLabel(f"Log: {self._logger.path}")
-        self._status_label.setObjectName("statusLine")
-        main_layout.addWidget(self._status_label)
-
-        root.addWidget(main, 1)
-        self.setCentralWidget(central)
-        self._refresh_step_items()
-
-    # --- estado dos steps --------------------------------------------------------
-    def _step_items(self):
-        """Itera (item, step) das etapas, ignorando cabecalhos de grupo."""
-        for row in range(self._list.count()):
-            item = self._list.item(row)
-            step = item.data(_ROLE_STEP)
-            if step is not None:
-                yield item, step
-
-    def _item_for_step(self, step_id: str):
-        for item, step in self._step_items():
-            if step.id == step_id:
-                return item
-        return None
-
-    def _refresh_step_items(self) -> None:
-        for item, step in self._step_items():
-            compliance = item.data(_ROLE_COMPLIANCE) or "desconhecido"
-            glyph, color = _COMPLIANCE.get(compliance, _COMPLIANCE["desconhecido"])
-            item.setText(f"{glyph}  {step.title}")
-            item.setForeground(QColor(color))
-
-    def _select_step(self, row: int) -> None:
-        if row < 0:
-            return
-        step = self._list.item(row).data(_ROLE_STEP)
-        if step is None:  # cabecalho de grupo
-            return
-        self._step_title.setText(step.title)
-        self._update_undo_enabled()
-        # Mostra a descricao da etapa no console (preview), sem perturbar execucao.
-        if self._worker is None:
-            self._show_step_info(step)
-
-    def _show_step_info(self, step) -> None:
-        self._stack.setCurrentWidget(self._console)
-        if self._results:
-            # Ja houve execucao nesta sessao: preserva o resumo no console e so
-            # atualiza o titulo/descricao no painel.
-            return
-        self._console.clear()
-        self._append(f"[info] {step.title}")
-        for line in describe_step_plain(step, self._step_tasks(step)):
-            self._append(line)
-        self._append("")
-        acoes = "Aplicar deixa voce marcar quais itens executar (ja vem marcado o que existe hoje na maquina)."
-        acoes += " Status apenas verifica o estado."
-        if self._has_undo(step):
-            acoes += " Undo desfaz o que a etapa criou."
-        self._append(acoes)
-        self._append("Marque a(s) etapa(s) e clique em Aplicar / Status / Undo.")
-
-    def _step_tasks(self, step_cls: type) -> list:
-        """Tarefas declaradas pela etapa, SEM sondar o sistema.
-
-        Sondar aqui (plan()) rodaria comandos — alguns com sudo — so por clicar na
-        etapa. O estado real aparece pre-marcado no dialogo do Aplicar.
-        """
-        try:
-            instance = build_gui_step(
-                step_cls,
-                self._logger,
-                dry_run=True,
-                askpass=self._askpass,
-                interactive_executor=self._terminal_executor,
-                run_dir=self._run_dir,
-            )
-            return list(instance.tasks())
-        except Exception:
-            return []
-
-    @staticmethod
-    def _has_undo(step: type) -> bool:
-        # Detecta undo mesmo herdado (mixin/base intermediaria), sem falso
-        # positivo do placeholder da classe base.
-        return step.undo is not _StepBase.undo
-
-    def _update_undo_enabled(self) -> None:
-        targets = self._target_steps()
-        self._btn_undo.setEnabled(any(self._has_undo(step) for step in targets))
-
-    def _current_step(self) -> type | None:
-        item = self._list.currentItem()
-        return item.data(_ROLE_STEP) if item is not None else None
-
-    def _checked_steps(self) -> list[type]:
-        return [step for item, step in self._step_items() if item.checkState() == Qt.CheckState.Checked]
-
-    def _set_all_checked(self, checked: bool) -> None:
-        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
-        for item, _step in self._step_items():
-            item.setCheckState(state)
-
-    def _on_item_clicked(self, item) -> None:
-        # Clique num cabecalho de grupo marca/desmarca todas as filhas do grupo.
-        if item.data(_ROLE_STEP) is not None:
-            return
-        group_title = item.text()
-        group = next((g for g in ALL_GROUPS if g.title.upper() == group_title), None)
-        if group is None:
-            return
-        child_ids = {child.id for child in group.children}
-        members = [it for it, st in self._step_items() if st.id in child_ids]
-        any_unchecked = any(it.checkState() != Qt.CheckState.Checked for it in members)
-        state = Qt.CheckState.Checked if any_unchecked else Qt.CheckState.Unchecked
-        for it in members:
-            it.setCheckState(state)
-
     # --- execucao ----------------------------------------------------------------
     def _set_running(self, running: bool) -> None:
-        for btn in (
-            self._btn_apply,
-            self._btn_status,
-            self._btn_undo,
-            self._btn_check_all,
-            self._btn_check_none,
-            self._btn_update,
-        ):
+        for btn in self._action_buttons:
             btn.setEnabled(not running)
         self._btn_stop.setEnabled(running)
-        if not running:
-            self._select_step(self._list.currentRow())
 
-    def _target_steps(self) -> list[type]:
-        """Alvo das acoes: as etapas marcadas; se nenhuma, a etapa destacada."""
-        checked = self._checked_steps()
-        if checked:
-            return checked
-        current = self._current_step()
-        return [current] if current is not None else []
-
-    def _run_action(self, action: str) -> None:
-        steps = self._target_steps()
+    def _run_action(self, action: str, steps: list[type]) -> None:
+        if self._worker is not None:
+            return
         if action == "undo":
-            steps = [step for step in steps if self._has_undo(step)]
+            steps = [step for step in steps if _has_undo(step)]
         if not steps:
             return
         if not self._confirm_action(action, steps):
@@ -557,10 +557,9 @@ class MainWindow(QMainWindow):
 
     def _on_result(self, result: StepRunResult) -> None:
         self._results.append(result)
-        item = self._item_for_step(result.step_id)
-        if item is not None:
-            item.setData(_ROLE_COMPLIANCE, result.compliance)
-        self._refresh_step_items()
+        card = self._cards.get(result.step_id)
+        if card is not None:
+            card.set_compliance(result.compliance)
         self._progress.setRange(0, 100)
         self._progress.setValue(int(len(self._results) / max(1, self._queue_total) * 100))
         self._append(f"[{result.status}] {result.title}: {result.message}")

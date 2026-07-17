@@ -6,8 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-_THEME = Path(__file__).with_name("theme.qss")
-
 
 def _default_run_dir() -> Path:
     """Diretorio onde os LOGS sao gravados.
@@ -52,8 +50,9 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtGui import QIcon
 
         app.setWindowIcon(QIcon(str(icon_path)))
-    if _THEME.exists():
-        app.setStyleSheet(_THEME.read_text(encoding="utf-8"))
+    from .theme import build_stylesheet
+
+    app.setStyleSheet(build_stylesheet())
 
     window = MainWindow(_default_run_dir())
     window.show()
