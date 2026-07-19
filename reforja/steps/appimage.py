@@ -85,11 +85,16 @@ class UpdateAppImagesStep(Step):
                     f"Atualiza o {app['name']} para a ultima versao do GitHub, se ja estiver instalado. "
                     "Nao instala do zero."
                 )
+            short = f"{app['name']} · AppImage do GitHub"
+            category = (app.get("categories") or ("",))[0].lower()
             items.append(
                 StepTask(
                     key=app["name"],
                     label=app["name"],
                     description=what,
+                    short_description=short,
+                    icon=app.get("icon_asset", ""),
+                    category=category,
                     detect=partial(self._version_detail, app),
                     run=partial(self._process_one_task, app),
                     detail="nao instalado",

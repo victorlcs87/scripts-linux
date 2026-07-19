@@ -75,6 +75,21 @@ BADGE_COLORS = {
 
 CONSOLE_CMD_COLOR = "#5fe1ff"
 
+# Cor do avatar tipografico (fallback do icone) por categoria de item.
+CATEGORY_COLORS = {
+    "jogos": "#7c3aed",
+    "game": "#7c3aed",
+    "comunicacao": "#2f5fd0",
+    "escritorio": "#0f766e",
+    "navegador": "#c2410c",
+    "dev": "#1e293b",
+    "sistema": "#4b5563",
+    "system": "#4b5563",
+    "utilitarios": "#0369a1",
+    "utility": "#0369a1",
+    "_default": "#586173",
+}
+
 _FONT = '"Inter", "Noto Sans", "Segoe UI", "Cantarell", sans-serif'
 _MONO = '"JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace'
 
@@ -150,6 +165,47 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #cardTitle {{ font-size: 15px; font-weight: 600; color: {p["text"]}; }}
 #cardDesc {{ color: {p["text_muted"]}; font-size: 12px; }}
 #cardStatus {{ font-size: 12px; font-weight: 600; }}
+
+/* --- card de item (grade estilo Flathub) -------------------------------- */
+#itemCard {{
+    background: {p["surface"]};
+    border: 1px solid {p["border"]};
+    border-radius: 12px;
+}}
+#itemCard:hover {{ border-color: {p["border_strong"]}; }}
+#itemCard[applied="true"] {{ border-color: {p["success"]}; }}
+#itemName {{ background: transparent; font-size: 14px; font-weight: 700; color: {p["text"]}; }}
+#itemDesc {{ background: transparent; color: {p["text_muted"]}; font-size: 12px; }}
+#itemState {{ background: transparent; font-size: 11px; font-weight: 600; color: {p["text_faint"]}; }}
+#installedChip {{
+    color: {p["success"]};
+    background: #e8f4ec;
+    border: 1px solid #bfe0cb;
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+#unavailableChip {{
+    color: {p["text_faint"]};
+    background: {p["surface_alt"]};
+    border: 1px solid {p["border"]};
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+}}
+QPushButton#ghost {{
+    background: transparent;
+    border: 1px solid {p["border_strong"]};
+    padding: 6px 12px;
+    font-size: 12px;
+}}
+QPushButton#ghost:hover {{ border-color: {p["primary"]}; color: {p["primary"]}; }}
+#backLink {{ color: {p["primary"]}; font-weight: 600; }}
+#sectionLabel {{ color: {p["text_faint"]}; font-size: 11px; font-weight: 700; }}
+/* Item ja instalado na previa: esmaecido (marcar = reinstalar). */
+QCheckBox#installedCheck {{ color: {p["text_faint"]}; }}
 
 /* --- botoes ------------------------------------------------------------- */
 QPushButton {{

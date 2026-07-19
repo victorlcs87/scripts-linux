@@ -553,6 +553,8 @@ class GpuStep(Step):
 class AppsStep(Step):
     id = "10"
     title = "Apps / jogos / comunicacao / dev"
+    # Catalogo de apps: ja instalado nao reinstala sozinho (so via Reinstalar).
+    skip_if_installed = True
     description = (
         "Instala os apps principais: Steam e Heroic (jogos), comunicacao (Discord, ZapZap, TeamSpeak), "
         "utilitarios (Solaar, LocalSend, Flatseal, Bitwarden, Linux Toys), ONLYOFFICE, auto-cpufreq "
@@ -684,12 +686,51 @@ class AppsStep(Step):
         "LocalSend": "Envia arquivos entre dispositivos na mesma rede (tipo AirDrop). Prioriza o Flatpak, com fallback para pacote nativo/AUR.",
     }
 
+    # Uma linha curta (para o card estilo Flathub) + categoria (colore o avatar).
+    app_short = {
+        "Steam": "Loja e launcher de jogos da Valve",
+        "Heroic": "Jogos da Epic, GOG e Amazon",
+        "Discord": "Chat de voz e texto",
+        "TeamSpeak": "Chat de voz para jogos",
+        "ZapZap": "WhatsApp para desktop",
+        "ONLYOFFICE": "Suite de escritorio (Word/Excel/PPT)",
+        "Google Chrome": "Navegador do Google",
+        "Minecraft Bedrock Launcher": "Minecraft Bedrock no Linux",
+        "Codex CLI": "Assistente de codigo da OpenAI no terminal",
+        "auto-cpufreq": "Economia de bateria (frequencia da CPU)",
+        "Bitwarden": "Gerenciador de senhas",
+        "Linux Toys": "Colecao de utilitarios e tweaks",
+        "Solaar": "Dispositivos Logitech (Unifying)",
+        "Flatseal": "Editor de permissoes de apps Flatpak",
+        "LocalSend": "Envia arquivos na rede local",
+    }
+    app_category = {
+        "Steam": "jogos",
+        "Heroic": "jogos",
+        "Discord": "comunicacao",
+        "TeamSpeak": "comunicacao",
+        "ZapZap": "comunicacao",
+        "ONLYOFFICE": "escritorio",
+        "Google Chrome": "navegador",
+        "Minecraft Bedrock Launcher": "jogos",
+        "Codex CLI": "dev",
+        "auto-cpufreq": "sistema",
+        "Bitwarden": "utilitarios",
+        "Linux Toys": "utilitarios",
+        "Solaar": "utilitarios",
+        "Flatseal": "utilitarios",
+        "LocalSend": "utilitarios",
+    }
+
     def tasks(self) -> list[StepTask]:
         return [
             StepTask(
                 key=name,
                 label=name,
                 description=self.app_help.get(name, ""),
+                short_description=self.app_short.get(name, ""),
+                icon=str(self.apps[name].get("flatpak_id") or ""),
+                category=self.app_category.get(name, ""),
                 detect=partial(self._detect_source_label, name),
                 run=partial(self._install_app, name),
                 detail="nao instalado",
@@ -747,6 +788,9 @@ class AppsStep(Step):
         )
 
     def _install_linuxtoys(self) -> None:
+        if command_exists("linuxtoys"):
+            self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} Linux Toys ja instalado (linuxtoys no PATH).")
+            return
         header(self, "Linux Toys", "Instalando pelo script oficial (colecao de utilitarios e tweaks)")
         build_dir = Path("/tmp/linuxtoys")
         if build_dir.exists():

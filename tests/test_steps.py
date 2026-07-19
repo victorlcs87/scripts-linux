@@ -35,7 +35,7 @@ from reforja.steps import (
     UpdateAppImagesStep,
 )
 from reforja.steps.storage import Partition
-from reforja.steps_base import StepContext
+from reforja.steps_base import Step, StepContext, StepTask
 
 
 @pytest.fixture(autouse=True)
@@ -108,6 +108,61 @@ class _AutoInteraction:
 
     def choose_many(self, prompt, options, *, detail=None, preselected=()) -> list[int]:
         return list(preselected) if preselected else list(range(len(list(options))))
+
+
+class _CatalogStep(Step):
+    """Etapa de catalogo minima para exercitar a semantica Flathub do motor."""
+
+    id = "99"
+    title = "Catalogo de teste"
+    description = "etapa de teste"
+    skip_if_installed = True
+
+    def __init__(self, ctx, states) -> None:
+        super().__init__(ctx)
+        self._states = states
+        self.executed: list[str] = []
+
+    def tasks(self):
+        itens = []
+        for key, state in self._states.items():
+            itens.append(
+                StepTask(
+                    key=key,
+                    label=key,
+                    detect=(lambda s=state: s == "aplicado"),
+                    run=(lambda k=key: self.executed.append(k)),
+                )
+            )
+        return itens
+
+
+def test_catalogo_pula_item_ja_instalado_sem_force(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = _CatalogStep(ctx, {"Instalado": "aplicado", "Faltando": "pendente"})
+    # Selecao explicita marcando ambos: mesmo assim o ja instalado nao roda.
+    step.selection = ("Instalado", "Faltando")
+    step.apply()
+    assert step.executed == ["Faltando"]
+
+
+def test_catalogo_reinstala_quando_force(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = _CatalogStep(ctx, {"Instalado": "aplicado"})
+    step.selection = ("Instalado",)
+    step.force_keys = {"Instalado"}
+    step.apply()
+    assert step.executed == ["Instalado"]
+
+
+def test_catalogo_preseleciona_o_que_falta(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    step = _CatalogStep(ctx, {"Instalado": "aplicado", "Faltando": "pendente"})
+    tasks = step.plan()
+    runnable = [t for t in tasks if t.runnable]
+    # A pre-selecao do checkbox marca o pendente, nao o ja aplicado (modelo Flathub).
+    preselected = [i for i, t in enumerate(runnable) if t.state in ("pendente", "acao") and t.preselectable]
+    assert [runnable[i].key for i in preselected] == ["Faltando"]
 
 
 def test_all_steps_apply_clean_in_dry_run(tmp_path: Path, monkeypatch) -> None:
@@ -386,6 +441,8 @@ def test_apps_dry_run_mentions_codex_and_flatpaks(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
     monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda command: False)
     monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
+    # Detecao deterministica: nada instalado -> tudo pendente -> tudo roda no dry-run.
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
 
     step.apply()
     log = ctx.logger.path.read_text(encoding="utf-8")

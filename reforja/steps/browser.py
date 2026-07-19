@@ -46,6 +46,8 @@ class BrowserStep(Step):
                     "Instala o Firefox e o FirefoxPWA, que e o que permite transformar sites em "
                     "aplicativos com janela propria (os WebApps abaixo dependem dele)."
                 ),
+                short_description="Firefox + FirefoxPWA (base dos WebApps)",
+                category="navegador",
                 detect=self._browser_ready,
                 run=self._install_browser,
             )
@@ -59,6 +61,8 @@ class BrowserStep(Step):
                         f"Cria um app de janela propria para {url}, com atalho no menu. Usa o FirefoxPWA; "
                         "se ele falhar, tenta o WebApp Manager e, por ultimo, um atalho .desktop simples."
                     ),
+                    short_description=f"App de janela propria para {name}",
+                    category="navegador",
                     detect=partial(self._webapp_detail, name, slug),
                     run=partial(self._create_one_webapp, name, slug),
                     detail="nao criado",

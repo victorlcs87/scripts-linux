@@ -47,6 +47,68 @@ def build_gui_step(
     return step_cls(ctx)
 
 
+class ProbeWorker(QThread):
+    """Sonda as tarefas de uma etapa em segundo plano (state/detail preenchidos).
+
+    Roda `step.plan()` fora da UI thread para os cards mostrarem 'Instalado' vs
+    'Instalar' sem travar a interface. A sondagem so le o sistema (pacman -Q,
+    flatpak list, arquivos) — nao instala nada nem deveria pedir sudo.
+    """
+
+    probed = Signal(str, object)  # (step_id, list[StepTask]) — objetos Python simples
+    failed = Signal(str, str)  # (step_id, mensagem)
+
+    def __init__(self, step_cls: type[Step], logger, *, run_dir: Path) -> None:
+        super().__init__()
+        self._step_cls = step_cls
+        self._logger = logger
+        self._run_dir = run_dir
+
+    def run(self) -> None:  # noqa: D401 (override QThread.run)
+        try:
+            step = build_gui_step(
+                self._step_cls,
+                self._logger,
+                dry_run=True,
+                askpass=None,
+                interactive_executor=None,
+                run_dir=self._run_dir,
+            )
+            tasks = step.plan()
+            self.probed.emit(self._step_cls.id, tasks)
+        except Exception as exc:  # noqa: BLE001 - sondar nunca derruba a UI
+            self.failed.emit(self._step_cls.id, str(exc))
+
+
+class BatchProbeWorker(QThread):
+    """Sonda VARIAS etapas em segundo plano para a previa consolidada do Aplicar.
+
+    Reaproveita `planning.collect_plans` (mesma sondagem do CLI): devolve, por
+    etapa que sonda com sucesso, a lista de tarefas com state/detail preenchidos.
+    So le o sistema (nao instala nada) — roda fora da UI thread para o dialogo de
+    previa abrir ja sabendo o que falta, sem congelar a interface.
+    """
+
+    probed = Signal(object)  # list[StepPlan] = [(step_cls, step, tasks), ...]
+
+    def __init__(self, step_classes: list[type[Step]], logger, *, run_dir: Path) -> None:
+        super().__init__()
+        self._step_classes = list(step_classes)
+        self._logger = logger
+        self._run_dir = run_dir
+
+    def run(self) -> None:  # noqa: D401 (override QThread.run)
+        from ..planning import collect_plans
+
+        def build(step_cls: type[Step]) -> Step:
+            return build_gui_step(
+                step_cls, self._logger, dry_run=True, askpass=None, interactive_executor=None, run_dir=self._run_dir
+            )
+
+        plans = collect_plans(self._step_classes, self._logger, build)
+        self.probed.emit(plans)
+
+
 class StepWorker(QThread):
     resultReady = Signal(object)  # StepRunResult
     # (status, mensagem): status segue o vocabulario do CLI (blocked/manual/failed)
@@ -62,6 +124,8 @@ class StepWorker(QThread):
         askpass: str | None,
         interactive_executor: InteractiveExecutor | None,
         run_dir: Path,
+        selection: tuple[str, ...] | None = None,
+        force_keys: frozenset[str] | None = None,
     ) -> None:
         super().__init__()
         self._step_cls = step_cls
@@ -70,6 +134,11 @@ class StepWorker(QThread):
         self._askpass = askpass
         self._interactive_executor = interactive_executor
         self._run_dir = run_dir
+        # Selecao de itens (chaves de StepTask) injetada pela GUI: quando presente,
+        # o apply nao abre o checkbox proprio e roda exatamente esses itens.
+        # force_keys marca os que devem reinstalar mesmo ja estando aplicados.
+        self._selection = selection
+        self._force_keys = force_keys or frozenset()
         # Runner da execucao corrente (para o botao Parar chamar request_abort).
         self.active_runner: Runner | None = None
 
@@ -103,6 +172,10 @@ class StepWorker(QThread):
             interactive_executor=self._interactive_executor,
             run_dir=self._run_dir,
         )
+        if self._selection is not None:
+            step.selection = self._selection
+        if self._force_keys:
+            step.force_keys = set(self._force_keys)
         self.active_runner = step.ctx.runner
         started = time.monotonic()
         dispatch_action(step, self._action)

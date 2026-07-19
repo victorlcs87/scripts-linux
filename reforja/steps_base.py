@@ -40,6 +40,13 @@ class StepTask:
     key: str
     label: str
     description: str = ""
+    # Texto curto (uma linha) para o card estilo Flathub; a `description` longa
+    # vira tooltip/detalhes. Vazio -> a UI deriva da primeira frase da description.
+    short_description: str = ""
+    # Apresentacao (opcional): `icon` e um caminho de asset local OU um id Flathub
+    # que a GUI resolve para o icone; `category` colore o avatar de fallback.
+    icon: str = ""
+    category: str = ""
     run: Callable[[], None] | None = None
     detect: Callable[[], bool | str | None] | None = None
     stateless: bool = False
@@ -70,10 +77,12 @@ class StepTask:
             reason = self.unavailable_reason or "nao se aplica a esta maquina"
             return f"{self.label} (indisponivel: {reason})"
         if self.state == "aplicado":
-            return f"{self.label}{aviso} ({self.detail or 'ja aplicado'})"
+            return f"{self.label}{aviso} ({self.detail or 'ja instalado'})"
         if self.state == "acao":
             return f"{self.label}{aviso} ({self.detail or 'acao sob demanda'})"
-        return f"{self.label}{aviso} ({self.detail or 'nao aplicado'})"
+        if self.state == "pendente":
+            return f"{self.label}{aviso} ({self.detail or 'instalar'})"
+        return f"{self.label}{aviso} ({self.detail or 'estado desconhecido'})"
 
 
 @dataclass
@@ -118,6 +127,12 @@ class Step:
     # do estado das tarefas. Etapas cujo veredito vem de diagnostico proprio
     # (ex.: GPU) desligam isso e chamam seus proprios mark_*.
     compliance_from_plan = True
+    # Modelo Flathub: quando True, um item ja instalado (state == "aplicado") NAO
+    # e reexecutado por padrao — so roda se o usuario pedir (force_keys/Reinstalar).
+    # Vale para etapas de catalogo (apps): reinstalar so a pedido. Etapas de config
+    # idempotente/atualizador (GPU, fstab, Sunshine, AppImages...) deixam False para
+    # poderem reaplicar/atualizar normalmente.
+    skip_if_installed = False
 
     def __init__(self, ctx: StepContext) -> None:
         self.ctx = ctx
@@ -127,6 +142,10 @@ class Step:
         self.selection: tuple[str, ...] | None = None
         # Marca tudo por padrao no checkbox (em vez de so o que ja esta aplicado).
         self.select_all = False
+        # Chaves de StepTask que o usuario mandou REINSTALAR/reaplicar de proposito.
+        # Um item ja aplicado so roda de novo se sua chave estiver aqui; caso
+        # contrario o run_tasks pula (modelo Flathub: instalado nao reinstala sozinho).
+        self.force_keys: set[str] = set()
 
     # ------------------------------------------------------------------
     # Contrato novo: a etapa declara suas tarefas e o resto vem de graca.
@@ -192,8 +211,9 @@ class Step:
     def choose_tasks(self, tasks: Sequence[StepTask]) -> list[StepTask]:
         """Decide quais tarefas rodar: selecao injetada, tudo, ou checkbox interativo.
 
-        No checkbox, vem pre-marcado o que JA esta aplicado na maquina — marcar
-        significa executar/reaplicar; desmarcar significa apenas nao mexer.
+        Modelo Flathub: vem pre-marcado o que FALTA (pendente/acao) — marcar significa
+        instalar/executar. O que ja esta instalado vem desmarcado e nao e reaplicado
+        por padrao; reinstalar e um ato deliberado (via force_keys/Reinstalar).
         """
         runnable = [task for task in tasks if task.runnable]
         if not runnable:
@@ -203,10 +223,12 @@ class Step:
             return [task for task in runnable if task.key in keys]
         if self.select_all:
             return [task for task in runnable if task.preselectable]
-        if len(runnable) == 1 and runnable[0].preselectable:
-            # Etapa de item unico: escolher a etapa ja e escolher o item.
+        if len(runnable) == 1 and runnable[0].preselectable and runnable[0].state != "aplicado":
+            # Etapa de item unico ainda pendente: escolher a etapa ja e escolher o item.
             return list(runnable)
-        preselected = [index for index, task in enumerate(runnable) if task.state == "aplicado" and task.preselectable]
+        preselected = [
+            index for index, task in enumerate(runnable) if task.state in ("pendente", "acao") and task.preselectable
+        ]
         indices = select_many(
             f"{type(self).title}: o que executar?",
             [task.menu_label() for task in runnable],
@@ -235,7 +257,18 @@ class Step:
 
         manual_before = self.result.manual_events
         failures: list[str] = []
+        skipped_installed = 0
         for task in chosen:
+            # Modelo Flathub (so em etapas de catalogo): item ja instalado nao
+            # reinstala sozinho. So roda de novo se o usuario pediu (force_keys) —
+            # protege ate instaladores nao idempotentes de reexecutar sem querer.
+            if self.skip_if_installed and task.state == "aplicado" and task.key not in self.force_keys:
+                logger.write(
+                    f"{badge('pulado', Color.INFO)} {task.label}: ja instalado "
+                    "(use Reinstalar para forcar a reaplicacao)"
+                )
+                skipped_installed += 1
+                continue
             logger.write("")
             logger.write(paint(f"-> {task.label}", Color.TITLE))
             if task.description:
@@ -254,13 +287,17 @@ class Step:
                 logger.write(f"{badge('erro', Color.ERROR)} {task.label}: {exc}")
                 self.add_hint(f"revise '{task.label}': {exc}")
 
+        executed = len(chosen) - skipped_installed
         if failures:
             self.mark_done(f"Concluido com falhas em: {', '.join(failures)}.")
         elif self.result.manual_events > manual_before:
             self.mark_manual("A etapa dependeu de interacao manual.")
+        elif executed == 0 and skipped_installed:
+            self.mark_skipped(f"{skipped_installed} item(ns) ja instalado(s); nada a fazer.")
         elif not self.result.message:
             # Nenhuma tarefa se pronunciou (mark_skipped/mark_done proprio): resumo generico.
-            self.mark_done(f"{len(chosen)} item(ns) processado(s).")
+            extra = f" ({skipped_installed} ja instalado(s))" if skipped_installed else ""
+            self.mark_done(f"{executed} item(ns) processado(s){extra}.")
 
         # Reconfere o estado real depois de agir.
         if self.compliance_from_plan:
@@ -354,10 +391,15 @@ class Step:
 
 
 def explain_tasks(tasks: Sequence[StepTask]) -> str:
-    """Bloco de texto que explica, item a item, o que sera feito e o estado atual."""
+    """Explica, item a item, o que sera feito — compacto (uma linha curta por item).
+
+    Instalado vem marcado; instalar/executar mostra o texto curto. A descricao
+    longa completa fica no Status, para nao inundar o seletor.
+    """
     lines: list[str] = []
     for task in tasks:
-        lines.append(f"- {task.menu_label()}")
-        if task.description:
-            lines.append(f"    {task.description}")
+        marcador = "✓" if task.state == "aplicado" else "○"
+        curto = task.short_description or (task.description.split(". ")[0] if task.description else "")
+        sufixo = f" — {curto}" if curto else ""
+        lines.append(f"{marcador} {task.label}{sufixo}")
     return "\n".join(lines)

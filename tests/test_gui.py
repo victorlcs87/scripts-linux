@@ -70,17 +70,26 @@ def test_navegacao_menu_tem_inicio_grupos_e_atualizacoes(app, tmp_path: Path) ->
     window = MainWindow(tmp_path)
     # Inicio + um por grupo + Atualizacoes.
     assert window._menu.count() == len(ALL_GROUPS) + 2
-    assert window._pages.count() == window._menu.count()
+    # Alem das paginas do menu, ha uma pagina de etapa por step (fora do menu).
+    assert window._pages.count() == window._menu.count() + len(ALL_STEPS)
     assert window._menu.item(0).text() == "Inicio"
     assert window._menu.item(window._menu.count() - 1).text() == "Atualizacoes"
-    # Trocar de entrada no menu troca a pagina exibida.
+    # Trocar de entrada no menu troca a pagina exibida (via mapa row->pagina).
     window._menu.setCurrentRow(2)
-    assert window._pages.currentIndex() == 2
+    assert window._pages.currentIndex() == window._row_to_page[2]
 
 
 def test_cartoes_cobrem_todas_as_etapas(app, tmp_path: Path) -> None:
     window = MainWindow(tmp_path)
-    assert sorted(window._cards.keys()) == sorted(s.id for s in ALL_STEPS)
+    assert sorted(window._summary_cards.keys()) == sorted(s.id for s in ALL_STEPS)
+
+
+def test_abrir_etapa_mostra_pagina_da_etapa(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    window._open_step_page("10")
+    assert window._pages.currentIndex() == window._step_page_index["10"]
+    # O grupo dono da etapa 10 continua destacado no menu.
+    assert window._menu.currentRow() == window._group_row_of_step["10"]
 
 
 def test_aplicar_tudo_enfileira_todas_as_etapas(app, tmp_path: Path, monkeypatch) -> None:
@@ -153,10 +162,191 @@ def test_app_main_askpass_mode_nao_abre_janela(monkeypatch) -> None:
 
 def test_cartao_mostra_titulo_e_descricao_da_etapa(app, tmp_path: Path) -> None:
     window = MainWindow(tmp_path)
-    card = window._cards["15"]
+    card = window._summary_cards["15"]
     textos = [child.text() for child in card.findChildren(type(card._status))]
     assert any("Atualizar AppImages" in t for t in textos)
     assert any("GitHub Releases" in t for t in textos)
+
+
+# --- cards de item (grade estilo Flathub) -----------------------------------------
+def _task(state: str, **kwargs):
+    from reforja.steps_base import StepTask
+
+    t = StepTask(key=kwargs.get("key", "x"), label=kwargs.get("label", "App"), run=lambda: None)
+    t.state = state
+    for attr, value in kwargs.items():
+        setattr(t, attr, value)
+    return t
+
+
+def test_item_card_instalado_mostra_chip_e_reinstalar(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    card = ItemCard(_step("10"), _task("aplicado", detail="flatpak"), window)
+    # isVisible() e False em widget nao exibido (offscreen); isHidden() reflete o
+    # estado explicito de visibilidade que o card define.
+    assert not card._chip.isHidden()
+    assert "flatpak" in card._chip.text()
+    assert not card._secondary.isHidden() and card._secondary.text() == "Reinstalar"
+    # Ja instalado nao oferece o botao primario de instalar.
+    assert card._action.isHidden()
+
+
+def test_item_card_pendente_mostra_instalar(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    card = ItemCard(_step("10"), _task("pendente"), window)
+    assert not card._action.isHidden() and card._action.text() == "Instalar"
+    assert card._chip.isHidden()
+    assert card._secondary.isHidden()
+
+
+def test_item_card_appimage_instalado_diz_atualizar(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    card = ItemCard(_step("15"), _task("aplicado"), window)
+    assert card._secondary.text() == "Atualizar"
+
+
+def test_install_item_injeta_selection_e_force(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    captured: dict = {}
+
+    def fake_run_action(action, steps, *, selection=None, force=None, on_done=None):
+        captured.update(action=action, steps=steps, selection=selection, force=force)
+
+    monkeypatch.setattr(window, "_run_action", fake_run_action)
+    step10 = _step("10")
+    window._install_item(step10, "Discord", force=True)
+
+    assert captured["action"] == "apply"
+    assert captured["steps"] == [step10]
+    assert captured["selection"] == {"10": ("Discord",)}
+    assert captured["force"] == {"10": frozenset({"Discord"})}
+
+
+def test_step_worker_recebe_selection_e_force(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    captured: dict = {}
+
+    import reforja.gui.main_window as mw
+
+    class _FakeWorker:
+        def __init__(self, step_cls, action, logger, **kwargs) -> None:
+            captured.update(step_id=step_cls.id, selection=kwargs.get("selection"), force=kwargs.get("force_keys"))
+
+        def start(self) -> None:
+            pass
+
+        # sinais usados por _start_worker
+        class _S:
+            def connect(self, *_a, **_k) -> None:
+                pass
+
+        resultReady = _S()
+        failed = _S()
+        finished = _S()
+
+    monkeypatch.setattr(mw, "StepWorker", _FakeWorker)
+    window._selection_map = {"10": ("Discord",)}
+    window._force_map = {"10": frozenset({"Discord"})}
+    window._start_worker(_step("10"), "apply")
+
+    assert captured["selection"] == ("Discord",)
+    assert captured["force"] == frozenset({"Discord"})
+
+
+def _plan(step_cls, tasks):
+    return (step_cls, object(), tasks)
+
+
+def test_previa_marca_o_que_falta_e_devolve_selecao(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import BatchPreviewDialog
+
+    window = MainWindow(tmp_path)
+    tasks = [_task("aplicado", key="A", label="A"), _task("pendente", key="B", label="B")]
+    dialog = BatchPreviewDialog([_plan(_step("10"), tasks)], window, title="Aplicar")
+    # Vem marcado o que falta (B), nao o ja instalado (A).
+    marcados = {key: check.isChecked() for _sid, key, _state, check in dialog._checks}
+    assert marcados == {"A": False, "B": True}
+    selection, force = dialog.result_selection()
+    assert selection == {"10": ("B",)}
+    assert force == {}  # B nao estava instalado -> nao forca
+
+
+def test_previa_marcar_instalado_forca_reinstalar(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import BatchPreviewDialog
+
+    window = MainWindow(tmp_path)
+    tasks = [_task("aplicado", key="A", label="A")]
+    dialog = BatchPreviewDialog([_plan(_step("10"), tasks)], window, title="Aplicar")
+    # Marcar um ja instalado = reinstalar -> entra na selecao E no force.
+    dialog._checks[0][3].setChecked(True)
+    selection, force = dialog.result_selection()
+    assert selection == {"10": ("A",)}
+    assert force == {"10": frozenset({"A"})}
+
+
+def test_previa_toda_etapa_recebe_selecao_explicita(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import BatchPreviewDialog
+
+    window = MainWindow(tmp_path)
+    # Duas etapas na previa; nenhuma marcada -> ambas recebem () (sem cair no modal).
+    d = BatchPreviewDialog(
+        [_plan(_step("10"), [_task("aplicado", key="A")]), _plan(_step("14"), [_task("aplicado", key="B")])],
+        window,
+        title="Aplicar tudo",
+    )
+    d._check_none()
+    selection, _force = d.result_selection()
+    assert selection == {"10": (), "14": ()}
+
+
+def test_apply_em_lote_passa_pela_previa(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    chamado: dict = {}
+    monkeypatch.setattr(window, "_preview_then_apply", lambda steps, on_done: chamado.update(steps=steps))
+    started = {}
+    monkeypatch.setattr(window, "_run_steps", lambda *a, **k: started.update(ran=True))
+
+    window._run_action("apply", [_step("10"), _step("14")])
+    # Apply sem selecao -> vai para a previa, nao direto para _run_steps.
+    assert chamado.get("steps") == [_step("10"), _step("14")]
+    assert "ran" not in started
+
+
+def test_apply_com_selecao_explicita_pula_previa(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    monkeypatch.setattr(window, "_preview_then_apply", lambda *a, **k: pytest.fail("nao deveria abrir a previa"))
+    ran = {}
+    monkeypatch.setattr(window, "_run_steps", lambda *a, **k: ran.update(ok=True))
+    # Instalacao por card injeta selection -> deve pular a previa.
+    window._run_action("apply", [_step("10")], selection={"10": ("Discord",)})
+    assert ran.get("ok") is True
+
+
+def test_icone_fallback_tipografico_sem_rede(app) -> None:
+    from reforja.gui import icons
+
+    # Sem asset local nem app_id -> avatar tipografico (nunca chama a rede).
+    pix = icons.resolve_icon("Discord", "com.discordapp.Discord", "comunicacao", 48)
+    assert not pix.isNull()
+    assert pix.width() == 48 and pix.height() == 48
+
+
+def test_flathub_targets_ignora_caminhos_locais(app) -> None:
+    from reforja.gui import icons
+
+    tarefas = [
+        _task("pendente", key="a", icon="com.discordapp.Discord"),
+        _task("pendente", key="b", icon="assets/reforja.png"),
+        _task("pendente", key="c", icon=""),
+    ]
+    alvos = icons.flathub_icon_targets(tarefas)
+    assert alvos == [("a", "com.discordapp.Discord")]
 
 
 # --- atualizacao do app -----------------------------------------------------------
@@ -346,12 +536,12 @@ def test_undo_disponivel_so_para_etapas_que_desfazem() -> None:
     assert _has_undo(_step("10")) is False
 
 
-def test_cartao_tem_desfazer_so_quando_ha_undo(app, tmp_path: Path) -> None:
+def test_pagina_da_etapa_tem_desfazer_so_quando_ha_undo(app, tmp_path: Path) -> None:
     from PySide6.QtWidgets import QPushButton
 
     window = MainWindow(tmp_path)
-    rotulos_14 = {b.text() for b in window._cards["14"].findChildren(QPushButton)}
-    rotulos_10 = {b.text() for b in window._cards["10"].findChildren(QPushButton)}
+    rotulos_14 = {b.text() for b in window._step_pages["14"].findChildren(QPushButton)}
+    rotulos_10 = {b.text() for b in window._step_pages["10"].findChildren(QPushButton)}
     assert "Desfazer" in rotulos_14
     assert "Desfazer" not in rotulos_10
 
@@ -360,7 +550,7 @@ def test_undo_pede_confirmacao(app, tmp_path: Path, monkeypatch) -> None:
     import reforja.gui.main_window as mw
 
     window = MainWindow(tmp_path)
-    monkeypatch.setattr(window, "_run_steps", lambda action, steps: None)
+    monkeypatch.setattr(window, "_run_steps", lambda *a, **k: None)
     asked: list[str] = []
     monkeypatch.setattr(
         mw.QMessageBox,
