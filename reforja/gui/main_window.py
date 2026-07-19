@@ -163,7 +163,7 @@ class ItemCard(QFrame):
         body.addWidget(self._desc)
 
         controls = QHBoxLayout()
-        controls.setSpacing(8)
+        controls.setSpacing(6)
         self._state = QLabel()
         self._state.setObjectName("itemState")
         controls.addWidget(self._state)

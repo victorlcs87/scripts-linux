@@ -273,6 +273,9 @@ QPushButton#ghost {{
     font-size: 12px;
 }}
 QPushButton#ghost:hover {{ border-color: {p["primary"]}; color: {p["primary"]}; }}
+/* Acoes dentro do card sao compactas para caber chip + Atualizar/Reinstalar +
+   Remover na largura do card sem cortar. */
+#itemCard QPushButton {{ padding: 5px 9px; font-size: 12px; }}
 #backLink {{ color: {p["primary"]}; font-weight: 600; }}
 #sectionLabel {{ color: {p["text_faint"]}; font-size: 11px; font-weight: 700; }}
 /* Item ja instalado na previa: esmaecido (marcar = reinstalar). */
