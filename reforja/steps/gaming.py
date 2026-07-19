@@ -1246,14 +1246,9 @@ class SunshineStep(InputGroupMixin, Step):
         self.ctx.runner.run(["ufw", "reload"], sudo=True, check=False, action="Recarregando UFW", show_progress=False)
 
     def _sunshine_running(self) -> bool:
-        result = self.ctx.runner.run(
-            ["pgrep", "-u", self.ctx.user.name, "-x", "sunshine"],
-            check=False,
-            action="Verificando processo Sunshine",
-            show_progress=False,
-            quiet_success=True,
-        )
-        return bool(result and result.returncode == 0)
+        # capture (nao Runner): a sondagem do card roda em dry-run e o Runner
+        # devolveria None; a leitura do pgrep tem de acontecer de verdade.
+        return capture(["pgrep", "-u", self.ctx.user.name, "-x", "sunshine"]).returncode == 0
 
     def _start_sunshine(self) -> None:
         if not command_exists("sunshine") and not Path("/usr/bin/sunshine").exists() and not self.ctx.runner.dry_run:
@@ -1344,15 +1339,10 @@ class SunshineStep(InputGroupMixin, Step):
     def _ufw_rules_ready(self) -> bool:
         if not command_exists("ufw"):
             return True
-        result = self.ctx.runner.run(
-            ["ufw", "status"],
-            sudo=True,
-            check=False,
-            action="Verificando regras UFW do Sunshine",
-            show_progress=False,
-            quiet_success=True,
-        )
-        output = result.stdout if result and result.stdout else ""
+        # Leitura via capture (roda em dry-run). `ufw status` normalmente pede root;
+        # sem privilegio nao ha saida e degradamos para "ok" (nao incomodar). Quando
+        # roda com privilegio (ex.: reforja ja sob sudo), valida as regras de fato.
+        output = capture(["ufw", "status"]).stdout or ""
         if not re.search(r"Status:\s+active", output, re.IGNORECASE):
             return True
         return all(spec in output for _rule, spec in self.ufw_rules)

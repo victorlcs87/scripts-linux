@@ -6,6 +6,7 @@ from functools import partial
 from ..core import (
     Color,
     badge,
+    capture,
     command_exists,
 )
 from ..desktop import DesktopEntry, install_desktop_entry
@@ -207,6 +208,17 @@ class BrowserStep(Step):
                 f"Para apagar o perfil do WebApp {name}: firefoxpwa profile list && firefoxpwa profile remove <id>"
             )
 
+    def _firefoxpwa_profiles(self) -> str:
+        """Saida do `firefoxpwa profile list`, lida DIRETO (fora do Runner).
+
+        Deteccao tem de ler o estado real mesmo quando o Runner esta em dry-run
+        (a sondagem do card usa dry-run); passar pelo Runner devolveria vazio e
+        marcaria o WebApp como ausente. `capture` tambem nao polui o console.
+        """
+        if not command_exists("firefoxpwa"):
+            return ""
+        return capture(["firefoxpwa", "profile", "list"]).stdout
+
     def _webapp_present(self, name: str, slug: str) -> bool:
         app_dir = self.ctx.user.home / ".local/share/applications"
         candidates = [
@@ -215,10 +227,15 @@ class BrowserStep(Step):
         ]
         if any(path.exists() for path in candidates):
             return True
-        if command_exists("firefoxpwa"):
-            result = self.ctx.runner.run(["firefoxpwa", "profile", "list"], check=False)
-            return bool(result and name.lower() in result.stdout.lower())
-        return False
+        listing = self._firefoxpwa_profiles().lower()
+        if not listing:
+            return False
+        # Casa pelo nome do WebApp ou pelo dominio da URL (robusto a nomes iguais).
+        if name.lower() in listing:
+            return True
+        url = next((u for n, s, u, _m in WEBAPPS if s == slug), "")
+        host = re.sub(r"^https?://", "", url).split("/")[0].lower()
+        return bool(host and host in listing)
 
     # ------------------------------------------------------------------ status / undo
 

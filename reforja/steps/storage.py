@@ -113,26 +113,21 @@ class RcloneStep(Step):
                 self.add_hint("Se a montagem nao aparecer, rode: rclone config reconnect 'Google Drive:'")
 
     def _remote_ready(self) -> bool:
+        # Leitura pura via capture: detecta corretamente mesmo na sondagem do card
+        # (Runner em dry-run devolveria None e falsearia como "nao configurado").
         rclone_env = self._rclone_env()
-        remotes = self.ctx.runner.run(
-            ["rclone", "listremotes"],
-            check=False,
-            action="Verificando remotes do rclone",
-            show_progress=False,
-            quiet_success=True,
-            env_extra=rclone_env,
-        )
-        if not remotes or self.remote not in (remotes.stdout or ""):
+        if not command_exists("rclone"):
             return False
-        token = self.ctx.runner.run(
-            ["rclone", "lsd", self.remote, "--max-depth", "0"],
-            check=False,
-            action="Validando token do Google Drive",
-            show_progress=False,
-            quiet_success=True,
+        remotes = capture(["rclone", "listremotes"], env_extra=rclone_env, timeout=8)
+        if self.remote not in (remotes.stdout or ""):
+            return False
+        # Timeout curto: valida o token sem pendurar a sondagem do card se a rede cair.
+        token = capture(
+            ["rclone", "lsd", self.remote, "--max-depth", "0", "--contimeout", "6s", "--timeout", "8s"],
             env_extra=rclone_env,
+            timeout=12,
         )
-        return bool(token and token.returncode == 0)
+        return token.returncode == 0
 
     def _configure_remote(self) -> None:
         rclone_env = self._rclone_env()
@@ -274,12 +269,11 @@ ExecStart=/usr/bin/notify-send -u critical -i dialog-error "Google Drive nao mon
         )
 
     def _user_service_active(self, name: str) -> bool:
-        result = self.ctx.runner.run(["systemctl", "--user", "is-active", "--quiet", name], check=False)
-        return bool(result and result.returncode == 0)
+        # capture (nao Runner): leitura que precisa rodar mesmo em dry-run (sondagem).
+        return capture(["systemctl", "--user", "is-active", "--quiet", name]).returncode == 0
 
     def _user_service_enabled(self, name: str) -> bool:
-        result = self.ctx.runner.run(["systemctl", "--user", "is-enabled", "--quiet", name], check=False)
-        return bool(result and result.returncode == 0)
+        return capture(["systemctl", "--user", "is-enabled", "--quiet", name]).returncode == 0
 
     def status(self) -> None:
         header(self, self.title)

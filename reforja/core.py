@@ -104,14 +104,21 @@ def capture(
     *,
     timeout: int = 30,
     cwd: Path | None = None,
+    env_extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Roda um comando de LEITURA pura (fora do Runner) e captura a saida.
 
-    Uso: consultas que rodam mesmo em dry-run (gh, lspci, pgrep, probes).
+    Uso: consultas que rodam mesmo em dry-run (gh, lspci, pgrep, probes). E o que
+    os `detect` das etapas devem usar para ler o sistema — passar pelo Runner
+    devolveria None na sondagem (dry-run) e falsearia a deteccao.
     Nunca levanta: timeout/comando ausente viram returncode 127 com stderr
     preenchido. Sempre usa clean_subprocess_env() para nao vazar libs do
-    AppImage/PyInstaller para os subprocessos.
+    AppImage/PyInstaller para os subprocessos; `env_extra` acrescenta variaveis
+    (ex.: RCLONE_CONFIG) por cima desse ambiente limpo.
     """
+    env = clean_subprocess_env()
+    if env_extra:
+        env.update(env_extra)
     try:
         return subprocess.run(
             list(cmd),
@@ -119,7 +126,7 @@ def capture(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=clean_subprocess_env(),
+            env=env,
             check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:

@@ -30,6 +30,7 @@ from reforja.steps import (
     GpuStep,
     HardwareStep,
     KdeStep,
+    RcloneStep,
     ShellyStep,
     SunshineStep,
     UpdateAppImagesStep,
@@ -1255,6 +1256,38 @@ def test_apply_sem_nada_marcado_nao_se_apresenta_como_trabalho_feito(tmp_path: P
     assert step.result.status == "skipped"
     assert step.result.summary.startswith("Nenhum item marcado; nada foi alterado.")
     assert "Estado atual:" in step.result.summary
+
+
+def test_webapp_detectado_mesmo_com_runner_em_dry_run(tmp_path: Path, monkeypatch) -> None:
+    """Regressao: a deteccao le via capture(), nao via Runner. Na sondagem do card
+    (Runner em dry-run, que devolve None) o WebApp existente tem de ser detectado."""
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = True  # como o ProbeWorker da GUI monta o step
+    step = BrowserStep(ctx)
+    monkeypatch.setattr("reforja.steps.browser.command_exists", lambda cmd: cmd == "firefoxpwa")
+    # capture devolve a lista real de perfis do firefoxpwa (com o GSV Calendar).
+    monkeypatch.setattr(
+        "reforja.steps.browser.capture",
+        lambda *a, **k: CompletedProcess(a[0], 0, "GSV Calendar: https://gsv-calendar.vercel.app/", ""),
+    )
+    assert step._webapp_present("GSV Calendar", "gsv-calendar") is True
+    assert step._webapp_present("Inexistente", "nao-existe") is False
+
+
+def test_rclone_remote_detectado_com_runner_em_dry_run(tmp_path: Path, monkeypatch) -> None:
+    """Mesma regressao para o rclone: _remote_ready le via capture, nao via Runner."""
+    ctx = make_ctx(tmp_path)
+    ctx.runner.dry_run = True
+    step = RcloneStep(ctx)
+    monkeypatch.setattr("reforja.steps.storage.command_exists", lambda cmd: cmd == "rclone")
+
+    def fake_capture(cmd, **_k):
+        if "listremotes" in cmd:
+            return CompletedProcess(cmd, 0, "Google Drive:\n", "")
+        return CompletedProcess(cmd, 0, "dir1\n", "")  # lsd -> token valido
+
+    monkeypatch.setattr("reforja.steps.storage.capture", fake_capture)
+    assert step._remote_ready() is True
 
 
 def test_apps_manage_bitwarden_and_linuxtoys_but_not_hydra(tmp_path: Path) -> None:

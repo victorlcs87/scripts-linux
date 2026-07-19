@@ -9,6 +9,7 @@ from ..core import (
     Color,
     backup_existing,
     badge,
+    capture,
     command_exists,
     select_many,
     write_text,
@@ -162,9 +163,8 @@ exit 1
     def _libinput_gestures_running(self) -> bool:
         if not command_exists("libinput-gestures-setup"):
             return False
-        result = self.ctx.runner.run(["libinput-gestures-setup", "status"], check=False)
-        output = result.stdout if result and result.stdout else ""
-        return "is currently running" in output
+        # capture (nao Runner): leitura tem de rodar mesmo na sondagem (dry-run).
+        return "is currently running" in (capture(["libinput-gestures-setup", "status"]).stdout or "")
 
     # ------------------------------------------------------------------ num lock
 
