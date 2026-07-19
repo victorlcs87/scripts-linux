@@ -163,6 +163,7 @@ class BackupStep(Step):
             StepTask(
                 key="backup",
                 label="Fazer backup das configuracoes agora",
+                short_description="Empacota as configs num .tar.gz",
                 description=(
                     "Empacota as configuracoes dos apps instalados num .tar.gz (cifrado com senha, se "
                     f"voce quiser) em {self._backup_dir()} — cai direto no Google Drive quando montado. "
@@ -177,6 +178,7 @@ class BackupStep(Step):
             StepTask(
                 key="restore",
                 label="Restaurar configuracoes de um backup anterior",
+                short_description="Restaura configs de um backup",
                 description=(
                     "Pergunta o caminho do backup (.tar.gz ou .tar.gz.gpg), deixa escolher quais apps "
                     "restaurar e, apos confirmacao, restaura por cima das configuracoes atuais (com "
@@ -190,6 +192,7 @@ class BackupStep(Step):
             StepTask(
                 key="upload",
                 label="Enviar ultimo backup para o Google Drive (rclone)",
+                short_description="Envia o ultimo backup ao Drive",
                 description=(
                     "Faz 'rclone copy' do backup mais recente para um caminho remoto do Drive. Funciona "
                     "mesmo sem ~/GoogleDrive montado; precisa do rclone configurado (etapa 07)."
@@ -201,6 +204,7 @@ class BackupStep(Step):
             StepTask(
                 key="limpar",
                 label="Limpar backups antigos",
+                short_description=f"Mantem so os {KEEP_BACKUPS} backups recentes",
                 description=(
                     f"Mantem apenas os {KEEP_BACKUPS} backups mais recentes em {self._backup_dir()} e "
                     "remove os anteriores para nao acumular espaco (no disco e no Google Drive)."

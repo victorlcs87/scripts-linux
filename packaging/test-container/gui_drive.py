@@ -311,6 +311,61 @@ def main() -> int:
     except Exception as exc:
         report.fail("modelo Flathub skip/force", exc)
 
+    # -- 10. Evolucoes: busca/filtro, presets, remover, tema ----------------------
+    print("\n== 10. Busca/filtro, presets, remover e tema ==")
+    try:
+        page = window._step_pages["10"]
+        window._open_step_page("10")
+        page.show()
+        app.processEvents()
+        if not page._built:
+            page._build_cards()
+            page._built = True
+        assert page._filter_bar is not None, "etapa 10 deveria ter barra de busca/filtro"
+        page._on_search("discord")
+        assert [c.key for c in page._visible_cards] == ["Discord"], "busca deveria filtrar so o Discord"
+        page._on_search("")
+        page._on_category("comunicacao")
+        assert all(c._task.category == "comunicacao" for c in page._visible_cards), "filtro de categoria falhou"
+        page._on_category("")
+        report.ok("busca + filtro de categoria funcionam na etapa 10")
+    except Exception as exc:
+        report.fail("busca/filtro", exc)
+
+    try:
+        from reforja.presets import PRESETS, preset_selection
+
+        for nome in PRESETS:
+            sel = preset_selection(nome)
+            assert sel, f"preset {nome} vazio"
+        report.ok(f"{len(PRESETS)} presets definidos: {', '.join(PRESETS)}")
+    except Exception as exc:
+        report.fail("presets", exc)
+
+    try:
+        from reforja.steps_base import StepTask
+
+        t = StepTask(key="k", label="Removivel", run=lambda: None, remove=lambda: None, category="utilitarios")
+        t.state = "aplicado"
+        card = ItemCard(ALL_STEPS[0], t, window)
+        assert not card._remove.isHidden(), "card aplicado com remove deveria mostrar Remover"
+        card.set_busy("Instalando...")
+        card.set_error("erro de teste")
+        assert card._action.text() == "Repetir"
+        report.ok("card: Remover + estados Instalando/Erro/Repetir")
+    except Exception as exc:
+        report.fail("remover/estados do card", exc)
+
+    try:
+        from reforja.gui import theme
+
+        assert theme.build_stylesheet(True) != theme.build_stylesheet(False)
+        window._toggle_theme()
+        window._toggle_theme()
+        report.ok("tema claro/escuro alterna sem erro")
+    except Exception as exc:
+        report.fail("tema", exc)
+
     window.close()
     return _finish(report)
 

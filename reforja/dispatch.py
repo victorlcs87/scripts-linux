@@ -10,7 +10,7 @@ from __future__ import annotations
 from .core import StepRunResult
 from .steps_base import Step
 
-ACTIONS = ("apply", "dry-run", "status", "undo")
+ACTIONS = ("apply", "dry-run", "status", "undo", "remove")
 
 
 def dispatch_action(step: Step, action: str) -> None:
@@ -21,6 +21,9 @@ def dispatch_action(step: Step, action: str) -> None:
         step.status()
     elif action == "undo":
         step.undo()
+    elif action == "remove":
+        # Remocao por item: as chaves alvo vem em step.selection (injetadas pela GUI).
+        step.remove_items(step.selection or ())
     else:
         raise ValueError(f"acao invalida: {action}")
 
@@ -36,6 +39,8 @@ def default_step_message(action: str, status: str) -> str:
         return "Dry-run concluido."
     if action == "undo":
         return "Undo concluido."
+    if action == "remove":
+        return "Remocao concluida."
     return "Etapa concluida."
 
 
@@ -54,6 +59,8 @@ def default_step_summary(action: str, result) -> str:
         return "Dry-run concluido."
     if action == "undo":
         return "Undo concluido."
+    if action == "remove":
+        return "Remocao concluida."
     return result.message or "Etapa concluida."
 
 

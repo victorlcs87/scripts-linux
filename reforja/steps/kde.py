@@ -41,6 +41,7 @@ class KdeStep(InputGroupMixin, Step):
             StepTask(
                 key="gestos",
                 label=self._ITEMS[0],
+                short_description="Gestos de 3 dedos no touchpad",
                 description=(
                     "Instala o libinput-gestures e configura gestos de 3 dedos no touchpad: deslizar para "
                     "cima abre a visao geral das janelas (como no GNOME), para baixo mostra a area de "
@@ -54,6 +55,7 @@ class KdeStep(InputGroupMixin, Step):
             StepTask(
                 key="numlock",
                 label=self._ITEMS[1],
+                short_description="Num Lock ligado no KDE e no login",
                 description=(
                     "Deixa o Num Lock ligado por padrao: no KDE (kcminputrc) e tambem na tela de login, "
                     f"escrevendo {self.sddm_file}."

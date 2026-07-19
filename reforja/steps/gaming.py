@@ -27,6 +27,7 @@ from ..installers import (
     install_flatpak_or_system,
     install_system_or_flatpak,
     npm_global_installed,
+    remove_flatpak,
 )
 from ..platform import (
     current_distro,
@@ -119,6 +120,7 @@ class GpuStep(Step):
                 StepTask(
                     key=f"driver-{vendor}",
                     label=f"Instalar os drivers da GPU {vendor.upper()}",
+                    short_description=f"Drivers de video {vendor.upper()}",
                     description=f"Instala: {listed}.{extra}",
                     available=not distro.immutable,
                     unavailable_reason="sistema imutavel: os drivers vem na imagem base",
@@ -722,6 +724,21 @@ class AppsStep(Step):
         "LocalSend": "utilitarios",
     }
 
+    # Icone (id Flathub) SO para exibicao, para apps sem flatpak_id (instalados por
+    # pacote/script). Nao muda a instalacao — so alimenta o card com um icone real.
+    app_icon_id = {
+        "Steam": "com.valvesoftware.Steam",
+        "auto-cpufreq": "",
+        "Codex CLI": "",
+        "Linux Toys": "",
+    }
+
+    def _icon_for(self, name: str) -> str:
+        flatpak_id = self.apps[name].get("flatpak_id")
+        if flatpak_id:
+            return str(flatpak_id)
+        return self.app_icon_id.get(name, "")
+
     def tasks(self) -> list[StepTask]:
         return [
             StepTask(
@@ -729,10 +746,11 @@ class AppsStep(Step):
                 label=name,
                 description=self.app_help.get(name, ""),
                 short_description=self.app_short.get(name, ""),
-                icon=str(self.apps[name].get("flatpak_id") or ""),
+                icon=self._icon_for(name),
                 category=self.app_category.get(name, ""),
                 detect=partial(self._detect_source_label, name),
                 run=partial(self._install_app, name),
+                remove=partial(self._remove_app, name),
                 detail="nao instalado",
             )
             for name in self.apps
@@ -741,6 +759,41 @@ class AppsStep(Step):
     def _detect_source_label(self, name: str) -> str | bool:
         source = self._detect_install_source(name)
         return f"instalado via {source}" if source else False
+
+    def _remove_app(self, name: str) -> None:
+        """Remove o app pela origem detectada: Flatpak e/ou pacote nativo/AUR.
+
+        Nao mexe em runtimes compartilhados (ex.: nodejs/npm do Codex CLI) nem em
+        coisas instaladas por script sem pacote — para essas, avisa remocao manual.
+        """
+        definition = self.apps[name]
+        header(self, f"Remover {name}")
+        removed = False
+        flatpak_id = definition["flatpak_id"]
+        if flatpak_id and flatpak_installed(str(flatpak_id)):
+            remove_flatpak(str(flatpak_id), self.ctx.runner)
+            removed = True
+        # Codex CLI compartilha nodejs/npm com o sistema: so remove o pacote global.
+        if name == "Codex CLI":
+            if npm_global_installed("@openai/codex"):
+                self.ctx.runner.run(
+                    ["npm", "uninstall", "-g", "@openai/codex"],
+                    sudo=True,
+                    check=False,
+                    action="Removendo Codex CLI global",
+                )
+                removed = True
+        else:
+            installed = [alias for alias in definition["system_aliases"] if system_installed(alias)]
+            if installed:
+                remove_system_packages(installed, self.ctx.runner)
+                removed = True
+        if not removed:
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} {name}: remocao automatica indisponivel "
+                "(instalado por script?). Remova manualmente se necessario."
+            )
+            self.add_hint(f"{name} pode precisar de remocao manual.")
 
     def apply(self) -> None:
         header(self, self.title, "Instalando apps principais e Codex CLI")
@@ -971,6 +1024,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="pacote",
                 label="Instalar o Sunshine",
+                short_description="Servidor de streaming para o Moonlight",
                 description=(
                     "Instala o pacote sunshine, o servidor de streaming de jogos que o Moonlight "
                     "acessa a partir de outro PC, TV ou celular."
@@ -981,6 +1035,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="grupo-input",
                 label="Adicionar seu usuario ao grupo 'input'",
+                short_description="Permite emular teclado/mouse/controle",
                 description=(
                     "Sem isso o Sunshine nao consegue emular teclado/mouse/controle do cliente remoto. "
                     "Exige logout/login para valer."
@@ -991,6 +1046,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="udev",
                 label="Criar a regra udev do /dev/uinput",
+                short_description="Regra udev de acesso ao uinput",
                 description=(
                     f"Escreve {self.udev_rule_file} dando ao grupo input acesso ao uinput (necessario para "
                     "o controle remoto funcionar) e recarrega as regras."
@@ -1001,6 +1057,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="autostart",
                 label="Iniciar o Sunshine junto com o KDE",
+                short_description="Sobe o Sunshine no login do KDE",
                 description=f"Cria {self.autostart_file} para o Sunshine subir sozinho no login.",
                 detect=self._autostart_ready,
                 run=self._write_autostart,
@@ -1008,6 +1065,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="launcher",
                 label="Criar o atalho no menu de aplicativos",
+                short_description="Atalho .desktop do Sunshine",
                 description="Cria um .desktop do Sunshine caso o pacote do sistema nao traga um.",
                 detect=lambda: self._find_existing_launcher() is not None,
                 run=self._ensure_menu_launcher,
@@ -1015,6 +1073,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="ufw",
                 label="Liberar as portas do Sunshine no firewall",
+                short_description="Abre as portas do Moonlight no UFW",
                 description=(
                     "Libera no UFW as portas 47984-47990/tcp, 48010/tcp e 47998-48000/udp usadas pelo "
                     "Moonlight. Se o UFW nao estiver ativo, nada e feito."
@@ -1025,6 +1084,7 @@ class SunshineStep(InputGroupMixin, Step):
             StepTask(
                 key="iniciar",
                 label="Iniciar o Sunshine agora",
+                short_description="Sobe o Sunshine (web em :47990)",
                 description="Sobe o Sunshine em segundo plano; a interface web fica em https://localhost:47990.",
                 detect=self._sunshine_running,
                 run=self._start_sunshine,

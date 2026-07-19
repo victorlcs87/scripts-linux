@@ -37,6 +37,7 @@ class ShellyStep(Step):
             StepTask(
                 key="atualizar",
                 label="Atualizar todos os pacotes do sistema",
+                short_description=f"Atualizacao completa pelo {gerenciador}",
                 description=(
                     f"Roda a atualizacao completa do sistema pelo {gerenciador}. Pode demorar e pode exigir "
                     "reinicio se atualizar o kernel."
@@ -48,6 +49,7 @@ class ShellyStep(Step):
             StepTask(
                 key="flatpak",
                 label="Preparar Flatpak + repositorio Flathub",
+                short_description="Flatpak + repositorio Flathub",
                 description=(
                     "Instala o flatpak e adiciona o remote Flathub, de onde vem a maioria dos apps das "
                     "outras etapas (e a unica fonte em sistemas imutaveis)."
@@ -58,6 +60,7 @@ class ShellyStep(Step):
             StepTask(
                 key="appimage-fuse",
                 label="Habilitar suporte a AppImage (FUSE)",
+                short_description="Biblioteca FUSE para rodar AppImages",
                 description=(
                     "Instala a biblioteca FUSE que os AppImages precisam para rodar (fuse2 no Arch, "
                     "fuse/fuse-libs no Fedora, libfuse2 no Debian/Ubuntu)."
@@ -68,6 +71,7 @@ class ShellyStep(Step):
             StepTask(
                 key="aur",
                 label="Instalar um helper AUR (paru ou yay)",
+                short_description="Helper AUR (paru ou yay)",
                 description=(
                     "O helper AUR permite instalar pacotes da AUR nas outras etapas (Heroic, ZapZap, "
                     "auto-cpufreq...). So faz sentido em Arch/CachyOS."

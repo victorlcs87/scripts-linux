@@ -1,21 +1,21 @@
-"""Tema visual da GUI: paleta, folha de estilo e cores semanticas.
+"""Tema visual da GUI: paletas (clara/escura), folha de estilo e cores semanticas.
 
 Fonte unica de verdade do visual. A folha de estilo e montada em Python (em vez
 de um arquivo .qss separado) para nao depender de um arquivo de dados que o
 empacotador precise carregar junto - o AppImage roda com o tema embutido no
-codigo. As cores de compliance (cartoes) e de badges (console) vivem aqui para
-que mudar a paleta seja mexer num lugar so.
+codigo.
 
-Tema claro, neutro-frio, com um azul indigo de acento e um toque ember (o "R"
-de Reforja) reservado ao indicador de navegacao ativo. O console/terminal
-permanece escuro de proposito: e a superficie de saida de comandos, legivel com
-os badges neon, como um terminal embutido num app claro.
+Ha uma paleta clara e uma escura (mesmas chaves); `build_stylesheet(dark=...)`
+seleciona qual usar e fixa a paleta ativa, que os estilos inline em Python leem
+via `palette()`/`compliance()`. O console/terminal permanece escuro nos dois
+temas de proposito: e a superficie de saida de comandos, legivel com os badges
+neon, como um terminal embutido.
 """
 
 from __future__ import annotations
 
-# --- paleta ------------------------------------------------------------------
-PALETTE = {
+# --- paletas -----------------------------------------------------------------
+LIGHT_PALETTE = {
     "bg": "#eef1f6",  # canvas frio (nao creme)
     "surface": "#ffffff",  # cartoes
     "surface_alt": "#f5f7fb",
@@ -32,6 +32,8 @@ PALETTE = {
     "on_primary": "#ffffff",
     "ember": "#d4661f",  # acento de marca / barra de nav ativa
     "success": "#1c7c3c",
+    "success_soft": "#e8f4ec",
+    "success_border": "#bfe0cb",
     "pending": "#986a08",
     "attention": "#b1471a",
     "error": "#c62828",
@@ -41,14 +43,64 @@ PALETTE = {
     "console_fg": "#d7dbe4",
 }
 
-# --- cores semanticas --------------------------------------------------------
-# Compliance aparece nos cartoes (fundo claro): tons escuros o bastante para AA.
-COMPLIANCE = {
-    "aplicado": ("✓", PALETTE["success"]),
-    "pendente": ("●", PALETTE["pending"]),
-    "atencao": ("⚠", PALETTE["attention"]),
-    "desconhecido": ("○", PALETTE["text_faint"]),
+DARK_PALETTE = {
+    "bg": "#141821",
+    "surface": "#1c212c",
+    "surface_alt": "#232935",
+    "sidebar": "#171b24",
+    "border": "#2b323f",
+    "border_strong": "#3a4150",
+    "text": "#e6e9ef",
+    "text_muted": "#a4adbd",
+    "text_faint": "#7b8494",
+    "primary": "#5b8bf0",
+    "primary_hover": "#6f9bf5",
+    "primary_pressed": "#4a79db",
+    "primary_soft": "#22304d",
+    "on_primary": "#0d1017",
+    "ember": "#e8823a",
+    "success": "#4ccb74",
+    "success_soft": "#17301f",
+    "success_border": "#2c5a3a",
+    "pending": "#d6a94a",
+    "attention": "#e0794a",
+    "error": "#f2686b",
+    "danger_soft": "#3a2226",
+    "info": "#5fb0e8",
+    "console_bg": "#0d1017",
+    "console_fg": "#d7dbe4",
 }
+
+# Paleta ativa (mutada por build_stylesheet). PALETTE continua exportado (a clara)
+# para compatibilidade; codigo novo deve ler palette().
+PALETTE = LIGHT_PALETTE
+_active = LIGHT_PALETTE
+
+
+def set_dark(dark: bool) -> None:
+    global _active
+    _active = DARK_PALETTE if dark else LIGHT_PALETTE
+
+
+def palette() -> dict:
+    """Paleta atualmente ativa (clara ou escura)."""
+    return _active
+
+
+# --- cores semanticas --------------------------------------------------------
+_COMPLIANCE_GLYPH = {"aplicado": "✓", "pendente": "●", "atencao": "⚠", "desconhecido": "○"}
+_COMPLIANCE_KEY = {"aplicado": "success", "pendente": "pending", "atencao": "attention", "desconhecido": "text_faint"}
+
+# Compat: dict fixo na paleta clara (codigo legado/testes). Prefira compliance().
+COMPLIANCE = {state: (_COMPLIANCE_GLYPH[state], LIGHT_PALETTE[_COMPLIANCE_KEY[state]]) for state in _COMPLIANCE_GLYPH}
+
+
+def compliance(state: str) -> tuple[str, str]:
+    """(glifo, cor) do estado de compliance, na paleta ativa."""
+    glyph = _COMPLIANCE_GLYPH.get(state, "○")
+    color = _active[_COMPLIANCE_KEY.get(state, "text_faint")]
+    return glyph, color
+
 
 # Badges aparecem no console (fundo escuro): tons neon, legiveis no escuro.
 BADGE_COLORS = {
@@ -82,7 +134,7 @@ CATEGORY_COLORS = {
     "comunicacao": "#2f5fd0",
     "escritorio": "#0f766e",
     "navegador": "#c2410c",
-    "dev": "#1e293b",
+    "dev": "#3b4a63",
     "sistema": "#4b5563",
     "system": "#4b5563",
     "utilitarios": "#0369a1",
@@ -94,9 +146,10 @@ _FONT = '"Inter", "Noto Sans", "Segoe UI", "Cantarell", sans-serif'
 _MONO = '"JetBrains Mono", "Fira Code", "DejaVu Sans Mono", monospace'
 
 
-def build_stylesheet() -> str:
-    """Monta a folha de estilo completa a partir da paleta."""
-    p = PALETTE
+def build_stylesheet(dark: bool = False) -> str:
+    """Monta a folha de estilo a partir da paleta (clara por padrao, escura se dark)."""
+    set_dark(dark)
+    p = _active
     return f"""
 * {{ outline: none; }}
 
@@ -109,7 +162,7 @@ QMainWindow, QWidget {{
 
 QToolTip {{
     background: {p["text"]};
-    color: #ffffff;
+    color: {p["bg"]};
     border: none;
     border-radius: 6px;
     padding: 6px 8px;
@@ -179,8 +232,26 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 #itemState {{ background: transparent; font-size: 11px; font-weight: 600; color: {p["text_faint"]}; }}
 #installedChip {{
     color: {p["success"]};
-    background: #e8f4ec;
-    border: 1px solid #bfe0cb;
+    background: {p["success_soft"]};
+    border: 1px solid {p["success_border"]};
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+#errorChip {{
+    color: {p["error"]};
+    background: {p["danger_soft"]};
+    border: 1px solid {p["error"]};
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}}
+#busyChip {{
+    color: {p["primary"]};
+    background: {p["primary_soft"]};
+    border: 1px solid {p["primary"]};
     border-radius: 10px;
     padding: 3px 10px;
     font-size: 11px;
@@ -206,6 +277,32 @@ QPushButton#ghost:hover {{ border-color: {p["primary"]}; color: {p["primary"]}; 
 #sectionLabel {{ color: {p["text_faint"]}; font-size: 11px; font-weight: 700; }}
 /* Item ja instalado na previa: esmaecido (marcar = reinstalar). */
 QCheckBox#installedCheck {{ color: {p["text_faint"]}; }}
+
+/* --- chips de filtro por categoria (busca do catalogo) ------------------ */
+QToolButton#filterChip {{
+    background: {p["surface_alt"]};
+    color: {p["text_muted"]};
+    border: 1px solid {p["border"]};
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: 12px;
+}}
+QToolButton#filterChip:checked {{
+    background: {p["primary_soft"]};
+    color: {p["primary"]};
+    border-color: {p["primary"]};
+    font-weight: 600;
+}}
+
+/* --- botao de preset (Home) --------------------------------------------- */
+QPushButton#preset {{
+    background: {p["surface"]};
+    border: 1px solid {p["border_strong"]};
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-weight: 600;
+}}
+QPushButton#preset:hover {{ border-color: {p["ember"]}; color: {p["ember"]}; }}
 
 /* --- botoes ------------------------------------------------------------- */
 QPushButton {{

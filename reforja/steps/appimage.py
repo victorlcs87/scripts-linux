@@ -97,10 +97,31 @@ class UpdateAppImagesStep(Step):
                     category=category,
                     detect=partial(self._version_detail, app),
                     run=partial(self._process_one_task, app),
+                    remove=partial(self._remove_appimage, app),
                     detail="nao instalado",
                 )
             )
         return items
+
+    def _remove_appimage(self, app: dict) -> None:
+        """Apaga o AppImage, o registro de versao, o atalho .desktop e o icone."""
+        header(self, f"Remover {app['name']}")
+        home = self.ctx.user.home
+        appimage_path = home / app["path"]
+        targets = [
+            appimage_path,
+            appimage_path.with_suffix(".version"),
+            home / app["desktop_path"],
+            home / app["icon_target"],
+            *(home / alt for alt in app.get("alt_desktop_paths", ())),
+        ]
+        for path in targets:
+            self.ctx.runner.run(
+                ["rm", "-f", str(path)],
+                check=False,
+                show_progress=False,
+                action=f"Removendo {path}",
+            )
 
     def apply(self) -> None:
         header(self, self.title, "Verificando e atualizando AppImages instalados")

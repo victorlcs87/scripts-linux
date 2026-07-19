@@ -42,4 +42,16 @@ docker run --rm -it -v "$PWD":/work reforja-test-arch bash
 
 O driver roda offscreen (`QT_QPA_PLATFORM=offscreen`), stuba a rede (releases do
 GitHub) e nunca instala nada de verdade (execucao em dry-run). Sai != 0 com um
-relatorio se qualquer fase falhar.
+relatorio se qualquer fase falhar. Alem do fluxo Flathub, exercita as evolucoes:
+busca/filtro do catalogo, presets, botao Remover + estados do card, e o tema.
+
+## Teste de instalacao REAL (opt-in, fora do gate)
+
+`run-real-install.sh` + `real_install.py` instalam e removem um pacote leve
+(`tree`) **de verdade**, exercitando o caminho real do motor (`Runner.run(sudo=True)`
++ gerenciador de pacotes + deteccao), que o dry-run nao cobre. Precisa de rede e
+sudo (o container tem sudo sem senha). **Nao** faz parte do `run-all.sh` nem do CI.
+
+```fish
+docker run --rm -v "$PWD":/work reforja-test-arch bash packaging/test-container/run-real-install.sh
+```

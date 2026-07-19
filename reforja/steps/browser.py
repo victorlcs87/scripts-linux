@@ -65,6 +65,7 @@ class BrowserStep(Step):
                     category="navegador",
                     detect=partial(self._webapp_detail, name, slug),
                     run=partial(self._create_one_webapp, name, slug),
+                    remove=partial(self._remove_webapp, name, slug),
                     detail="nao criado",
                 )
             )
@@ -76,8 +77,13 @@ class BrowserStep(Step):
 
     # ------------------------------------------------------------------ navegador
 
+    def _firefox_present(self) -> bool:
+        # Robusto: conta como presente se o pacote existe OU o binario esta no PATH
+        # (cobre variantes de pacote e ambientes onde a query de pacote nao resolve).
+        return system_installed("firefox") or command_exists("firefox")
+
     def _browser_ready(self) -> bool:
-        return system_installed("firefox") and (system_installed("firefoxpwa") or command_exists("firefoxpwa"))
+        return self._firefox_present() and (system_installed("firefoxpwa") or command_exists("firefoxpwa"))
 
     def _webapp_detail(self, name: str, slug: str) -> str | bool:
         return "ja criado" if self._webapp_present(name, slug) else False
@@ -181,6 +187,26 @@ class BrowserStep(Step):
             )
             install_desktop_entry(app_dir / f"{slug}.desktop", entry, self.ctx.runner)
 
+    def _remove_webapp(self, name: str, slug: str) -> None:
+        """Remove os atalhos .desktop do WebApp. O perfil FirefoxPWA (o site em si)
+        pode ser removido a parte com `firefoxpwa profile remove` — deixamos como dica."""
+        header(self, f"Remover WebApp {name}")
+        app_dir = self.ctx.user.home / ".local/share/applications"
+        for path in (
+            app_dir / f"{slug}.desktop",
+            app_dir / f"{name.lower().replace(' ', '-')}.desktop",
+        ):
+            self.ctx.runner.run(
+                ["rm", "-f", str(path)],
+                check=False,
+                show_progress=False,
+                action=f"Removendo {path}",
+            )
+        if command_exists("firefoxpwa"):
+            self.add_hint(
+                f"Para apagar o perfil do WebApp {name}: firefoxpwa profile list && firefoxpwa profile remove <id>"
+            )
+
     def _webapp_present(self, name: str, slug: str) -> bool:
         app_dir = self.ctx.user.home / ".local/share/applications"
         candidates = [
@@ -204,7 +230,7 @@ class BrowserStep(Step):
             self.ctx.runner.run(["firefoxpwa", "profile", "list"], check=False)
 
         browser_missing: list[str] = []
-        if not system_installed("firefox"):
+        if not self._firefox_present():
             browser_missing.append("firefox")
         if not (system_installed("firefoxpwa") or command_exists("firefoxpwa")):
             browser_missing.append("firefoxpwa")

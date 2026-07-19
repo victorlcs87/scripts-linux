@@ -83,12 +83,24 @@ def initial_avatar(label: str, category: str, size: int = 48) -> QPixmap:
 
 
 def resolve_icon(label: str, icon: str, category: str, size: int = 48) -> QPixmap:
-    """Melhor icone disponivel SEM rede: asset local -> tema -> avatar tipografico."""
+    """Melhor icone disponivel SEM rede: asset local -> cache Flathub -> tema -> avatar.
+
+    `icon` pode ser um caminho de asset local OU um id Flathub (usado para nome de
+    tema e para o icone ja cacheado de execucoes anteriores). O download em si e
+    feito por FlathubIconWorker, em background; aqui so aproveitamos o cache.
+    """
     if icon and _looks_like_path(icon):
         local = _local_pixmap(icon, size)
         if local is not None:
             return local
-    theme_names = [icon, label.lower().replace(" ", "-")] if icon else [label.lower().replace(" ", "-")]
+    if icon and _looks_like_app_id(icon):
+        cached = _cache_path(icon)
+        if cached.exists():
+            local = _local_pixmap(str(cached), size)
+            if local is not None:
+                return local
+    slug = label.lower().replace(" ", "-")
+    theme_names = [icon, slug] if icon else [slug]
     from_theme = _theme_pixmap(theme_names, size)
     if from_theme is not None:
         return from_theme

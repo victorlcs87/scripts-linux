@@ -22,6 +22,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -40,16 +42,18 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ..cli import render_run_summary, render_status_overview, synthetic_result
 from ..core import StepRunResult
+from ..presets import preset_names, preset_selection
 from ..steps import ALL_GROUPS, ALL_STEPS
 from ..steps_base import Step as _StepBase
 from ..steps_base import StepTask
-from . import icons, theme
+from . import icons, settings, theme
 from .askpass import resolve_askpass
 from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
@@ -83,6 +87,25 @@ def _has_undo(step: type) -> bool:
     return step.undo is not _StepBase.undo
 
 
+def _installed_label(task: StepTask) -> str:
+    """Rotulo curto do chip 'Instalado' com origem/versao, a partir de task.detail.
+
+    detail costuma vir "instalado via flatpak (com.x)" ou "instalado: 1.2.3";
+    encurtamos para caber no chip sem perder a informacao (o completo vai no tooltip).
+    """
+    detail = (task.detail or "").strip()
+    if not detail:
+        return "instalado"
+    low = detail.lower()
+    for origem in ("flatpak", "appimage", "sistema", "npm", "cli"):
+        if origem in low:
+            return origem if origem != "sistema" else "pacote"
+    # "instalado: <versao>" -> mostra a versao.
+    if ":" in detail:
+        return detail.split(":", 1)[1].strip()[:24] or "instalado"
+    return detail[:24]
+
+
 def _card_text(task: StepTask) -> str:
     """Texto curto do card: short_description ou a primeira frase da description."""
     if task.short_description:
@@ -101,6 +124,9 @@ class ItemCard(QFrame):
         super().__init__()
         self.setObjectName("itemCard")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Altura uniforme (estilo Flathub): evita que a descricao com quebra de linha
+        # estoure/corte o card e faca a grade pedir barra de rolagem sem necessidade.
+        self.setFixedHeight(96)
         self._step_cls = step_cls
         self._window = window
         self.key = task.key
@@ -118,14 +144,22 @@ class ItemCard(QFrame):
 
         body = QVBoxLayout()
         body.setSpacing(3)
-        self._name = QLabel(task.label)
+        # Nome e descricao em uma linha, elididos para a largura do card: labels com
+        # size policy Ignored na horizontal para NAO ditar a largura minima do card
+        # (senao um titulo longo estoura a coluna e vaza para fora da viewport).
+        self._name_full = task.label
+        self._name = QLabel(self._name_full)
         self._name.setObjectName("itemName")
+        self._name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._name.setToolTip(task.label)
         body.addWidget(self._name)
-        self._desc = QLabel(_card_text(task))
+        self._desc_full = _card_text(task)
+        self._desc = QLabel(self._desc_full)
         self._desc.setObjectName("itemDesc")
-        self._desc.setWordWrap(True)
-        if task.description:
-            self._desc.setToolTip(task.description)
+        self._desc.setWordWrap(False)
+        self._desc.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._desc.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._desc.setToolTip(task.description or self._desc_full)
         body.addWidget(self._desc)
 
         controls = QHBoxLayout()
@@ -146,14 +180,52 @@ class ItemCard(QFrame):
         self._secondary.setVisible(False)
         window._register_button(self._secondary)
         controls.addWidget(self._secondary)
+        self._remove = QPushButton("Remover")
+        self._remove.setObjectName("destructive")
+        self._remove.setVisible(False)
+        window._register_button(self._remove)
+        controls.addWidget(self._remove)
         # Controla o disconnect() sem emitir aviso do libpyside quando nada esta ligado.
         self._action_connected = False
         self._secondary_connected = False
+        self._remove_connected = False
+        # Guarda o estado corrente para restaurar apos um "Instalando..." transitorio.
+        self._busy = False
         body.addSpacing(2)
         body.addLayout(controls)
 
         outer.addLayout(body, 1)
         self.apply_task_state(task)
+
+    def set_busy(self, label: str = "Processando...") -> None:
+        """Estado transitorio durante instalar/remover: chip ocupado, botoes off."""
+        self._busy = True
+        for widget in (self._chip, self._action, self._secondary, self._remove):
+            widget.setVisible(False)
+        self._state.setText("")
+        self._chip.setObjectName("busyChip")
+        self._chip.setText(f"⏳ {label}")
+        self._chip.setVisible(True)
+        self._repolish()
+
+    def set_error(self, message: str) -> None:
+        """Marca falha na acao do card, com botao Repetir."""
+        self._busy = False
+        for widget in (self._chip, self._secondary, self._remove):
+            widget.setVisible(False)
+        self._chip.setObjectName("errorChip")
+        self._chip.setText("⚠ falhou")
+        self._chip.setToolTip(message)
+        self._chip.setVisible(True)
+        self._state.setText("")
+        self._disconnect_action()
+        self._action.setObjectName("primary")
+        self._action.setText("Repetir")
+        self._action.setEnabled(True)
+        self._action.setVisible(True)
+        self._action.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=True))
+        self._action_connected = True
+        self._repolish()
 
     def set_icon_pixmap(self, pixmap: QPixmap) -> None:
         if not pixmap.isNull():
@@ -161,22 +233,45 @@ class ItemCard(QFrame):
                 pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             )
 
-    def apply_task_state(self, task: StepTask) -> None:
-        """Reconfigura chip/botoes conforme o estado sondado da tarefa."""
-        self._task = task
-        state = task.state
-        # Reset dos controles.
-        for widget in (self._chip, self._action, self._secondary):
-            widget.setVisible(False)
-        self._action.setEnabled(True)
-        self._secondary.setEnabled(True)
+    def refresh_icon(self) -> None:
+        """Re-resolve o icone (ex.: apos troca de tema, para a cor do avatar)."""
+        self._icon.setPixmap(icons.resolve_icon(self._task.label, self._task.icon, self._task.category, 48))
 
+    def resizeEvent(self, event) -> None:  # noqa: N802 (override Qt)
+        super().resizeEvent(event)
+        self._elide_labels()
+
+    def _elide_labels(self) -> None:
+        # Elide nome e descricao para a largura disponivel (uma linha limpa cada,
+        # sem corte bruto; o texto completo fica no tooltip).
+        for label, full in ((self._name, self._name_full), (self._desc, self._desc_full)):
+            metrics = label.fontMetrics()
+            label.setText(metrics.elidedText(full, Qt.TextElideMode.ElideRight, max(40, label.width())))
+
+    def _disconnect_action(self) -> None:
         if self._action_connected:
             self._action.clicked.disconnect()
             self._action_connected = False
+
+    def apply_task_state(self, task: StepTask) -> None:
+        """Reconfigura chip/botoes conforme o estado sondado da tarefa."""
+        self._task = task
+        self._busy = False
+        state = task.state
+        # Reset dos controles.
+        for widget in (self._chip, self._action, self._secondary, self._remove):
+            widget.setVisible(False)
+        self._action.setEnabled(True)
+        self._secondary.setEnabled(True)
+        self._remove.setEnabled(True)
+
+        self._disconnect_action()
         if self._secondary_connected:
             self._secondary.clicked.disconnect()
             self._secondary_connected = False
+        if self._remove_connected:
+            self._remove.clicked.disconnect()
+            self._remove_connected = False
 
         self.setProperty("applied", "true" if state == "aplicado" else "false")
         self._repolish()
@@ -196,13 +291,21 @@ class ItemCard(QFrame):
         if state == "aplicado":
             self._state.setText("")
             self._chip.setObjectName("installedChip")
-            self._chip.setText(f"✓ {task.detail or 'instalado'}")
+            # Origem/versao detectada (task.detail vem do _detect_*), enxuta.
+            self._chip.setText(f"✓ {_installed_label(task)}")
+            if task.detail:
+                self._chip.setToolTip(task.detail)
             self._chip.setVisible(True)
             # Reinstalar/atualizar e explicito e secundario (modelo Flathub).
             self._secondary.setText("Atualizar" if self._step_cls.id == "15" else "Reinstalar")
             self._secondary.setVisible(True)
             self._secondary.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=True))
             self._secondary_connected = True
+            # Remover so aparece quando a tarefa sabe se remover.
+            if task.removable:
+                self._remove.setVisible(True)
+                self._remove.clicked.connect(lambda: self._window._remove_item(self._step_cls, self.key, task.label))
+                self._remove_connected = True
             return
 
         if state == "acao":
@@ -218,7 +321,7 @@ class ItemCard(QFrame):
         self._repolish()
 
     def _repolish(self) -> None:
-        for widget in (self, self._action, self._secondary, self._chip):
+        for widget in (self, self._action, self._secondary, self._remove, self._chip):
             widget.style().unpolish(widget)
             widget.style().polish(widget)
 
@@ -232,8 +335,13 @@ class StepPage(QWidget):
         self._window = window
         self._cards: list[ItemCard] = []
         self._card_by_key: dict[str, ItemCard] = {}
+        self._visible_cards: list[ItemCard] = []
         self._built = False
         self._columns = 0
+        self._search = ""
+        self._category = ""  # "" = todas
+        self._filter_bar: QWidget | None = None
+        self._chip_buttons: list[QToolButton] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 18, 28, 18)
@@ -288,10 +396,17 @@ class StepPage(QWidget):
         actions.addStretch(1)
         actions.addWidget(btn_refresh)
         outer.addLayout(actions)
+
+        # Barra de busca + filtro por categoria (montada em _build_cards, quando
+        # ja se sabe quantos itens/categorias a etapa tem). So aparece se valer a pena.
+        self._filter_holder = QVBoxLayout()
+        outer.addLayout(self._filter_holder)
         outer.addSpacing(6)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        # Nunca rolar na horizontal: os cards reflowem/encolhem para caber na largura.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._grid_holder = QWidget()
         self._grid = QGridLayout(self._grid_holder)
         self._grid.setContentsMargins(0, 0, 6, 0)
@@ -322,21 +437,89 @@ class StepPage(QWidget):
             card = ItemCard(self._step_cls, task, self._window)
             self._cards.append(card)
             self._card_by_key[task.key] = card
+        self._build_filter_bar(tasks)
+        self._visible_cards = list(self._cards)
         self._reflow(force=True)
         self._load_icons(tasks)
 
+    def _build_filter_bar(self, tasks: list[StepTask]) -> None:
+        """Busca + chips de categoria. So aparece com itens/categorias suficientes."""
+        categorias = [c for c in dict.fromkeys(t.category for t in tasks if t.category)]
+        if len(tasks) <= 6 or len(categorias) < 2:
+            return
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        search = QLineEdit()
+        search.setPlaceholderText("Buscar...")
+        search.setClearButtonEnabled(True)
+        search.textChanged.connect(self._on_search)
+        search.setMaximumWidth(260)
+        bar.addWidget(search)
+        todos = QToolButton()
+        todos.setObjectName("filterChip")
+        todos.setText("Todos")
+        todos.setCheckable(True)
+        todos.setChecked(True)
+        todos.clicked.connect(lambda: self._on_category(""))
+        bar.addWidget(todos)
+        self._chip_buttons = [todos]
+        for cat in categorias:
+            chip = QToolButton()
+            chip.setObjectName("filterChip")
+            chip.setText(cat)
+            chip.setCheckable(True)
+            chip.clicked.connect(lambda _c=False, c=cat: self._on_category(c))
+            bar.addWidget(chip)
+            self._chip_buttons.append(chip)
+        bar.addStretch(1)
+        wrapper = QWidget()
+        wrapper.setLayout(bar)
+        self._filter_holder.addWidget(wrapper)
+        self._filter_bar = wrapper
+
+    def _on_search(self, text: str) -> None:
+        self._search = text.strip().lower()
+        self._apply_filter()
+
+    def _on_category(self, category: str) -> None:
+        self._category = category
+        for chip in self._chip_buttons:
+            chip.setChecked((chip.text() == "Todos" and not category) or chip.text() == category)
+        self._apply_filter()
+
+    def _matches(self, card: ItemCard) -> bool:
+        task = card._task
+        if self._category and task.category != self._category:
+            return False
+        if self._search:
+            haystack = f"{task.label} {task.short_description} {task.description}".lower()
+            if self._search not in haystack:
+                return False
+        return True
+
+    def _apply_filter(self) -> None:
+        self._visible_cards = [card for card in self._cards if self._matches(card)]
+        for card in self._cards:
+            card.setVisible(card in self._visible_cards)
+        self._reflow(force=True)
+
     def _reflow(self, *, force: bool = False) -> None:
-        if not self._cards:
+        cards = self._visible_cards or self._cards
+        if not cards:
             return
         width = self._grid_holder.width() or self.width()
-        columns = max(1, min(len(self._cards), (width + self._grid.spacing()) // _CARD_MIN_WIDTH))
+        # N colunas cabem quando N*card + (N-1)*spacing <= largura. Resolvendo por N
+        # (inclui o espacamento entre colunas, senao a ultima coluna estoura a direita).
+        spacing = self._grid.spacing()
+        columns = max(1, min(len(cards), (width + spacing) // (_CARD_MIN_WIDTH + spacing)))
         if columns == self._columns and not force:
             return
         self._columns = columns
         while self._grid.count():
             self._grid.takeAt(0)
-        for index, card in enumerate(self._cards):
+        for index, card in enumerate(cards):
             self._grid.addWidget(card, index // columns, index % columns)
+            card.setVisible(True)
         for col in range(columns):
             self._grid.setColumnStretch(col, 1)
 
@@ -381,7 +564,7 @@ class StepPage(QWidget):
             compliance = "pendente"
         else:
             compliance = "pendente" if pending else "desconhecido"
-        glyph, color = theme.COMPLIANCE.get(compliance, theme.COMPLIANCE["desconhecido"])
+        glyph, color = theme.compliance(compliance)
         legenda = f"{applied}/{total} instalado(s)" if total else "sem itens"
         self._overall.setText(f"{glyph}  {legenda}")
         self._overall.setStyleSheet(f"color: {color};")
@@ -432,7 +615,7 @@ class StepSummaryCard(QFrame):
         self.set_compliance("desconhecido")
 
     def set_compliance(self, compliance: str) -> None:
-        glyph, color = theme.COMPLIANCE.get(compliance, theme.COMPLIANCE["desconhecido"])
+        glyph, color = theme.compliance(compliance)
         legenda = {
             "aplicado": "aplicado",
             "pendente": "pendente",
@@ -455,19 +638,36 @@ class BatchPreviewDialog(QDialog):
 
     _COLUMNS = 3
 
-    def __init__(self, plans, parent: MainWindow, *, title: str) -> None:
+    def __init__(
+        self,
+        plans,
+        parent: MainWindow,
+        *,
+        title: str,
+        initial_selection: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(760, 580)
         self._checks: list[tuple[str, str, str, QCheckBox]] = []
         self._step_ids = [step_cls.id for step_cls, _step, _tasks in plans]
+        # Preset: quando presente, pre-marca exatamente esses itens (em vez do
+        # padrao "so o que falta"). () numa etapa = todos os itens preselecionaveis.
+        self._initial = initial_selection
 
         outer = QVBoxLayout(self)
         outer.setSpacing(10)
-        intro = QLabel(
-            "Marque o que instalar. O que ja esta instalado vem desmarcado — marque "
-            "apenas se quiser reinstalar. Itens que removem coisas nunca vem marcados."
-        )
+        if initial_selection is not None:
+            texto = (
+                "Kit do perfil pre-marcado. Revise e ajuste o que quiser antes de instalar. "
+                "Itens ja instalados aparecem esmaecidos."
+            )
+        else:
+            texto = (
+                "Marque o que instalar. O que ja esta instalado vem desmarcado — marque "
+                "apenas se quiser reinstalar. Itens que removem coisas nunca vem marcados."
+            )
+        intro = QLabel(texto)
         intro.setObjectName("pageDesc")
         intro.setWordWrap(True)
         outer.addWidget(intro)
@@ -492,11 +692,18 @@ class BatchPreviewDialog(QDialog):
             grid = QGridLayout(grid_holder)
             grid.setContentsMargins(0, 0, 0, 0)
             grid.setSpacing(6)
+            preset_keys = None if self._initial is None else self._initial.get(step_cls.id)
             for index, task in enumerate(runnable):
                 check = QCheckBox(self._label_for(task))
                 if task.description:
                     check.setToolTip(task.description)
-                pre = task.preselectable and task.state in ("pendente", "acao")
+                if self._initial is not None:
+                    # Preset: marca os itens do kit. () = todos os preselecionaveis da etapa.
+                    pre = task.preselectable and (
+                        step_cls.id in self._initial and (preset_keys == () or task.key in (preset_keys or ()))
+                    )
+                else:
+                    pre = task.preselectable and task.state in ("pendente", "acao")
                 check.setChecked(pre)
                 if task.state == "aplicado":
                     check.setObjectName("installedCheck")
@@ -606,6 +813,8 @@ class MainWindow(QMainWindow):
         self._selection_map: dict[str, tuple[str, ...]] = {}
         self._force_map: dict[str, frozenset[str]] = {}
         self._on_queue_done: Callable[[], None] | None = None
+        # Card alvo de uma acao por item (para marcar erro se a acao falhar).
+        self._card_action_target: tuple[str, str] | None = None
         # Sondagem em curso para a previa consolidada do Aplicar (evita reentrada).
         self._preview_worker: BatchProbeWorker | None = None
 
@@ -664,15 +873,45 @@ class MainWindow(QMainWindow):
         self._track_worker(worker)
         worker.start()
 
+    def _item_card(self, step_id: str, key: str) -> ItemCard | None:
+        page = self._step_pages.get(step_id)
+        return page._card_by_key.get(key) if page is not None else None
+
     def _install_item(self, step_cls: type, key: str, *, force: bool) -> None:
         """Instala/reinstala UM item de uma etapa (acao por card, estilo Flathub)."""
         page = self._step_pages.get(step_cls.id)
         on_done = page.refresh if page is not None else None
+        card = self._item_card(step_cls.id, key)
+        if card is not None:
+            card.set_busy("Instalando...")
+        self._card_action_target = (step_cls.id, key)
         self._run_action(
             "apply",
             [step_cls],
             selection={step_cls.id: (key,)},
             force={step_cls.id: frozenset({key})} if force else None,
+            on_done=on_done,
+        )
+
+    def _remove_item(self, step_cls: type, key: str, label: str) -> None:
+        """Remove UM item (botao Remover do card), com confirmacao."""
+        answer = QMessageBox.question(
+            self,
+            "Remover",
+            f"Remover '{label}'? Isso desinstala/apaga o item desta maquina.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        page = self._step_pages.get(step_cls.id)
+        on_done = page.refresh if page is not None else None
+        card = self._item_card(step_cls.id, key)
+        if card is not None:
+            card.set_busy("Removendo...")
+        self._card_action_target = (step_cls.id, key)
+        self._run_action(
+            "remove",
+            [step_cls],
+            selection={step_cls.id: (key,)},
             on_done=on_done,
         )
 
@@ -732,6 +971,13 @@ class MainWindow(QMainWindow):
         self._menu.setCurrentRow(0)
         side_layout.addWidget(self._menu, 1)
 
+        # Rodape do sidebar: alternar tema claro/escuro (persistido).
+        self._btn_theme = QPushButton()
+        self._btn_theme.setObjectName("ghost")
+        self._btn_theme.clicked.connect(self._toggle_theme)
+        self._update_theme_button()
+        side_layout.addWidget(self._btn_theme)
+
         top_layout.addWidget(sidebar)
         top_layout.addWidget(self._pages, 1)
 
@@ -746,8 +992,12 @@ class MainWindow(QMainWindow):
         self._btn_terminal = QPushButton("Terminal")
         self._btn_console.clicked.connect(lambda: self._stack.setCurrentWidget(self._console))
         self._btn_terminal.clicked.connect(self._show_terminal)
+        self._btn_collapse = QPushButton()
+        self._btn_collapse.setObjectName("ghost")
+        self._btn_collapse.clicked.connect(self._toggle_console)
         toolbar.addWidget(self._btn_console)
         toolbar.addWidget(self._btn_terminal)
+        toolbar.addWidget(self._btn_collapse)
         toolbar.addStretch(1)
         self._btn_stop = QPushButton("Parar")
         self._btn_stop.setObjectName("destructive")
@@ -772,6 +1022,8 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._console)
         self._stack.addWidget(self._terminal)
         bottom_layout.addWidget(self._stack, 1)
+        # Widgets escondidos quando o console e recolhido (mantem so a toolbar).
+        self._console_body = (self._stack,)
 
         self._status_label = QLabel(f"Log: {self._logger.path}")
         self._status_label.setObjectName("statusLine")
@@ -782,7 +1034,11 @@ class MainWindow(QMainWindow):
         splitter.setSizes([470, 290])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        self._splitter = splitter
+        self._bottom_panel = bottom
         self.setCentralWidget(splitter)
+        self._console_collapsed = False
+        self._apply_console_collapsed(settings.load().get("console_collapsed", False))
 
     # --- navegacao ---------------------------------------------------------------
     def _on_menu_row(self, row: int) -> None:
@@ -837,8 +1093,40 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addSpacing(6)
         layout.addWidget(hint)
+
+        # Perfis: kits de itens que atravessam etapas; abrem a previa pre-marcada.
+        layout.addSpacing(14)
+        presets_title = QLabel("Perfis prontos")
+        presets_title.setObjectName("sectionLabel")
+        layout.addWidget(presets_title)
+        preset_hint = QLabel(
+            "Um clique monta a lista do perfil na tela de revisao — voce confere e ajusta antes de instalar."
+        )
+        preset_hint.setObjectName("pageDesc")
+        preset_hint.setWordWrap(True)
+        layout.addWidget(preset_hint)
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(10)
+        for name in preset_names():
+            btn = QPushButton(name)
+            btn.setObjectName("preset")
+            btn.clicked.connect(lambda _c=False, n=name: self._apply_preset(n))
+            self._register_button(btn)
+            preset_row.addWidget(btn)
+        preset_row.addStretch(1)
+        layout.addLayout(preset_row)
+
         layout.addStretch(1)
         return page
+
+    def _apply_preset(self, name: str) -> None:
+        """Abre a previa consolidada pre-marcada com o kit do perfil."""
+        selection = preset_selection(name)
+        step_ids = set(selection)
+        steps = [step for step in ALL_STEPS if step.id in step_ids]
+        if not steps:
+            return
+        self._preview_then_apply(steps, None, initial_selection=selection, title=f"Perfil: {name}")
 
     def _build_group_page(self, group, back_row: int) -> QWidget:
         page, layout = _page_scaffold(group.title, getattr(group, "description", "") or "")
@@ -1032,7 +1320,14 @@ class MainWindow(QMainWindow):
         return True
 
     # --- previa consolidada do Aplicar ------------------------------------------
-    def _preview_then_apply(self, steps: list[type], on_done: Callable[[], None] | None) -> None:
+    def _preview_then_apply(
+        self,
+        steps: list[type],
+        on_done: Callable[[], None] | None,
+        *,
+        initial_selection: dict[str, tuple[str, ...]] | None = None,
+        title: str | None = None,
+    ) -> None:
         """Sonda as etapas em segundo plano e abre a previa multi-coluna."""
         if self._preview_worker is not None:
             return
@@ -1040,7 +1335,7 @@ class MainWindow(QMainWindow):
         for btn in self._action_buttons:
             btn.setEnabled(False)
         worker = BatchProbeWorker(steps, self._logger, run_dir=self._run_dir)
-        worker.probed.connect(lambda plans: self._on_batch_probed(plans, steps, on_done))
+        worker.probed.connect(lambda plans: self._on_batch_probed(plans, steps, on_done, initial_selection, title))
         worker.finished.connect(self._on_preview_worker_done)
         self._preview_worker = worker
         worker.start()
@@ -1051,13 +1346,21 @@ class MainWindow(QMainWindow):
             for btn in self._action_buttons:
                 btn.setEnabled(True)
 
-    def _on_batch_probed(self, plans, steps: list[type], on_done: Callable[[], None] | None) -> None:
+    def _on_batch_probed(
+        self,
+        plans,
+        steps: list[type],
+        on_done: Callable[[], None] | None,
+        initial_selection: dict[str, tuple[str, ...]] | None = None,
+        title: str | None = None,
+    ) -> None:
         has_runnable = any(any(task.runnable for task in tasks) for _cls, _step, tasks in plans)
         if not plans or not has_runnable:
             self._append("[aviso] Nada a aplicar nesta selecao.")
             return
-        title = "Aplicar tudo" if len(steps) == len(ALL_STEPS) else "Aplicar"
-        dialog = BatchPreviewDialog(plans, self, title=title)
+        if title is None:
+            title = "Aplicar tudo" if len(steps) == len(ALL_STEPS) else "Aplicar"
+        dialog = BatchPreviewDialog(plans, self, title=title, initial_selection=initial_selection)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             self._append("[aviso] Aplicacao cancelada.")
             return
@@ -1147,6 +1450,14 @@ class MainWindow(QMainWindow):
         for step_cls, _action in self._queue:
             self._results.append(synthetic_result(step_cls, "blocked", RuntimeError("etapa anterior falhou")))
         self._queue = []
+        # Acao por card que falhou: marca o card alvo com erro + Repetir.
+        if self._card_action_target is not None:
+            step_id, key = self._card_action_target
+            card = self._item_card(step_id, key)
+            if card is not None:
+                card.set_error(message)
+            self._card_action_target = None
+            self._on_queue_done = None  # nao re-sondar por cima do estado de erro
 
     def _on_worker_done(self) -> None:
         self._worker = None
@@ -1177,6 +1488,7 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._console)
         callback = self._on_queue_done
         self._on_queue_done = None
+        self._card_action_target = None
         self._selection_map = {}
         self._force_map = {}
         if callback is not None:
@@ -1212,6 +1524,41 @@ class MainWindow(QMainWindow):
 
     def _show_terminal(self) -> None:
         self._stack.setCurrentWidget(self._terminal)
+
+    # --- tema e console ----------------------------------------------------------
+    def _current_theme_dark(self) -> bool:
+        return settings.load().get("theme") == "dark"
+
+    def _update_theme_button(self) -> None:
+        dark = self._current_theme_dark()
+        self._btn_theme.setText("☀  Tema claro" if dark else "🌙  Tema escuro")
+
+    def _toggle_theme(self) -> None:
+        dark = not self._current_theme_dark()
+        settings.save({"theme": "dark" if dark else "light"})
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.build_stylesheet(dark))
+        self._update_theme_button()
+        # Re-renderiza os avatares (cores mudam) e o compliance ja lido da paleta ativa.
+        for page in self._step_pages.values():
+            for card in page._cards:
+                card.refresh_icon()
+
+    def _toggle_console(self) -> None:
+        self._apply_console_collapsed(not self._console_collapsed)
+        settings.save({"console_collapsed": self._console_collapsed})
+
+    def _apply_console_collapsed(self, collapsed: bool) -> None:
+        self._console_collapsed = collapsed
+        for widget in self._console_body:
+            widget.setVisible(not collapsed)
+        self._status_label.setVisible(not collapsed)
+        self._btn_collapse.setText("▴ Mostrar console" if collapsed else "▾ Ocultar console")
+        if collapsed:
+            self._splitter.setSizes([740, 40])
+        else:
+            self._splitter.setSizes([470, 290])
 
     def closeEvent(self, event) -> None:  # noqa: N802 (override Qt)
         if self._worker is not None:

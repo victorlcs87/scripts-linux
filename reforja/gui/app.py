@@ -50,9 +50,10 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtGui import QIcon
 
         app.setWindowIcon(QIcon(str(icon_path)))
+    from . import settings
     from .theme import build_stylesheet
 
-    app.setStyleSheet(build_stylesheet())
+    app.setStyleSheet(build_stylesheet(settings.load().get("theme") == "dark"))
 
     window = MainWindow(_default_run_dir())
     window.show()

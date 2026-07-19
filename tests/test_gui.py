@@ -328,6 +328,156 @@ def test_apply_com_selecao_explicita_pula_previa(app, tmp_path: Path, monkeypatc
     assert ran.get("ok") is True
 
 
+def test_item_card_removivel_mostra_botao_remover(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    task = _task("aplicado", key="Discord", label="Discord")
+    task.remove = lambda: None  # tarefa que sabe se remover
+    card = ItemCard(_step("10"), task, window)
+    assert not card._remove.isHidden() and card._remove.text() == "Remover"
+    # Sem callable de remove, o botao nao aparece.
+    card2 = ItemCard(_step("10"), _task("aplicado", key="X"), window)
+    assert card2._remove.isHidden()
+
+
+def test_remove_item_injeta_acao_remove(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    import reforja.gui.main_window as mw
+
+    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.Yes))
+    captured: dict = {}
+    monkeypatch.setattr(window, "_run_action", lambda action, steps, **kw: captured.update(action=action, **kw))
+    window._remove_item(_step("10"), "Discord", "Discord")
+    assert captured["action"] == "remove"
+    assert captured["selection"] == {"10": ("Discord",)}
+
+
+def test_remove_item_cancelado_nao_faz_nada(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    import reforja.gui.main_window as mw
+
+    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.No))
+    chamou = []
+    monkeypatch.setattr(window, "_run_action", lambda *a, **k: chamou.append(True))
+    window._remove_item(_step("10"), "Discord", "Discord")
+    assert chamou == []
+
+
+def test_card_estados_busy_e_erro(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    card = ItemCard(_step("10"), _task("pendente", key="X"), window)
+    card.set_busy("Instalando...")
+    assert "Instalando" in card._chip.text() and not card._chip.isHidden()
+    card.set_error("deu ruim")
+    assert card._action.text() == "Repetir" and card._chip.text().startswith("⚠")
+    assert card._chip.toolTip() == "deu ruim"
+
+
+def test_preset_abre_previa_com_selecao(app, tmp_path: Path, monkeypatch) -> None:
+    window = MainWindow(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr(
+        window,
+        "_preview_then_apply",
+        lambda steps, on_done, *, initial_selection=None, title=None: captured.update(
+            steps=[s.id for s in steps], sel=initial_selection, title=title
+        ),
+    )
+    window._apply_preset("Comunicacao")
+    # Comunicacao mexe so na etapa 10, com Discord/TeamSpeak/ZapZap.
+    assert captured["steps"] == ["10"]
+    assert captured["sel"] == {"10": ("Discord", "TeamSpeak", "ZapZap")}
+    assert "Comunicacao" in captured["title"]
+
+
+def test_previa_com_initial_selection_marca_o_preset(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import BatchPreviewDialog
+
+    window = MainWindow(tmp_path)
+    tasks = [_task("pendente", key="Discord"), _task("pendente", key="Steam")]
+    dialog = BatchPreviewDialog(
+        [_plan(_step("10"), tasks)], window, title="Perfil", initial_selection={"10": ("Discord",)}
+    )
+    marcados = {key: chk.isChecked() for _sid, key, _st, chk in dialog._checks}
+    assert marcados == {"Discord": True, "Steam": False}
+
+
+def test_toggle_tema_persiste_e_troca(app, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from reforja.gui import settings
+
+    window = MainWindow(tmp_path)
+    assert settings.load()["theme"] == "light"
+    window._toggle_theme()
+    assert settings.load()["theme"] == "dark"
+    window._toggle_theme()
+    assert settings.load()["theme"] == "light"
+
+
+def test_toggle_console_persiste(app, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg2"))
+    from reforja.gui import settings
+
+    window = MainWindow(tmp_path)
+    window._toggle_console()
+    assert settings.load()["console_collapsed"] is True
+    assert window._console_collapsed is True
+
+
+def test_theme_dark_stylesheet_difere(app) -> None:
+    from reforja.gui import theme
+
+    claro = theme.build_stylesheet(False)
+    escuro = theme.build_stylesheet(True)
+    assert claro != escuro
+    # compliance() usa a paleta ativa: apos build dark, a cor muda.
+    theme.build_stylesheet(True)
+    _glyph, cor_dark = theme.compliance("aplicado")
+    theme.build_stylesheet(False)
+    _glyph, cor_light = theme.compliance("aplicado")
+    assert cor_dark != cor_light
+
+
+def test_busca_filtra_cards(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    page = window._step_pages["10"]  # Apps: 15 itens, varias categorias -> tem filtro
+    page.show()
+    _qt_app = QApplication.instance()
+    if not page._built:
+        page._build_cards()
+        page._built = True
+    assert page._filter_bar is not None  # a barra aparece na etapa 10
+    page._on_search("discord")
+    visiveis = [c.key for c in page._visible_cards]
+    assert visiveis == ["Discord"]
+    page._on_search("")
+    assert len(page._visible_cards) == len(page._cards)
+
+
+def test_filtro_categoria(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    page = window._step_pages["10"]
+    page.show()
+    if not page._built:
+        page._build_cards()
+        page._built = True
+    page._on_category("comunicacao")
+    cats = {c._task.category for c in page._visible_cards}
+    assert cats == {"comunicacao"}
+
+
+def test_installed_label_encurta_origem(app) -> None:
+    from reforja.gui.main_window import _installed_label
+
+    t = _task("aplicado", key="x", detail="instalado via flatpak (com.x)")
+    assert _installed_label(t) == "flatpak"
+    t2 = _task("aplicado", key="y", detail="instalado: 1.2.3")
+    assert _installed_label(t2) == "1.2.3"
+
+
 def test_icone_fallback_tipografico_sem_rede(app) -> None:
     from reforja.gui import icons
 

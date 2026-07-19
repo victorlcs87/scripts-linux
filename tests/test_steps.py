@@ -155,6 +155,54 @@ def test_catalogo_reinstala_quando_force(tmp_path: Path) -> None:
     assert step.executed == ["Instalado"]
 
 
+def test_remove_items_roda_so_o_callable_de_remocao(tmp_path: Path) -> None:
+    ctx = make_ctx(tmp_path)
+    removidos: list[str] = []
+
+    class _S(Step):
+        id = "99"
+        title = "T"
+        description = "t"
+
+        def tasks(self):
+            t = StepTask(key="A", label="A", detect=lambda: True, run=lambda: None)
+            t.remove = lambda: removidos.append("A")
+            # Item sem callable de remocao: nunca deve ser tocado por remove_items.
+            t2 = StepTask(key="B", label="B", detect=lambda: True, run=lambda: None)
+            return [t, t2]
+
+    step = _S(ctx)
+    step.remove_items(("A", "B"))
+    assert removidos == ["A"]
+
+
+def test_remove_app_escolhe_flatpak_ou_sistema(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    chamadas: list[tuple[str, object]] = []
+    monkeypatch.setattr("reforja.steps.gaming.remove_flatpak", lambda app_id, _r: chamadas.append(("flatpak", app_id)))
+    monkeypatch.setattr("reforja.steps.gaming.remove_system_packages", lambda pkgs, _r: chamadas.append(("sys", pkgs)))
+    # Discord instalado via flatpak -> remove_flatpak; nao toca em pacote de sistema.
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: app_id == "com.discordapp.Discord")
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    step._remove_app("Discord")
+    assert ("flatpak", "com.discordapp.Discord") in chamadas
+    assert not any(kind == "sys" for kind, _ in chamadas)
+
+
+def test_remove_app_nao_remove_runtime_do_codex(tmp_path: Path, monkeypatch) -> None:
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    removidos_sys: list[list[str]] = []
+    monkeypatch.setattr("reforja.steps.gaming.remove_system_packages", lambda pkgs, _r: removidos_sys.append(pkgs))
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: True)  # nodejs/npm "instalados"
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: True)
+    step._remove_app("Codex CLI")
+    # Nunca remove nodejs/npm (runtime compartilhado); so o pacote global via npm.
+    assert removidos_sys == []
+
+
 def test_catalogo_preseleciona_o_que_falta(tmp_path: Path) -> None:
     ctx = make_ctx(tmp_path)
     step = _CatalogStep(ctx, {"Instalado": "aplicado", "Faltando": "pendente"})

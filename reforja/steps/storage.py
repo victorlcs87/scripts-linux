@@ -67,6 +67,7 @@ class RcloneStep(Step):
             StepTask(
                 key="remote",
                 label="Conectar a sua conta do Google Drive",
+                short_description="Autoriza a conta e cria o remote do Drive",
                 description=(
                     "Abre o rclone config para autorizar a conta no navegador e cria o remote "
                     "'Google Drive:'. Se o token ja existir mas estiver expirado, faz a reconexao."
@@ -77,6 +78,7 @@ class RcloneStep(Step):
             StepTask(
                 key="servico",
                 label="Montar o Drive em ~/GoogleDrive automaticamente",
+                short_description="Servico systemd que monta o Drive",
                 description=(
                     "Cria um servico systemd de usuario que monta o Google Drive em ~/GoogleDrive e o "
                     "remonta sozinho se cair, com notificacao na area de trabalho em caso de falha."
@@ -87,6 +89,7 @@ class RcloneStep(Step):
             StepTask(
                 key="linger",
                 label="Manter a montagem ativa no boot (linger)",
+                short_description="Habilita o linger para subir no boot",
                 description=(
                     "Habilita o linger da sessao: sem isso o servico so sobe depois que voce faz login "
                     "no ambiente grafico."
@@ -401,6 +404,7 @@ class FstabStep(Step):
             StepTask(
                 key="fstab",
                 label="Configurar a montagem automatica dos discos",
+                short_description="Monta discos no boot via /etc/fstab",
                 description=(
                     "Sonda os discos com lsblk, deixa voce marcar quais montar no boot (ja vem marcado o "
                     "que hoje esta no bloco gerenciado do /etc/fstab), permite trocar o ponto de montagem "

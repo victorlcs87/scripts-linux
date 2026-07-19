@@ -49,6 +49,9 @@ class StepTask:
     category: str = ""
     run: Callable[[], None] | None = None
     detect: Callable[[], bool | str | None] | None = None
+    # Remocao discreta deste item (desinstalar o app, apagar o AppImage/atalho...).
+    # Quando presente, a GUI oferece um botao "Remover" no card ja instalado.
+    remove: Callable[[], None] | None = None
     stateless: bool = False
     available: bool = True
     unavailable_reason: str = ""
@@ -65,6 +68,10 @@ class StepTask:
     @property
     def runnable(self) -> bool:
         return self.run is not None and self.state != "indisponivel"
+
+    @property
+    def removable(self) -> bool:
+        return self.remove is not None and self.state != "indisponivel"
 
     @property
     def preselectable(self) -> bool:
@@ -300,6 +307,49 @@ class Step:
             self.mark_done(f"{executed} item(ns) processado(s){extra}.")
 
         # Reconfere o estado real depois de agir.
+        if self.compliance_from_plan:
+            self.report_plan(self.plan(), quiet=True, attention=failures)
+            self._prefix_summary_with_outcome()
+
+    def remove_items(self, keys: Sequence[str]) -> None:
+        """Remove os itens indicados (por chave), usando o callable `remove` de cada um.
+
+        Usado pela acao 'remove' (botao Remover por card na GUI). So mexe em itens
+        que declaram `remove`; a confirmacao ja aconteceu no frontend.
+        """
+        logger = self.ctx.logger
+        wanted = set(keys)
+        tasks = self.plan()
+        alvo = [task for task in tasks if task.key in wanted and task.removable]
+        if not alvo:
+            self.mark_skipped("Nada a remover.")
+            if self.compliance_from_plan:
+                self.report_plan(self.plan(), quiet=True)
+                self._prefix_summary_with_outcome()
+            return
+
+        failures: list[str] = []
+        for task in alvo:
+            logger.write("")
+            logger.write(paint(f"-> Remover {task.label}", Color.TITLE))
+            try:
+                assert task.remove is not None
+                task.remove()
+            except (
+                PrivilegeEscalationBlockedError,
+                CommandInterruptedError,
+                PromptInterruptedError,
+            ):
+                raise
+            except Exception as exc:
+                failures.append(task.label)
+                logger.write(f"{badge('erro', Color.ERROR)} {task.label}: {exc}")
+                self.add_hint(f"revise a remocao de '{task.label}': {exc}")
+
+        if failures:
+            self.mark_done(f"Remocao concluida com falhas em: {', '.join(failures)}.")
+        else:
+            self.mark_done(f"{len(alvo)} item(ns) removido(s).")
         if self.compliance_from_plan:
             self.report_plan(self.plan(), quiet=True, attention=failures)
             self._prefix_summary_with_outcome()

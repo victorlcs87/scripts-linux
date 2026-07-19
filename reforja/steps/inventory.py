@@ -37,6 +37,7 @@ class HardwareStep(Step):
             StepTask(
                 key="ferramentas",
                 label="Instalar as ferramentas de coleta (dmidecode, inxi)",
+                short_description="Instala dmidecode e inxi",
                 description=(
                     "Instala dmidecode e inxi, que enriquecem o relatorio com dados da placa-mae, BIOS "
                     "e sensores. Sem elas o relatorio sai mais pobre, mas ainda funciona."
@@ -47,6 +48,7 @@ class HardwareStep(Step):
             StepTask(
                 key="relatorio",
                 label="Gerar o relatorio de hardware",
+                short_description="Coleta CPU, RAM, GPU, discos e mais",
                 description=(
                     f"Coleta CPU, RAM, GPUs, discos, PCI e USB e salva em {self.report_file}. "
                     "Nao altera nada no sistema; serve para suporte e para as outras etapas consultarem."

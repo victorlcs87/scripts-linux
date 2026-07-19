@@ -28,6 +28,7 @@ from ..platform import (
     ensure_antigravity_repo,
     ensure_github_cli,
     install_system_package,
+    remove_system_packages,
     system_installed,
 )
 from ..steps_base import Step, StepTask
@@ -68,6 +69,7 @@ class GitStep(Step):
             StepTask(
                 key="ferramentas",
                 label=self._ACTIONS[0],
+                short_description="Instala git e GitHub CLI (gh)",
                 description=(
                     "Instala o git e o GitHub CLI (gh), que e quem faz o login pelo navegador e cuida "
                     "da chave SSH por voce."
@@ -78,6 +80,7 @@ class GitStep(Step):
             StepTask(
                 key="conta",
                 label=self._ACTIONS[1],
+                short_description="Login no GitHub + chave SSH",
                 description=(
                     "Faz o login no GitHub pelo navegador, gera uma chave SSH dedicada para a conta, "
                     "envia a chave para o GitHub e cria um alias no ~/.ssh/config (permite ter mais de "
@@ -89,6 +92,7 @@ class GitStep(Step):
             StepTask(
                 key="repos",
                 label=self._ACTIONS[2],
+                short_description="Clona um repo e configura o autor",
                 description=(
                     "Clona um repositorio da sua conta em ~/repositorios e ja configura nome e e-mail "
                     "do autor dos commits naquele repositorio. Pode repetir para varios."
@@ -742,11 +746,35 @@ class AntigravityStep(Step):
             StepTask(
                 key="antigravity",
                 label="Instalar/atualizar o Antigravity IDE",
+                short_description="IDE do Google Antigravity (tarball oficial)",
                 description=description,
                 detect=self._detect_installed,
                 run=self._install,
+                remove=self._remove,
             )
         ]
+
+    def _remove(self) -> None:
+        """Remove o Antigravity: pacote nativo, ou o dir de instalacao + atalho + wrapper."""
+        header(self, "Remover Antigravity IDE")
+        if self._use_native():
+            if system_installed(self.package):
+                remove_system_packages([self.package], self.ctx.runner)
+            return
+        home = self.ctx.user.home
+        targets = [
+            self._install_dir,
+            home / ".local/share/applications/antigravity-ide.desktop",
+            home / ".local/bin/antigravity-ide",
+        ]
+        for path in targets:
+            flag = "-rf" if path == self._install_dir else "-f"
+            self.ctx.runner.run(
+                ["rm", flag, str(path)],
+                check=False,
+                show_progress=False,
+                action=f"Removendo {path}",
+            )
 
     def _detect_installed(self) -> str | bool:
         if self._use_native():
