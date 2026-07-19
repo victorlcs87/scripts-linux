@@ -1,21 +1,30 @@
 # Container de teste do Reforja
 
-Um Arch limpo (alvo primario: CachyOS/Arch) com Python + Qt6/PySide6, rodando
-como usuario nao-root com sudo — o mesmo shape em que o Reforja roda de verdade.
-Serve para exercitar a aplicacao inteira **pela GUI** contra um sistema real,
-alem do gate (ruff + pytest), pegando bugs que os testes stubados nao pegam.
+Containers limpos das **tres familias suportadas** — Arch (alvo primario:
+CachyOS/Arch), Debian (Debian/Ubuntu) e Fedora (Fedora/Bazzite) — com Python +
+Qt6/PySide6, rodando como usuario nao-root com sudo, o mesmo shape em que o
+Reforja roda de verdade. Servem para exercitar a aplicacao inteira **pela GUI**
+contra um sistema real de cada distro, alem do gate (ruff + pytest), pegando
+bugs que os testes stubados nao pegam.
+
+Ha um `Dockerfile.<distro>` por familia; `run-all.sh` e `gui_drive.py` sao
+compartilhados (o driver detecta a distro em runtime).
 
 ## Uso
 
 ```fish
-# 1. Constroi a imagem (provisiona o ambiente; o codigo NAO entra na imagem)
-docker build -t reforja-test packaging/test-container
+# Todas as distros de uma vez (build + bateria)
+bash packaging/test-container/test-all-distros.sh
 
-# 2. Roda a bateria completa montando o repo em /work
-docker run --rm -v "$PWD":/work reforja-test bash packaging/test-container/run-all.sh
+# So uma (ou algumas)
+bash packaging/test-container/test-all-distros.sh fedora
+
+# Manualmente, uma distro (arch | debian | fedora):
+docker build -t reforja-test-arch -f packaging/test-container/Dockerfile.arch packaging/test-container
+docker run --rm -v "$PWD":/work reforja-test-arch bash packaging/test-container/run-all.sh
 
 # Shell interativo dentro do container (para depurar)
-docker run --rm -it -v "$PWD":/work reforja-test bash
+docker run --rm -it -v "$PWD":/work reforja-test-arch bash
 ```
 
 ## O que a bateria roda (`run-all.sh`)

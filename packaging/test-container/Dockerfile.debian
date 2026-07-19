@@ -1,0 +1,36 @@
+# Container de teste do Reforja em Debian (familia 'debian': Debian/Ubuntu).
+# Python + Qt6/PySide6, usuario nao-root com sudo — o shape real do Reforja.
+# O codigo NAO entra na imagem: monta-se o repo em /work na hora de rodar.
+#
+#   docker build -t reforja-test-debian -f packaging/test-container/Dockerfile.debian packaging/test-container
+#   docker run --rm -v "$PWD":/work reforja-test-debian bash packaging/test-container/run-all.sh
+FROM debian:stable-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Sistema: Python (com 'python' apontando p/ python3), git/sudo e as libs que o
+# PySide6 (wheel do PyPI) carrega em runtime, mesmo offscreen.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv python-is-python3 \
+        git sudo ca-certificates \
+        libgl1 libegl1 libxkbcommon0 libfontconfig1 libfreetype6 \
+        libdbus-1-3 libglib2.0-0 libxcb-cursor0 \
+        fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# Deps Python: PySide6 (GUI) + runtime (InquirerPy) + dev (pytest/ruff).
+# --break-system-packages: o Debian marca o Python do sistema como
+# externally-managed (PEP 668); e um container descartavel.
+RUN pip3 install --break-system-packages --no-cache-dir \
+        PySide6 InquirerPy pytest pytest-cov ruff certifi
+
+RUN useradd -m -s /bin/bash tester \
+    && echo 'tester ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/tester \
+    && chmod 0440 /etc/sudoers.d/tester
+
+USER tester
+WORKDIR /work
+ENV QT_QPA_PLATFORM=offscreen \
+    REFORJA_NO_UPDATE_CHECK=1 \
+    PYTHONUNBUFFERED=1
+CMD ["bash"]

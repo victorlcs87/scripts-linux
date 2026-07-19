@@ -1,0 +1,32 @@
+# Container de teste do Reforja em Fedora (familia 'fedora': Fedora/Bazzite).
+# Python + Qt6/PySide6, usuario nao-root com sudo — o shape real do Reforja.
+# O codigo NAO entra na imagem: monta-se o repo em /work na hora de rodar.
+#
+#   docker build -t reforja-test-fedora -f packaging/test-container/Dockerfile.fedora packaging/test-container
+#   docker run --rm -v "$PWD":/work reforja-test-fedora bash packaging/test-container/run-all.sh
+FROM fedora:latest
+
+# Sistema: Python (com 'python' via python-unversioned-command), git/sudo e as
+# libs que o PySide6 (wheel do PyPI) carrega em runtime, mesmo offscreen.
+RUN dnf -y install \
+        python3 python3-pip python-unversioned-command \
+        git sudo which \
+        mesa-libGL mesa-libEGL libxkbcommon libxkbcommon-x11 \
+        fontconfig freetype glib2 dbus-libs xcb-util-cursor \
+        dejavu-sans-fonts \
+    && dnf clean all
+
+# Deps Python: PySide6 (GUI) + runtime (InquirerPy) + dev (pytest/ruff).
+RUN pip3 install --break-system-packages --no-cache-dir \
+        PySide6 InquirerPy pytest pytest-cov ruff certifi
+
+RUN useradd -m -s /bin/bash tester \
+    && echo 'tester ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/tester \
+    && chmod 0440 /etc/sudoers.d/tester
+
+USER tester
+WORKDIR /work
+ENV QT_QPA_PLATFORM=offscreen \
+    REFORJA_NO_UPDATE_CHECK=1 \
+    PYTHONUNBUFFERED=1
+CMD ["bash"]
