@@ -524,6 +524,11 @@ class StepPage(QWidget):
             self._grid.setColumnStretch(col, 1)
 
     def _load_icons(self, tasks: list[StepTask]) -> None:
+        # Ambiente headless (testes/CI): nao dispara o download de icone do Flathub.
+        # Isso evita uma thread de rede pendente no teardown do processo (QThread
+        # destruida em execucao -> abort), alem de manter os testes deterministicos.
+        if os.environ.get("REFORJA_NO_UPDATE_CHECK") == "1":
+            return
         targets = icons.flathub_icon_targets(tasks)
         if not targets:
             return
