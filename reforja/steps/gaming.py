@@ -732,6 +732,27 @@ class AppsStep(Step):
         "Codex CLI": "",
         "Linux Toys": "",
     }
+    # Binarios que o app coloca no PATH. A deteccao checa command_exists nesses de
+    # forma robusta para TODOS os apps (nao so casos especiais): cobre instalacoes
+    # cujo nome de pacote difere do binario, instalacoes por script e ambientes
+    # onde a query de pacote nao resolve. Apps so-Flatpak nao expoem binario no
+    # PATH (rodam via `flatpak run`) e ja sao detectados pelo flatpak_id.
+    app_commands = {
+        "Steam": ("steam",),
+        "Heroic": ("heroic",),
+        "Discord": ("discord",),
+        "TeamSpeak": ("teamspeak3", "ts3client"),
+        "ZapZap": ("zapzap",),
+        "ONLYOFFICE": ("onlyoffice-desktopeditors", "desktopeditors"),
+        "Google Chrome": ("google-chrome-stable", "google-chrome"),
+        "Minecraft Bedrock Launcher": ("mcpelauncher-client", "mcpelauncher-ui-qt"),
+        "Codex CLI": ("codex",),
+        "auto-cpufreq": ("auto-cpufreq",),
+        "Bitwarden": ("bitwarden",),
+        "Linux Toys": ("linuxtoys",),
+        "Solaar": ("solaar",),
+        "LocalSend": ("localsend",),
+    }
 
     def _icon_for(self, name: str) -> str:
         flatpak_id = self.apps[name].get("flatpak_id")
@@ -976,15 +997,14 @@ class AppsStep(Step):
         for relative_path in definition["desktop_paths"]:
             if (self.ctx.user.home / relative_path).exists():
                 return f"desktop ({self.ctx.user.home / relative_path})"
-        if app_name == "Codex CLI":
-            if command_exists("codex"):
-                return "cli (codex no PATH)"
-            if npm_global_installed("@openai/codex"):
-                return "npm global"
-        if app_name == "Linux Toys" and command_exists("linuxtoys"):
-            return "cli (linuxtoys no PATH)"
-        if app_name == "auto-cpufreq" and command_exists("auto-cpufreq"):
-            return "cli (auto-cpufreq no PATH)"
+        # Robusto e uniforme para todos os apps: binario no PATH conta como instalado
+        # (pacote com nome diferente, instalacao por script, ou query de pacote que
+        # nao resolve). Codex ainda pode estar so como pacote global do npm.
+        for command in self.app_commands.get(app_name, ()):
+            if command_exists(command):
+                return f"cli ({command} no PATH)"
+        if app_name == "Codex CLI" and npm_global_installed("@openai/codex"):
+            return "npm global"
         return None
 
 

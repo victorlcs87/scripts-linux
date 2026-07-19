@@ -176,6 +176,21 @@ def test_remove_items_roda_so_o_callable_de_remocao(tmp_path: Path) -> None:
     assert removidos == ["A"]
 
 
+def test_deteccao_robusta_binario_no_path_para_todos(tmp_path: Path, monkeypatch) -> None:
+    """Binario no PATH conta como instalado para qualquer app (nao so casos
+    especiais): cobre pacote com nome diferente, install por script, etc."""
+    ctx = make_ctx(tmp_path)
+    step = AppsStep(ctx)
+    # Nada pelo pacote nem flatpak; so o binario do Solaar existe no PATH.
+    monkeypatch.setattr("reforja.steps.gaming.system_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.flatpak_installed", lambda app_id: False)
+    monkeypatch.setattr("reforja.steps.gaming.npm_global_installed", lambda pkg: False)
+    monkeypatch.setattr("reforja.steps.gaming.command_exists", lambda cmd: cmd == "solaar")
+    assert step._detect_install_source("Solaar") == "cli (solaar no PATH)"
+    # Um app cujo binario nao esta no PATH continua "nao instalado".
+    assert step._detect_install_source("Bitwarden") is None
+
+
 def test_remove_app_escolhe_flatpak_ou_sistema(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AppsStep(ctx)
