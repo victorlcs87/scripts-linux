@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt, QThread, Signal
@@ -48,6 +49,36 @@ def _local_pixmap(icon: str, size: int) -> QPixmap | None:
     return None
 
 
+# Temas de icones onde procuramos os SVG/PNG diretamente no disco quando o
+# QIcon.fromTheme nao resolve (offscreen/sessoes sem plataforma de tema). Ordem
+# de preferencia; o primeiro acerto vence.
+_ICON_THEME_DIRS = (
+    Path.home() / ".local/share/icons",
+    Path("/usr/share/icons/breeze"),
+    Path("/usr/share/icons/Papirus"),
+    Path("/usr/share/icons/Adwaita"),
+    Path("/usr/share/icons/hicolor"),
+)
+
+
+@lru_cache(maxsize=256)
+def _disk_theme_file(name: str) -> Path | None:
+    """Acha o arquivo de icone `name` (.svg/.png) varrendo os temas instalados.
+
+    Fallback robusto para o QIcon.fromTheme, que depende da plataforma de tema
+    estar ativa (num app KDE real funciona; offscreen/headless nem sempre).
+    O resultado e memoizado (varrer a arvore do tema por card seria caro).
+    """
+    for root in _ICON_THEME_DIRS:
+        if not root.is_dir():
+            continue
+        for ext in (".svg", ".png"):
+            hits = sorted(root.rglob(f"{name}{ext}"))
+            if hits:
+                return hits[0]
+    return None
+
+
 def _theme_pixmap(names: list[str], size: int) -> QPixmap | None:
     for name in names:
         if not name:
@@ -57,6 +88,16 @@ def _theme_pixmap(names: list[str], size: int) -> QPixmap | None:
             pix = icon.pixmap(size, size)
             if not pix.isNull():
                 return pix
+    for name in names:
+        if not name:
+            continue
+        found = _disk_theme_file(name)
+        if found is not None:
+            pix = QPixmap(str(found))
+            if not pix.isNull():
+                return pix.scaled(
+                    size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
     return None
 
 
@@ -105,6 +146,68 @@ def resolve_icon(label: str, icon: str, category: str, size: int = 48) -> QPixma
     if from_theme is not None:
         return from_theme
     return initial_avatar(label, category, size)
+
+
+# Icone de tema (freedesktop/Breeze) para as tarefas de configuracao que nao tem
+# um icone proprio (id Flathub ou asset). Chaveado por (step_id, task_key). Se o
+# tema nao tiver o icone, resolve_icon cai no avatar tipografico — nada quebra.
+TASK_THEME_ICONS: dict[tuple[str, str], str] = {
+    # 00 Sistema
+    ("00", "atualizar"): "system-software-update",
+    ("00", "flatpak"): "system-software-install",
+    ("00", "appimage-fuse"): "application-x-executable",
+    ("00", "aur"): "system-software-install",
+    # 03 Navegador + WebApps
+    ("03", "navegador"): "internet-web-browser",
+    ("03", "webapp-chatgpt"): "internet-web-browser",
+    ("03", "webapp-gsv-calendar"): "office-calendar",
+    # 05 GPU
+    ("05", "driver-amd"): "preferences-desktop-display",
+    ("05", "limpeza-nvidia"): "edit-clear-all",
+    # 06 Git/GitHub
+    ("06", "ferramentas"): "applications-development",
+    ("06", "conta"): "preferences-system-users",
+    ("06", "repos"): "folder-development",
+    # 07 rclone
+    ("07", "rclone"): "folder-cloud",
+    ("07", "remote"): "folder-network",
+    ("07", "servico"): "system-run",
+    ("07", "linger"): "chronometer",
+    # 08 fstab
+    ("08", "fstab"): "drive-harddisk",
+    # 09 Ajustes KDE
+    ("09", "gestos"): "input-touchpad-on",
+    ("09", "numlock"): "input-keyboard",
+    # 10 Apps (os sem id Flathub)
+    ("10", "Codex CLI"): "utilities-terminal",
+    ("10", "auto-cpufreq"): "cpu",
+    ("10", "Linux Toys"): "applications-utilities",
+    # 12 Antigravity
+    ("12", "antigravity"): "applications-development",
+    # 13 Sunshine
+    ("13", "pacote"): "system-software-install",
+    ("13", "grupo-input"): "preferences-system-users",
+    ("13", "udev"): "drive-removable-media",
+    ("13", "autostart"): "system-run",
+    ("13", "launcher"): "applications-games",
+    ("13", "ufw"): "preferences-security-firewall",
+    ("13", "iniciar"): "media-playback-start",
+    # 14 Inventario de hardware
+    ("14", "ferramentas"): "utilities-system-monitor",
+    ("14", "relatorio"): "text-x-generic",
+    # 16 Backup
+    ("16", "backup"): "backup",
+    ("16", "restore"): "view-restore",
+    ("16", "upload"): "cloud-upload",
+    ("16", "limpar"): "edit-delete",
+}
+
+
+def resolve_task_icon(step_id: str, task, size: int = 48) -> QPixmap:
+    """Como resolve_icon, mas injeta um icone de tema padrao para tarefas sem icone
+    proprio (config steps), a partir de TASK_THEME_ICONS — evitando o avatar de letra."""
+    icon = getattr(task, "icon", "") or TASK_THEME_ICONS.get((step_id, task.key), "")
+    return resolve_icon(task.label, icon, task.category, size)
 
 
 def _cache_path(app_id: str) -> Path:

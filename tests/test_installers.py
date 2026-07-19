@@ -73,3 +73,31 @@ def test_install_system_or_flatpak_prefers_native(tmp_path: Path, monkeypatch) -
     installers.install_system_or_flatpak("zapzap", "zapzap", "com.rtosta.zapzap", _runner(tmp_path))
 
     assert installed == []
+
+
+def test_flatpak_installed_detects_user_dir_without_binary(tmp_path: Path, monkeypatch) -> None:
+    """App --user deve ser detectado pelo diretorio mesmo sem `flatpak` no PATH
+    e sob HOME=/root (processo sob sudo nao enxergaria via `flatpak info`)."""
+    app_id = "com.bitwarden.desktop"
+    user_apps = tmp_path / "home/.local/share/flatpak/app"
+    (user_apps / app_id).mkdir(parents=True)
+    monkeypatch.setattr(installers.shutil, "which", lambda _cmd: None)
+    monkeypatch.setattr(installers, "detect_user", lambda: (_ for _ in ()).throw(RuntimeError))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert installers.flatpak_installed(app_id) is True
+    assert installers.flatpak_installed("org.naoexiste.App") is False
+
+
+def test_flatpak_installed_uses_real_user_home_under_sudo(tmp_path: Path, monkeypatch) -> None:
+    """Sob sudo (HOME=/root) a deteccao usa a home do usuario REAL (detect_user)."""
+    from reforja.core import UserInfo
+
+    app_id = "com.discordapp.Discord"
+    real_home = tmp_path / "victor"
+    (real_home / ".local/share/flatpak/app" / app_id).mkdir(parents=True)
+    monkeypatch.setattr(installers.shutil, "which", lambda _cmd: None)
+    monkeypatch.setattr(installers, "detect_user", lambda: UserInfo(name="victor", home=real_home, uid=1000, gid=1000))
+    monkeypatch.setenv("HOME", "/root")
+
+    assert installers.flatpak_installed(app_id) is True

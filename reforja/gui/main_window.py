@@ -139,7 +139,7 @@ class ItemCard(QFrame):
         self._icon = QLabel()
         self._icon.setFixedSize(48, 48)
         self._icon.setStyleSheet("background: transparent;")
-        self._icon.setPixmap(icons.resolve_icon(task.label, task.icon, task.category, 48))
+        self._icon.setPixmap(icons.resolve_task_icon(step_cls.id, task, 48))
         outer.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignTop)
 
         body = QVBoxLayout()
@@ -235,7 +235,7 @@ class ItemCard(QFrame):
 
     def refresh_icon(self) -> None:
         """Re-resolve o icone (ex.: apos troca de tema, para a cor do avatar)."""
-        self._icon.setPixmap(icons.resolve_icon(self._task.label, self._task.icon, self._task.category, 48))
+        self._icon.setPixmap(icons.resolve_task_icon(self._step_cls.id, self._task, 48))
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (override Qt)
         super().resizeEvent(event)

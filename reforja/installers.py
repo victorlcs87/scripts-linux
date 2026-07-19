@@ -7,10 +7,11 @@ Instalacao por gerenciador de pacotes da distro (pacman/apt/dnf/AUR) vive em
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
-from .core import Color, Runner, announce, badge, capture, command_exists
+from .core import Color, Runner, announce, badge, capture, command_exists, detect_user
 from .platform import _quiet, install_system_or_aur, install_system_package, system_installed
 
 # Memo por processo: no "Aplicar tudo" varios steps instalam Flatpaks em
@@ -105,8 +106,36 @@ def fetch_json(url: str, *, timeout: int = 30) -> dict | list | None:
         return None
 
 
+def _flatpak_app_dirs() -> list[Path]:
+    """Diretorios onde o Flatpak guarda os apps instalados (escopo system + user).
+
+    Resolvemos a home do usuario REAL (via detect_user, que honra SUDO_USER) para
+    enxergar instalacoes --user mesmo quando o processo roda sob sudo (HOME=/root) —
+    caso em que `flatpak info` de um app --user falharia silenciosamente.
+    """
+    roots = [Path("/var/lib/flatpak/app")]
+    try:
+        roots.append(detect_user().home / ".local/share/flatpak/app")
+    except Exception:
+        pass
+    home = os.environ.get("HOME")
+    if home:
+        candidate = Path(home) / ".local/share/flatpak/app"
+        if candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
 def flatpak_installed(app_id: str) -> bool:
-    return shutil.which("flatpak") is not None and _quiet(["flatpak", "info", app_id])
+    """True se o Flatpak `app_id` estiver instalado (escopo system ou user).
+
+    Duas vias, para ser robusto fora do terminal do usuario: (1) `flatpak info`
+    quando o binario esta no PATH; (2) checagem direta do diretorio instalado, que
+    dispensa o binario `flatpak` e enxerga apps --user mesmo sob sudo.
+    """
+    if shutil.which("flatpak") is not None and _quiet(["flatpak", "info", app_id]):
+        return True
+    return any((root / app_id).is_dir() for root in _flatpak_app_dirs())
 
 
 def npm_global_installed(pkg: str) -> bool:

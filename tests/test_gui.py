@@ -764,3 +764,37 @@ def test_download_worker_rejeita_hash_divergente(tmp_path: Path, monkeypatch) ->
     assert results and results[0][0] is False
     assert "SHA256" in results[0][1]
     assert target.read_bytes() == b"antigo"  # binario preservado
+
+
+# --- icones das tarefas (config steps sem id Flathub proprio) ----------------------
+def test_task_theme_icons_cobrem_tarefas_sem_icone_proprio() -> None:
+    """Toda tarefa sem `icon` proprio (nem app_id Flathub nem asset) precisa de um
+    icone de tema mapeado, para nunca cair no avatar de letra."""
+    import tempfile
+
+    from reforja.core import Logger, Runner, detect_user
+    from reforja.gui.icons import TASK_THEME_ICONS
+    from reforja.steps import ALL_STEPS
+    from reforja.steps_base import StepContext
+
+    d = Path(tempfile.mkdtemp())
+    logger = Logger(d, "test")
+    ctx = StepContext(root=d, run_dir=d, user=detect_user(), logger=logger, runner=Runner(logger, dry_run=True))
+    sem_mapeamento: list[str] = []
+    for cls in ALL_STEPS:
+        for task in cls(ctx).tasks():
+            if getattr(task, "icon", ""):
+                continue
+            if (cls.id, task.key) not in TASK_THEME_ICONS:
+                sem_mapeamento.append(f"{cls.id}:{task.key}")
+    assert not sem_mapeamento, f"tarefas sem icone: {sem_mapeamento}"
+
+
+def test_resolve_task_icon_usa_mapa_de_tema(app) -> None:
+    """resolve_task_icon injeta o icone de tema mapeado para tarefas sem icone proprio."""
+    from reforja.gui import icons
+
+    task = _task("pendente", key="fstab", label="Montagens", category="")
+    task.icon = ""
+    pix = icons.resolve_task_icon("08", task, 48)
+    assert not pix.isNull()
