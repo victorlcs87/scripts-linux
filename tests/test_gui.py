@@ -807,6 +807,29 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
+# --- reflow da grade --------------------------------------------------------------
+def test_reflow_desconta_margens_e_barra_de_rolagem(app, tmp_path: Path) -> None:
+    """A largura util tem que excluir as margens do layout e a barra de rolagem.
+
+    Contar essa largura a mais fazia caber "uma coluna a mais", que era cortada
+    contra a borda direita — sem recurso, porque o scroll horizontal e desligado.
+    """
+    window = MainWindow(tmp_path)
+    window._open_step_page("10")
+    page = window._step_pages["10"]
+    page.showEvent(None) if not page._built else None
+
+    util = page._available_width()
+    viewport = page._scroll.viewport().width()
+    margens = page._grid.contentsMargins()
+    assert util <= viewport - margens.left() - margens.right()
+
+    # A grade nunca pode pedir mais largura do que o viewport oferece.
+    colunas = max(1, (util + page._grid.spacing()) // (300 + page._grid.spacing()))
+    largura_pedida = colunas * 300 + (colunas - 1) * page._grid.spacing()
+    assert largura_pedida <= viewport, f"{colunas} colunas pedem {largura_pedida}px em {viewport}px"
+
+
 # --- foco visivel e nomes acessiveis ---------------------------------------------
 def test_tema_define_foco_visivel_para_todo_controle_interativo() -> None:
     """Sem `:focus` explicito o app fica inoperavel por teclado: nao ha como saber

@@ -347,8 +347,14 @@ QPushButton#ghost:focus {{ border: 2px solid {p["focus_ring"]}; padding: 5px 11p
 QPushButton#preset:focus {{ border: 2px solid {p["focus_ring"]}; padding: 9px 15px; }}
 #itemCard QPushButton:focus {{ border: 2px solid {p["focus_ring"]}; padding: 4px 8px; }}
 QToolButton#filterChip:focus {{ border: 2px solid {p["focus_ring"]}; padding: 3px 11px; }}
-/* O item de nav ja reserva 3px de borda a esquerda: colorir nao desloca nada. */
-#navMenu::item:focus {{ border-left: 3px solid {p["focus_ring"]}; background: {p["surface_alt"]}; }}
+/* O item de nav ja reserva 3px de borda a esquerda: colorir nao desloca nada.
+   As demais bordas sao zeradas para nao somar com a regra generica de QListWidget
+   abaixo (senao o item ganha uma caixa dupla). */
+#navMenu::item:focus {{
+    border: none;
+    border-left: 3px solid {p["focus_ring"]};
+    background: {p["surface_alt"]};
+}}
 QListWidget::item:focus {{ border: 1px solid {p["focus_ring"]}; }}
 QCheckBox:focus {{ background: {p["primary_soft"]}; border-radius: 4px; }}
 

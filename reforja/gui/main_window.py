@@ -373,6 +373,7 @@ class StepPage(QWidget):
         self._filter_bar: QWidget | None = None
         self._chip_buttons: list[QToolButton] = []
         self._search_box: QLineEdit | None = None
+        self._scroll: QScrollArea | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 18, 28, 18)
@@ -452,6 +453,7 @@ class StepPage(QWidget):
         self._grid.setSpacing(12)
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(self._grid_holder)
+        self._scroll = scroll
         outer.addWidget(scroll, 1)
 
     def showEvent(self, event) -> None:  # noqa: N802 (override Qt)
@@ -463,7 +465,10 @@ class StepPage(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (override Qt)
         super().resizeEvent(event)
-        self._reflow()
+        # Agendado para o fim do ciclo: durante o resizeEvent o viewport ainda
+        # reporta a largura ANTERIOR, e recalcular com ela mantinha uma coluna a
+        # mais, cortando o ultimo card contra a borda.
+        QTimer.singleShot(0, self._reflow)
 
     def _build_cards(self) -> None:
         tasks = self._window._step_tasks(self._step_cls)
@@ -555,11 +560,31 @@ class StepPage(QWidget):
             card.setVisible(card in self._visible_cards)
         self._reflow(force=True)
 
+    def _available_width(self) -> int:
+        """Largura realmente utilizavel pela grade.
+
+        Medir `_grid_holder.width()` contava largura que a grade nao tem: faltavam
+        as margens do layout e a barra de rolagem vertical (~16px), e o deficit
+        fazia caber "uma coluna a mais" que era cortada contra a borda — sem
+        recurso, porque o scroll horizontal e desligado de proposito.
+        """
+        if self._scroll is None:  # pragma: no cover - a grade sempre tem scroll
+            return self._grid_holder.width() or self.width()
+        width = self._scroll.viewport().width()
+        margins = self._grid.contentsMargins()
+        width -= margins.left() + margins.right()
+        bar = self._scroll.verticalScrollBar()
+        if not bar.isVisible():
+            # Reserva a barra mesmo escondida: ela aparece assim que o conteudo
+            # passar da altura, e sem reservar a grade oscilaria entre N e N-1.
+            width -= bar.sizeHint().width()
+        return max(0, width)
+
     def _reflow(self, *, force: bool = False) -> None:
         cards = self._visible_cards or self._cards
         if not cards:
             return
-        width = self._grid_holder.width() or self.width()
+        width = self._available_width()
         # N colunas cabem quando N*card + (N-1)*spacing <= largura. Resolvendo por N
         # (inclui o espacamento entre colunas, senao a ultima coluna estoura a direita).
         spacing = self._grid.spacing()
@@ -848,6 +873,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Reforja - Pos-Formatacao")
         self.resize(1080, 760)
+        # Piso: sidebar (232) + uma coluna de card (300) + margens + barra de
+        # rolagem. Abaixo disso a grade nao tem como caber e o card seria cortado.
+        self.setMinimumWidth(620)
         self._run_dir = run_dir
 
         # Logger unico da sessao (um arquivo de log), reaproveitado por todas as acoes.
