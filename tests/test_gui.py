@@ -35,6 +35,16 @@ def app():
     yield instance
 
 
+@pytest.fixture(autouse=True)
+def _config_isolada(tmp_path, monkeypatch):
+    """Isola ~/.config/reforja da suite.
+
+    Sem isso os testes liam (e escreviam) a configuracao real do usuario, e o
+    resultado dependia de como a GUI tinha sido deixada na ultima execucao.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+
+
 def test_gui_logger_emite_sinal_e_grava_arquivo(app, tmp_path: Path) -> None:
     logger = GuiLogger(tmp_path, "gui-test")
     recebidos: list[str] = []
@@ -446,14 +456,15 @@ def test_toggle_tema_persiste_e_troca(app, tmp_path: Path, monkeypatch) -> None:
     assert settings.load()["theme"] == "light"
 
 
-def test_toggle_console_persiste(app, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg2"))
+def test_toggle_console_persiste(app, tmp_path: Path) -> None:
     from reforja.gui import settings
 
     window = MainWindow(tmp_path)
-    window._toggle_console()
-    assert settings.load()["console_collapsed"] is True
+    # O padrao passou a ser recolhido; alternar abre e persiste a escolha.
     assert window._console_collapsed is True
+    window._toggle_console()
+    assert settings.load()["console_collapsed"] is False
+    assert window._console_collapsed is False
 
 
 def test_theme_dark_stylesheet_difere(app) -> None:
@@ -834,6 +845,46 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
 
     assert results and results[0][0] is True
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
+
+
+# --- console sob demanda -----------------------------------------------------------
+def test_console_comeca_recolhido_e_abre_com_saida(app, tmp_path: Path) -> None:
+    """Em repouso o console mostrava uma linha ocupando ~38% da janela, numa tela
+    cuja tarefa e escolher apps."""
+    window = MainWindow(tmp_path)
+    assert window._console_collapsed is True
+
+    window._on_output("[info] instalando steam")
+    assert window._console_collapsed is False, "saida de comando tem que abrir o console"
+
+    # Terminou bem: volta a sair da frente.
+    window._results = [_resultado("done")]
+    window._finish_queue()
+    assert window._console_collapsed is True
+
+
+def test_console_fica_aberto_quando_algo_falha(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    window._on_output("[erro] deu ruim")
+    window._results = [_resultado("failed")]
+    window._finish_queue()
+    assert window._console_collapsed is False, "com falha o usuario precisa ler a saida"
+
+
+def test_toggle_manual_vence_o_automatico(app, tmp_path: Path) -> None:
+    """Se o usuario recolheu de proposito, o fim da execucao nao mexe mais."""
+    window = MainWindow(tmp_path)
+    window._on_output("[info] rodando")
+    window._toggle_console()  # usuario recolhe explicitamente
+    assert window._console_auto_opened is False
+
+
+def _resultado(status: str):
+    from reforja.core import StepRunResult
+
+    return StepRunResult(
+        step_id="10", title="Apps", status=status, message="", compliance="aplicado", duration_seconds=0.1
+    )
 
 
 # --- estado ocioso honesto ---------------------------------------------------------

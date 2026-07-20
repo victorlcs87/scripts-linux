@@ -13,7 +13,10 @@ from typing import Any
 
 _DEFAULTS: dict[str, Any] = {
     "theme": "light",  # "light" | "dark"
-    "console_collapsed": False,
+    # Recolhido por padrao: em repouso o console mostrava uma linha ocupando ~38%
+    # da janela, e a tarefa do usuario e escolher apps. Ele se abre sozinho quando
+    # ha saida de comando.
+    "console_collapsed": True,
 }
 
 

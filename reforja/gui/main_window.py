@@ -1145,7 +1145,9 @@ class MainWindow(QMainWindow):
         self._bottom_panel = bottom
         self.setCentralWidget(splitter)
         self._console_collapsed = False
-        self._apply_console_collapsed(settings.load().get("console_collapsed", False))
+        # Abertura automatica (por saida de comando) nao vira preferencia salva.
+        self._console_auto_opened = False
+        self._apply_console_collapsed(settings.load().get("console_collapsed", True))
 
     # --- navegacao ---------------------------------------------------------------
     def _on_menu_row(self, row: int) -> None:
@@ -1632,6 +1634,11 @@ class MainWindow(QMainWindow):
         self._progress.setFormat("%p%")
         self._render_summary()
         self._stack.setCurrentWidget(self._console)
+        # Depois do resumo: ele tambem escreve no console e reabriria o painel.
+        # Terminou sem falha -> o console volta a sair da frente; com falha ou acao
+        # manual fica aberto, que e quando o usuario precisa ler a saida.
+        if all(result.status in ("done", "skipped") for result in self._results):
+            self._auto_collapse_console()
         callback = self._on_queue_done
         self._on_queue_done = None
         self._card_action_target = None
@@ -1655,7 +1662,23 @@ class MainWindow(QMainWindow):
     def _append(self, line: str) -> None:
         self._console.appendHtml(_format_line_html(line))
 
+    def _auto_expand_console(self) -> None:
+        """Abre o console na primeira saida de uma execucao, sem gravar preferencia.
+
+        O usuario nao pediu para abrir: foi a execucao que trouxe conteudo. Ao
+        terminar bem, _auto_collapse_console devolve o console ao estado anterior."""
+        if self._console_collapsed and not self._console_auto_opened:
+            self._console_auto_opened = True
+            self._apply_console_collapsed(False)
+
+    def _auto_collapse_console(self) -> None:
+        """Desfaz a abertura automatica (so se foi automatica)."""
+        if self._console_auto_opened:
+            self._console_auto_opened = False
+            self._apply_console_collapsed(True)
+
     def _on_output(self, message: str) -> None:
+        self._auto_expand_console()
         for line in message.split("\n"):
             self._append(line)
 
@@ -1693,6 +1716,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_console(self) -> None:
         self._apply_console_collapsed(not self._console_collapsed)
+        self._console_auto_opened = False  # escolha explicita do usuario manda
         settings.save({"console_collapsed": self._console_collapsed})
 
     def _apply_console_collapsed(self, collapsed: bool) -> None:
