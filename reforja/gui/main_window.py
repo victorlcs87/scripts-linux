@@ -1119,6 +1119,29 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._progress, 2)
         bottom_layout.addLayout(toolbar)
 
+        # Faixa de conclusao: o fim da execucao precisa dizer o que aconteceu.
+        # Inline e dispensavel de proposito — um modal aqui so pediria um clique a
+        # mais para fechar, e o usuario costuma querer seguir instalando.
+        self._result_banner = QFrame()
+        self._result_banner.setObjectName("resultBanner")
+        banner = QHBoxLayout(self._result_banner)
+        banner.setContentsMargins(12, 8, 8, 8)
+        banner.setSpacing(10)
+        self._result_text = QLabel()
+        self._result_text.setObjectName("resultText")
+        self._result_text.setWordWrap(True)
+        banner.addWidget(self._result_text, 1)
+        self._btn_result_log = QPushButton("Ver log")
+        self._btn_result_log.setObjectName("ghost")
+        self._btn_result_log.clicked.connect(self._show_log_from_banner)
+        banner.addWidget(self._btn_result_log)
+        self._btn_result_close = QPushButton("Dispensar")
+        self._btn_result_close.setObjectName("ghost")
+        self._btn_result_close.clicked.connect(lambda: self._result_banner.setVisible(False))
+        banner.addWidget(self._btn_result_close)
+        self._result_banner.setVisible(False)
+        bottom_layout.addWidget(self._result_banner)
+
         self._stack = QStackedWidget()
         self._console = QPlainTextEdit()
         self._console.setObjectName("console")
@@ -1423,6 +1446,8 @@ class MainWindow(QMainWindow):
 
     # --- execucao ----------------------------------------------------------------
     def _set_running(self, running: bool) -> None:
+        if running:
+            self._result_banner.setVisible(False)
         for btn in self._action_buttons:
             btn.setEnabled(not running)
         self._btn_stop.setEnabled(running)
@@ -1639,6 +1664,7 @@ class MainWindow(QMainWindow):
         # manual fica aberto, que e quando o usuario precisa ler a saida.
         if all(result.status in ("done", "skipped") for result in self._results):
             self._auto_collapse_console()
+        self._show_result_banner()
         callback = self._on_queue_done
         self._on_queue_done = None
         self._card_action_target = None
@@ -1646,6 +1672,48 @@ class MainWindow(QMainWindow):
         self._force_map = {}
         if callback is not None:
             callback()
+
+    def _show_result_banner(self) -> None:
+        """Fecha a execucao com um veredito curto.
+
+        Antes a fila terminava em silencio: o console parava de rolar e os cards
+        viravam verdes. Pela regra de pico-fim isso custa metade da lembranca da
+        experiencia — e, com o console recolhido, o usuario nao via nada.
+        """
+        if not self._results:
+            return
+        falhas = [r for r in self._results if r.status not in ("done", "skipped")]
+        manuais = [r for r in self._results if r.status == "manual"]
+        itens = sum(len(r.applied_items) for r in self._results)
+        concluidas = len(self._results) - len(falhas)
+
+        if self._queue_action == "status":
+            texto = f"Verificacao concluida: {len(self._results)} etapa(s) conferida(s)."
+        elif itens:
+            texto = f"{itens} item(ns) aplicado(s) em {concluidas} etapa(s)."
+        else:
+            texto = f"{concluidas} etapa(s) concluida(s)."
+        if falhas:
+            nomes = ", ".join(r.title for r in falhas[:3])
+            resto = f" (+{len(falhas) - 3})" if len(falhas) > 3 else ""
+            texto += f"  Falhou: {nomes}{resto}."
+        elif manuais:
+            texto += "  Alguma etapa pediu acao manual — confira o log."
+
+        glifo = "⚠" if falhas else ("●" if manuais else "✓")
+        chave = "error" if falhas else ("pending" if manuais else "success")
+        cor = theme.palette()[chave]
+        self._result_text.setText(f"{glifo}  {texto}")
+        self._result_text.setStyleSheet(f"color: {cor}; font-weight: 600;")
+        # "Ver log" so faz sentido quando o console esta fora de vista.
+        self._btn_result_log.setVisible(self._console_collapsed)
+        self._result_banner.setVisible(True)
+
+    def _show_log_from_banner(self) -> None:
+        if self._console_collapsed:
+            self._toggle_console()
+        self._stack.setCurrentWidget(self._console)
+        self._result_banner.setVisible(False)
 
     def _render_summary(self) -> None:
         # Reusa os paineis ricos do CLI (mesma saida do terminal), escrevendo pelo

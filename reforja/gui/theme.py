@@ -417,6 +417,14 @@ QProgressBar#progress {{
 }}
 QProgressBar#progress::chunk {{ background: {p["primary"]}; border-radius: 7px; }}
 
+/* --- faixa de conclusao -------------------------------------------------- */
+#resultBanner {{
+    background: {p["surface"]};
+    border: 1px solid {p["border_strong"]};
+    border-radius: 10px;
+}}
+#resultText {{ background: transparent; font-size: 13px; }}
+
 /* --- dialogos ----------------------------------------------------------- */
 QDialog {{ background: {p["bg"]}; }}
 QDialog QLabel {{ color: {p["text"]}; }}

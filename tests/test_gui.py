@@ -847,6 +847,41 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
+# --- faixa de conclusao ------------------------------------------------------------
+def test_faixa_de_conclusao_resume_o_que_aconteceu(app, tmp_path: Path) -> None:
+    """A fila terminava em silencio; com o console recolhido o usuario nao via nada."""
+    window = MainWindow(tmp_path)
+    window._queue_action = "apply"
+    window._results = [_resultado("done", aplicados=["Steam", "Discord"])]
+    window._finish_queue()
+
+    assert window._result_banner.isHidden() is False
+    assert "2 item(ns) aplicado(s)" in window._result_text.text()
+    assert window._result_text.text().startswith("✓")
+
+
+def test_faixa_de_conclusao_nomeia_as_falhas(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    window._queue_action = "apply"
+    window._results = [_resultado("done"), _resultado("failed", titulo="Sunshine")]
+    window._finish_queue()
+
+    texto = window._result_text.text()
+    assert texto.startswith("⚠")
+    assert "Falhou: Sunshine" in texto
+
+
+def test_nova_execucao_esconde_a_faixa(app, tmp_path: Path) -> None:
+    window = MainWindow(tmp_path)
+    window._queue_action = "apply"
+    window._results = [_resultado("done")]
+    window._finish_queue()
+    assert window._result_banner.isHidden() is False
+
+    window._set_running(True)
+    assert window._result_banner.isHidden() is True
+
+
 # --- console sob demanda -----------------------------------------------------------
 def test_console_comeca_recolhido_e_abre_com_saida(app, tmp_path: Path) -> None:
     """Em repouso o console mostrava uma linha ocupando ~38% da janela, numa tela
@@ -879,11 +914,17 @@ def test_toggle_manual_vence_o_automatico(app, tmp_path: Path) -> None:
     assert window._console_auto_opened is False
 
 
-def _resultado(status: str):
+def _resultado(status: str, *, titulo: str = "Apps", aplicados: list[str] | None = None):
     from reforja.core import StepRunResult
 
     return StepRunResult(
-        step_id="10", title="Apps", status=status, message="", compliance="aplicado", duration_seconds=0.1
+        step_id="10",
+        title=titulo,
+        status=status,
+        message="",
+        compliance="aplicado",
+        duration_seconds=0.1,
+        applied_items=aplicados or [],
     )
 
 
