@@ -7,6 +7,7 @@ from reforja.core import (
     PrivilegeEscalationBlockedError,
     PromptInterruptedError,
     Runner,
+    backup_existing,
     backup_path,
     capture,
     load_env_file,
@@ -46,6 +47,32 @@ def test_backup_path_keeps_original_name() -> None:
     target = backup_path(Path("/tmp/example.conf"))
 
     assert target.name.startswith("example.conf.backup-pos-formatacao-")
+
+
+def test_backup_existing_handles_directory(tmp_path: Path) -> None:
+    """Diretorio nao pode quebrar o backup: copy2 levanta IsADirectoryError (Errno 21)."""
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger, dry_run=False)
+    source = tmp_path / "Antigravity IDE"
+    (source / "sub").mkdir(parents=True)
+    (source / "sub" / "arquivo.txt").write_text("conteudo", encoding="utf-8")
+
+    target = backup_existing(source, runner)
+
+    assert target is not None and target.is_dir()
+    assert (target / "sub" / "arquivo.txt").read_text(encoding="utf-8") == "conteudo"
+
+
+def test_backup_existing_still_copies_files(tmp_path: Path) -> None:
+    logger = Logger(tmp_path, "test")
+    runner = Runner(logger, dry_run=False)
+    source = tmp_path / "config.conf"
+    source.write_text("chave=valor", encoding="utf-8")
+
+    target = backup_existing(source, runner)
+
+    assert target is not None and target.is_file()
+    assert target.read_text(encoding="utf-8") == "chave=valor"
 
 
 def test_desktop_entry_render() -> None:

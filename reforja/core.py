@@ -718,7 +718,11 @@ def backup_existing(path: Path, runner: Runner, *, sudo: bool = False) -> Path |
         if runner.dry_run:
             runner.logger.write(f"{badge('dry-run', Color.DRY_RUN)} cp -a {path} {target}")
         else:
-            shutil.copy2(path, target)
+            # copy2 nao lida com diretorios (IsADirectoryError); copytree para dirs.
+            if path.is_dir():
+                shutil.copytree(path, target, symlinks=True)
+            else:
+                shutil.copy2(path, target)
             announce(runner.logger, "done", f"Backup criado: {target}")
     return target
 

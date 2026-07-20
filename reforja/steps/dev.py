@@ -780,7 +780,16 @@ class AntigravityStep(Step):
         if self._use_native():
             return "instalado via pacote nativo" if system_installed(self.package) else False
         installed = self._installed_version()
-        return f"instalado (versao {installed})" if installed else False
+        if installed:
+            return f"instalado (versao {installed})"
+        # Sem marcador de versao, mas a instalacao pode existir (versao antiga do
+        # reforja, instalacao manual, ou update que nao chegou a gravar o marcador).
+        # Checamos o executavel real e o wrapper na home do usuario REAL (nao via
+        # PATH: sob sudo o ~/.local/bin do usuario nem estaria no PATH).
+        wrapper = self.ctx.user.home / ".local/bin/antigravity-ide"
+        if wrapper.exists() or (self._install_dir.exists() and self._find_executable(self._install_dir)):
+            return "instalado (versao desconhecida)"
+        return False
 
     def _install(self) -> None:
         if self._use_native():
@@ -868,9 +877,22 @@ class AntigravityStep(Step):
                 digest.update(chunk)
         return digest.hexdigest().lower() == expected.lower()
 
+    # Pacote -> um binario que ele fornece no PATH. Se o binario ja existe, pulamos
+    # o install_system_package (que dispararia sudo/pacman a toa). Cobre o caso em
+    # que a query de pacote nao resolve mas a ferramenta esta presente (todos base).
+    _tool_binaries = {
+        "curl": "curl",
+        "tar": "tar",
+        "desktop-file-utils": "update-desktop-database",
+        "findutils": "find",
+        "coreutils": "cp",
+    }
+
     def _apply_tarball(self) -> None:
         header(self, self.title, "Baixando/atualizando IDE, integrando desktop e comando de terminal")
-        for pkg in ("curl", "tar", "desktop-file-utils", "findutils", "coreutils"):
+        for pkg, binary in self._tool_binaries.items():
+            if command_exists(binary):
+                continue
             install_system_package(pkg, self.ctx.runner)
 
         latest = self._fetch_latest()
@@ -905,7 +927,9 @@ class AntigravityStep(Step):
 
         if not self.ctx.runner.dry_run:
             cache.mkdir(parents=True, exist_ok=True)
-        backup_existing(install_dir, self.ctx.runner)
+        # Nao fazemos backup do diretorio inteiro do IDE (seriam ~centenas de MB
+        # duplicados a cada update): a instalacao faz replace atomico e o tarball
+        # e re-baixavel/verificado por sha256.
         if tarball.exists() and tarball.stat().st_size > 1024 * 1024 and self._sha256_ok(tarball, latest["sha256"]):
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} pacote Antigravity ja esta em cache: {tarball}")
         else:

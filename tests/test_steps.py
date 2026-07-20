@@ -2395,6 +2395,40 @@ def test_antigravity_status_pending_on_fresh_home(tmp_path: Path, monkeypatch) -
     assert set(step.result.missing_items) == {"instalacao", "desktop", "wrapper"}
 
 
+def test_antigravity_detect_sem_marcador_de_versao(tmp_path: Path, monkeypatch) -> None:
+    """Instalacao existente sem o marcador .antigravity-version (instalacao antiga ou
+    manual) ainda deve contar como instalada — senao o card diz 'nao instalado'."""
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    home = ctx.user.home
+
+    assert step._detect_installed() is False
+
+    install_dir = home / "Antigravity IDE"
+    install_dir.mkdir(parents=True)
+    exe = install_dir / "antigravity-ide"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    assert step._detect_installed() == "instalado (versao desconhecida)"
+
+    (install_dir / ".antigravity-version").write_text("2.0.6\n", encoding="utf-8")
+    assert step._detect_installed() == "instalado (versao 2.0.6)"
+
+
+def test_antigravity_detect_pelo_wrapper_na_home(tmp_path: Path, monkeypatch) -> None:
+    """O wrapper e checado na home do usuario REAL, nao via PATH (sob sudo o
+    ~/.local/bin do usuario nem estaria no PATH)."""
+    ctx = make_ctx(tmp_path)
+    step = AntigravityStep(ctx)
+    _patch_antigravity_distro(monkeypatch)
+    wrapper = ctx.user.home / ".local/bin/antigravity-ide"
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert step._detect_installed() == "instalado (versao desconhecida)"
+
+
 def test_antigravity_status_applied_when_everything_present(tmp_path: Path, monkeypatch) -> None:
     ctx = make_ctx(tmp_path)
     step = AntigravityStep(ctx)
