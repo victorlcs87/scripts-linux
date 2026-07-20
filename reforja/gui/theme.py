@@ -41,6 +41,9 @@ LIGHT_PALETTE = {
     "info": "#1f6bb0",
     "console_bg": "#12161f",
     "console_fg": "#d7dbe4",
+    # Anel de foco: precisa contrastar com a superficie (branca) E com o azul do
+    # botao primario, entao e mais escuro que o primary em vez de ser o primary.
+    "focus_ring": "#10214d",
 }
 
 DARK_PALETTE = {
@@ -69,6 +72,8 @@ DARK_PALETTE = {
     "info": "#5fb0e8",
     "console_bg": "#0d1017",
     "console_fg": "#d7dbe4",
+    # No tema escuro o anel e claro pelo mesmo motivo invertido.
+    "focus_ring": "#dbe7ff",
 }
 
 # Paleta ativa (mutada por build_stylesheet). PALETTE continua exportado (a clara)
@@ -151,8 +156,6 @@ def build_stylesheet(dark: bool = False) -> str:
     set_dark(dark)
     p = _active
     return f"""
-* {{ outline: none; }}
-
 QMainWindow, QWidget {{
     background: {p["bg"]};
     color: {p["text"]};
@@ -332,6 +335,22 @@ QPushButton#primary:disabled {{ background: {p["border_strong"]}; border-color: 
 
 QPushButton#destructive {{ color: {p["error"]}; border-color: {p["error"]}; }}
 QPushButton#destructive:hover {{ background: {p["danger_soft"]}; color: {p["error"]}; border-color: {p["error"]}; }}
+
+/* --- foco visivel (navegacao por teclado) -------------------------------
+   O anel e uma borda de 2px com o padding reduzido em 1px, para o widget nao
+   mudar de tamanho ao receber foco. Sem estas regras o app fica inoperavel por
+   teclado: nao ha como saber onde o foco esta. */
+QPushButton:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
+QPushButton#primary:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
+QPushButton#destructive:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
+QPushButton#ghost:focus {{ border: 2px solid {p["focus_ring"]}; padding: 5px 11px; }}
+QPushButton#preset:focus {{ border: 2px solid {p["focus_ring"]}; padding: 9px 15px; }}
+#itemCard QPushButton:focus {{ border: 2px solid {p["focus_ring"]}; padding: 4px 8px; }}
+QToolButton#filterChip:focus {{ border: 2px solid {p["focus_ring"]}; padding: 3px 11px; }}
+/* O item de nav ja reserva 3px de borda a esquerda: colorir nao desloca nada. */
+#navMenu::item:focus {{ border-left: 3px solid {p["focus_ring"]}; background: {p["surface_alt"]}; }}
+QListWidget::item:focus {{ border: 1px solid {p["focus_ring"]}; }}
+QCheckBox:focus {{ background: {p["primary_soft"]}; border-radius: 4px; }}
 
 /* --- campos ------------------------------------------------------------- */
 QLineEdit, QComboBox {{

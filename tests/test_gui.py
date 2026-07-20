@@ -807,6 +807,44 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
+# --- foco visivel e nomes acessiveis ---------------------------------------------
+def test_tema_define_foco_visivel_para_todo_controle_interativo() -> None:
+    """Sem `:focus` explicito o app fica inoperavel por teclado: nao ha como saber
+    onde o foco esta. Regressao do `* { outline: none; }` que apagava tudo."""
+    from reforja.gui.theme import build_stylesheet
+
+    for dark in (False, True):
+        qss = build_stylesheet(dark)
+        assert "* { outline: none; }" not in qss, "a regra global apagaria todo indicador de foco"
+        for seletor in (
+            "QPushButton:focus",
+            "QPushButton#primary:focus",
+            "QPushButton#destructive:focus",
+            "QPushButton#ghost:focus",
+            "QPushButton#preset:focus",
+            "#itemCard QPushButton:focus",
+            "QToolButton#filterChip:focus",
+            "#navMenu::item:focus",
+            "QCheckBox:focus",
+        ):
+            assert seletor in qss, f"{seletor} sem estilo de foco (tema {'escuro' if dark else 'claro'})"
+
+
+def test_item_card_da_nome_acessivel_com_o_item(app, tmp_path: Path) -> None:
+    """Um leitor de tela precisa distinguir os ~30 botoes "Instalar" da grade."""
+    from reforja.gui.main_window import ItemCard
+    from reforja.steps_base import StepTask
+
+    window = MainWindow(tmp_path)
+    task = StepTask(key="steam", label="Steam", description="Loja da Valve", run=lambda: None)
+    task.state = "pendente"
+    card = ItemCard(ALL_STEPS[0], task, window)
+    card.apply_task_state(task)
+
+    assert card._action.accessibleName() == "Instalar Steam"
+    assert card._action.accessibleDescription() == "Loja da Valve"
+
+
 # --- icones das tarefas (config steps sem id Flathub proprio) ----------------------
 def test_task_theme_icons_cobrem_tarefas_sem_icone_proprio() -> None:
     """Toda tarefa sem `icon` proprio (nem app_id Flathub nem asset) precisa de um

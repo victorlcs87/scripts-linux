@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -232,6 +232,7 @@ class ItemCard(QFrame):
         self._action.setVisible(True)
         self._action.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=True))
         self._action_connected = True
+        self._sync_a11y()
         self._repolish()
 
     def set_icon_pixmap(self, pixmap: QPixmap) -> None:
@@ -289,10 +290,12 @@ class ItemCard(QFrame):
             self._chip.setText("indisponivel")
             self._chip.setToolTip(task.unavailable_reason or "nao se aplica a esta maquina")
             self._chip.setVisible(True)
+            self._sync_a11y()
             return
 
         if not task.runnable:
             self._state.setText(task.detail or "")
+            self._sync_a11y()
             return
 
         if state == "aplicado":
@@ -313,6 +316,7 @@ class ItemCard(QFrame):
                 self._remove.setVisible(True)
                 self._remove.clicked.connect(lambda: self._window._remove_item(self._step_cls, self.key, task.label))
                 self._remove_connected = True
+            self._sync_a11y()
             return
 
         if state == "acao":
@@ -325,7 +329,26 @@ class ItemCard(QFrame):
         self._action.setVisible(True)
         self._action.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=False))
         self._action_connected = True
+        self._sync_a11y()
         self._repolish()
+
+    def _sync_a11y(self) -> None:
+        """Da a cada botao um nome acessivel que inclui o item.
+
+        Sem isso um leitor de tela anuncia dezenas de botoes identicos ("Instalar,
+        botao") na grade do catalogo: o nome do app esta num QLabel irmao que nao
+        tem associacao nenhuma com o botao.
+        """
+        for button in (self._action, self._secondary, self._remove):
+            text = button.text()
+            button.setAccessibleName(f"{text} {self._task.label}" if text else self._task.label)
+        self._action.setAccessibleDescription(self._task.description or "")
+        # O motivo de indisponibilidade e a falha so existiam em tooltip, que leitor
+        # de tela nao alcanca.
+        if self._task.state == "indisponivel":
+            self.setAccessibleDescription(self._task.unavailable_reason or "nao se aplica a esta maquina")
+        else:
+            self.setAccessibleDescription(self._task.description or "")
 
     def _repolish(self) -> None:
         for widget in (self, self._action, self._secondary, self._remove, self._chip):
@@ -349,6 +372,7 @@ class StepPage(QWidget):
         self._category = ""  # "" = todas
         self._filter_bar: QWidget | None = None
         self._chip_buttons: list[QToolButton] = []
+        self._search_box: QLineEdit | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 18, 28, 18)
@@ -389,6 +413,10 @@ class StepPage(QWidget):
         btn_refresh = QPushButton("Atualizar estado")
         btn_refresh.setObjectName("ghost")
         btn_refresh.clicked.connect(self.refresh)
+        btn_apply.setShortcut("Ctrl+Return")
+        btn_apply.setToolTip("Instalar o que falta (Ctrl+Enter)")
+        btn_refresh.setShortcut("F5")
+        btn_refresh.setToolTip("Reconferir o estado dos itens (F5)")
         window._register_button(btn_apply)
         window._register_button(btn_status)
         window._register_button(btn_refresh)
@@ -409,6 +437,10 @@ class StepPage(QWidget):
         self._filter_holder = QVBoxLayout()
         outer.addLayout(self._filter_holder)
         outer.addSpacing(6)
+
+        # Ctrl+F cai na busca do catalogo (quando a etapa tem barra de filtro).
+        focus_search = QShortcut(QKeySequence.StandardKey.Find, self)
+        focus_search.activated.connect(self._focus_search)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -451,6 +483,7 @@ class StepPage(QWidget):
 
     def _build_filter_bar(self, tasks: list[StepTask]) -> None:
         """Busca + chips de categoria. So aparece com itens/categorias suficientes."""
+        # (montada sob demanda; _focus_search lida com a etapa que nao tem barra)
         categorias = [c for c in dict.fromkeys(t.category for t in tasks if t.category)]
         if len(tasks) <= 6 or len(categorias) < 2:
             return
@@ -461,6 +494,10 @@ class StepPage(QWidget):
         search.setClearButtonEnabled(True)
         search.textChanged.connect(self._on_search)
         search.setMaximumWidth(260)
+        # Piso de largura: sem ele os chips de categoria espremem o campo ate "Bus...".
+        search.setMinimumWidth(140)
+        search.setAccessibleName("Buscar itens desta etapa")
+        self._search_box = search
         bar.addWidget(search)
         todos = QToolButton()
         todos.setObjectName("filterChip")
@@ -468,6 +505,7 @@ class StepPage(QWidget):
         todos.setCheckable(True)
         todos.setChecked(True)
         todos.clicked.connect(lambda: self._on_category(""))
+        todos.setAccessibleName("Mostrar todas as categorias")
         bar.addWidget(todos)
         self._chip_buttons = [todos]
         for cat in categorias:
@@ -476,6 +514,7 @@ class StepPage(QWidget):
             chip.setText(cat)
             chip.setCheckable(True)
             chip.clicked.connect(lambda _c=False, c=cat: self._on_category(c))
+            chip.setAccessibleName(f"Filtrar por categoria {cat}")
             bar.addWidget(chip)
             self._chip_buttons.append(chip)
         bar.addStretch(1)
@@ -483,6 +522,12 @@ class StepPage(QWidget):
         wrapper.setLayout(bar)
         self._filter_holder.addWidget(wrapper)
         self._filter_bar = wrapper
+
+    def _focus_search(self) -> None:
+        """Ctrl+F: leva o foco para a busca. Etapas curtas nao tem barra de filtro."""
+        if self._search_box is not None:
+            self._search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            self._search_box.selectAll()
 
     def _on_search(self, text: str) -> None:
         self._search = text.strip().lower()
