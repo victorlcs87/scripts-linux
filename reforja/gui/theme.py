@@ -46,6 +46,9 @@ LIGHT_PALETTE = {
     # Anel de foco: precisa contrastar com a superficie (branca) E com o azul do
     # botao primario, entao e mais escuro que o primary em vez de ser o primary.
     "focus_ring": "#10214d",
+    # Sobre o preenchimento azul do primario o anel escuro so dava 2.7:1 (min 3:1):
+    # ali o anel e claro, contrastando com o proprio botao (5.7:1).
+    "focus_ring_on_primary": "#ffffff",
 }
 
 DARK_PALETTE = {
@@ -78,6 +81,7 @@ DARK_PALETTE = {
     "console_fg": "#d7dbe4",
     # No tema escuro o anel e claro pelo mesmo motivo invertido.
     "focus_ring": "#dbe7ff",
+    "focus_ring_on_primary": "#ffffff",  # 3.3:1 sobre o primary do tema escuro
 }
 
 # Paleta ativa (mutada por build_stylesheet). PALETTE continua exportado (a clara)
@@ -191,6 +195,10 @@ QToolTip {{
     background: transparent;
     border: none;
     padding-top: 6px;
+    /* Suprime o retangulo de foco NATIVO do Qt so aqui: no menu ele desenha uma
+       caixa em volta do texto que faz o item parecer um campo editavel. O foco
+       do item e indicado pela barra lateral em #navMenu::item:focus. */
+    outline: none;
 }}
 #navMenu::item {{
     color: {p["text_muted"]};
@@ -348,11 +356,12 @@ QPushButton#destructive:disabled {{ color: {p["text_faint"]}; border-color: {p["
    mudar de tamanho ao receber foco. Sem estas regras o app fica inoperavel por
    teclado: nao ha como saber onde o foco esta. */
 QPushButton:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
-QPushButton#primary:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
+QPushButton#primary:focus {{ border: 2px solid {p["focus_ring_on_primary"]}; padding: 7px 13px; }}
 QPushButton#destructive:focus {{ border: 2px solid {p["focus_ring"]}; padding: 7px 13px; }}
 QPushButton#ghost:focus {{ border: 2px solid {p["focus_ring"]}; padding: 5px 11px; }}
 QPushButton#preset:focus {{ border: 2px solid {p["focus_ring"]}; padding: 9px 15px; }}
 #itemCard QPushButton:focus {{ border: 2px solid {p["focus_ring"]}; padding: 4px 8px; }}
+#itemCard QPushButton#primary:focus {{ border: 2px solid {p["focus_ring_on_primary"]}; padding: 4px 8px; }}
 QToolButton#filterChip:focus {{ border: 2px solid {p["focus_ring"]}; padding: 3px 11px; }}
 /* O item de nav ja reserva 3px de borda a esquerda: colorir nao desloca nada.
    As demais bordas sao zeradas para nao somar com a regra generica de QListWidget
@@ -362,8 +371,13 @@ QToolButton#filterChip:focus {{ border: 2px solid {p["focus_ring"]}; padding: 3p
     border-left: 3px solid {p["focus_ring"]};
     background: {p["surface_alt"]};
 }}
-QListWidget::item:focus {{ border: 1px solid {p["focus_ring"]}; }}
+/* Sem regra generica de foco para QListWidget::item: o Qt nao suporta :not() em
+   QSS (quebra a folha inteira), e a unica lista navegavel do app e o #navMenu,
+   ja tratado acima. Uma borda retangular ali fazia o item de menu parecer um
+   campo de texto. */
 QCheckBox:focus {{ background: {p["primary_soft"]}; border-radius: 4px; }}
+/* Lista de escolha multipla (ex.: discos do fstab): navegada por teclado. */
+#choiceList::item:focus {{ background: {p["primary_soft"]}; border: 1px solid {p["focus_ring"]}; }}
 
 /* --- campos ------------------------------------------------------------- */
 QLineEdit, QComboBox {{

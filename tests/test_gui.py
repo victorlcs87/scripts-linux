@@ -1048,6 +1048,23 @@ def test_reflow_desconta_margens_e_barra_de_rolagem(app, tmp_path: Path) -> None
         window.close()
 
 
+def test_stylesheet_e_valido_para_o_qt(app) -> None:
+    """QSS invalido nao levanta excecao: o Qt so imprime "Could not parse
+    application stylesheet" e o app inteiro fica SEM estilo. Ja aconteceu com um
+    seletor `:not()`, que o Qt nao suporta. Este teste captura o aviso."""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    avisos: list[str] = []
+    anterior = qInstallMessageHandler(lambda _t, _c, msg: avisos.append(msg))
+    try:
+        for dark in (False, True):
+            app.setStyleSheet(theme.build_stylesheet(dark))
+            assert app.styleSheet(), "folha vazia"
+    finally:
+        qInstallMessageHandler(anterior)
+    assert not [a for a in avisos if "parse" in a.lower()], f"QSS invalido: {avisos}"
+
+
 # --- foco visivel e nomes acessiveis ---------------------------------------------
 def test_tema_define_foco_visivel_para_todo_controle_interativo() -> None:
     """Sem `:focus` explicito o app fica inoperavel por teclado: nao ha como saber

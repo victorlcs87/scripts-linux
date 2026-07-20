@@ -98,6 +98,7 @@ class GuiInteraction(QObject):
             layout.addWidget(detail)
         preselected = set(req.get("preselected") or ())
         listing = QListWidget()
+        listing.setObjectName("choiceList")  # foco visivel proprio (ver theme.py)
         for index, text in enumerate(req["options"]):
             item = QListWidgetItem(text)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
