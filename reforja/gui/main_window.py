@@ -320,7 +320,7 @@ class ItemCard(QFrame):
                 self._chip.setToolTip(task.detail)
             self._chip.setVisible(True)
             # Reinstalar/atualizar e explicito e secundario (modelo Flathub).
-            self._secondary.setText("Atualizar" if self._step_cls.id == "15" else "Reinstalar")
+            self._secondary.setText(task.reapply_label or "Reinstalar")
             self._secondary.setVisible(True)
             self._secondary.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=True))
             self._secondary_connected = True
@@ -334,11 +334,13 @@ class ItemCard(QFrame):
 
         if state == "acao":
             self._state.setText(task.detail or "acao sob demanda")
-            self._action.setText("Executar")
+            self._action.setText(task.action_label or "Executar")
         else:  # pendente ou desconhecido
             self._state.setText("" if state == "pendente" else "nao foi possivel verificar")
-            self._action.setText("Instalar")
-        self._action.setObjectName("primary")
+            self._action.setText(task.action_label or "Instalar")
+        # Tarefa que apaga coisas nunca usa o azul primario: o usuario aprende que
+        # azul e seguro nas outras telas e traz essa expectativa para ca.
+        self._action.setObjectName("destructive" if task.destructive else "primary")
         self._action.setVisible(True)
         self._action.clicked.connect(lambda: self._window._install_item(self._step_cls, self.key, force=False))
         self._action_connected = True

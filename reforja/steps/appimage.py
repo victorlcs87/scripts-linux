@@ -95,6 +95,9 @@ class UpdateAppImagesStep(Step):
                     short_description=short,
                     icon=app.get("icon_asset", ""),
                     category=category,
+                    # AppImage se atualiza, nao se reinstala. Antes a GUI decidia
+                    # isso com um `if step_cls.id == "15"` — logica de etapa vazada.
+                    reapply_label="Atualizar",
                     detect=partial(self._version_detail, app),
                     run=partial(self._process_one_task, app),
                     remove=partial(self._remove_appimage, app),

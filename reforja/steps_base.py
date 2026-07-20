@@ -47,6 +47,12 @@ class StepTask:
     # que a GUI resolve para o icone; `category` colore o avatar de fallback.
     icon: str = ""
     category: str = ""
+    # Verbo do botao quando "Instalar" nao descreve o que a tarefa faz (backup,
+    # restauracao, limpeza). Vazio -> a UI decide pelo estado, como antes. Mora
+    # aqui, e nao na GUI, porque so a etapa sabe o que a tarefa realmente faz.
+    action_label: str = ""
+    # Verbo para reexecutar um item ja aplicado. Vazio -> "Reinstalar".
+    reapply_label: str = ""
     run: Callable[[], None] | None = None
     detect: Callable[[], bool | str | None] | None = None
     # Remocao discreta deste item (desinstalar o app, apagar o AppImage/atalho...).

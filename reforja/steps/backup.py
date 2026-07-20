@@ -169,6 +169,8 @@ class BackupStep(Step):
                     f"voce quiser) em {self._backup_dir()} — cai direto no Google Drive quando montado. "
                     "Nao inclui os apps, caches, saves de jogos nem perfis pesados."
                 ),
+                action_label="Fazer backup",
+                reapply_label="Fazer novo backup",
                 detect=self._last_backup_detail,
                 run=self._do_backup,
                 # Backup e acao de "antes de formatar": nao faz sentido rodar sozinho
@@ -184,6 +186,7 @@ class BackupStep(Step):
                     "restaurar e, apos confirmacao, restaura por cima das configuracoes atuais (com "
                     "copia de seguranca antes). Se o arquivo for cifrado, pede a senha."
                 ),
+                action_label="Restaurar",
                 run=self._do_restore,
                 # Acao sob demanda e destrutiva: nunca vem pre-marcada.
                 stateless=True,
@@ -197,6 +200,7 @@ class BackupStep(Step):
                     "Faz 'rclone copy' do backup mais recente para um caminho remoto do Drive. Funciona "
                     "mesmo sem ~/GoogleDrive montado; precisa do rclone configurado (etapa 07)."
                 ),
+                action_label="Enviar",
                 run=self._do_upload,
                 stateless=True,
                 autoselect=False,
@@ -209,6 +213,7 @@ class BackupStep(Step):
                     f"Mantem apenas os {KEEP_BACKUPS} backups mais recentes em {self._backup_dir()} e "
                     "remove os anteriores para nao acumular espaco (no disco e no Google Drive)."
                 ),
+                action_label="Limpar",
                 run=self._do_prune,
                 stateless=True,
                 destructive=True,

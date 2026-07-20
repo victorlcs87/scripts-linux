@@ -203,12 +203,41 @@ def test_item_card_pendente_mostra_instalar(app, tmp_path: Path) -> None:
     assert card._secondary.isHidden()
 
 
-def test_item_card_appimage_instalado_diz_atualizar(app, tmp_path: Path) -> None:
+def test_item_card_usa_o_verbo_declarado_pela_tarefa(app, tmp_path: Path) -> None:
+    """O verbo vem do StepTask, nao de um `if step_cls.id == "15"` na GUI."""
     from reforja.gui.main_window import ItemCard
 
     window = MainWindow(tmp_path)
-    card = ItemCard(_step("15"), _task("aplicado"), window)
+    card = ItemCard(_step("15"), _task("aplicado", reapply_label="Atualizar"), window)
     assert card._secondary.text() == "Atualizar"
+    # Sem verbo declarado, o padrao continua "Reinstalar".
+    padrao = ItemCard(_step("10"), _task("aplicado"), window)
+    assert padrao._secondary.text() == "Reinstalar"
+
+
+def test_appimages_declaram_atualizar_como_verbo() -> None:
+    """A etapa 15 e quem sabe que AppImage se atualiza em vez de reinstalar."""
+    import tempfile
+
+    from reforja.core import Logger, Runner, detect_user
+    from reforja.steps_base import StepContext
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log = Logger(Path(tmp), "t")
+        ctx = StepContext(root=Path("."), run_dir=Path(tmp), user=detect_user(), logger=log, runner=Runner(logger=log))
+        tarefas = _step("15")(ctx).tasks()
+    assert tarefas and all(t.reapply_label == "Atualizar" for t in tarefas)
+
+
+def test_tarefa_destrutiva_nao_usa_o_azul_primario(app, tmp_path: Path) -> None:
+    """Azul e seguro nas outras telas; uma acao que apaga arquivos nao pode
+    herdar essa expectativa."""
+    from reforja.gui.main_window import ItemCard
+
+    window = MainWindow(tmp_path)
+    card = ItemCard(_step("16"), _task("acao", destructive=True, action_label="Limpar"), window)
+    assert card._action.objectName() == "destructive"
+    assert card._action.text() == "Limpar"
 
 
 def test_install_item_injeta_selection_e_force(app, tmp_path: Path, monkeypatch) -> None:
