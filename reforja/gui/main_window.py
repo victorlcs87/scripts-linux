@@ -1032,6 +1032,28 @@ class MainWindow(QMainWindow):
             on_done=on_done,
         )
 
+    def _exec_dialog(self, dialog: QDialog) -> int:
+        """Executa um dialogo modal.
+
+        Ponto unico de bloqueio para os testes substituirem: um `.exec()` inline
+        trava a suite offscreen para sempre (ja aconteceu duas vezes nesta base).
+        """
+        return dialog.exec()
+
+    def _confirm_restart(self, tag: str) -> bool:
+        """Pergunta se reinicia apos atualizar. Metodo proprio pelo mesmo motivo
+        de _confirm_removal: um QMessageBox construido inline nao e patchavel
+        pelos estaticos que a suite substitui."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Atualizacao concluida")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"Reforja atualizado para a versao v{tag}.\nReiniciar agora para usar a nova versao?")
+        reiniciar = box.addButton("Reiniciar agora", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Depois", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(reiniciar)
+        box.exec()
+        return box.clickedButton() is reiniciar
+
     def _confirm_removal(self, label: str) -> bool:
         """Confirmacao de remocao com botao que nomeia a acao.
 
@@ -1447,14 +1469,8 @@ class MainWindow(QMainWindow):
             self._append(f"[done] Atualizado para v{tag}.")
             box = QMessageBox(self)
             box.setWindowTitle("Atualizacao concluida")
-            box.setIcon(QMessageBox.Icon.Information)
-            box.setText(f"Reforja atualizado para a versao v{tag}.\nReiniciar agora para usar a nova versao?")
-            btn_restart = box.addButton("Reiniciar agora", QMessageBox.ButtonRole.AcceptRole)
-            box.addButton("Depois", QMessageBox.ButtonRole.RejectRole)
-            box.setDefaultButton(btn_restart)
-            box.exec()
             self._updated_tag = tag
-            if box.clickedButton() is btn_restart:
+            if self._confirm_restart(tag):
                 self._restart_after_update()
         else:
             self._append(f"[erro] {message}")
@@ -1583,7 +1599,7 @@ class MainWindow(QMainWindow):
         if title is None:
             title = "Aplicar tudo" if len(steps) == len(ALL_STEPS) else "Aplicar"
         dialog = BatchPreviewDialog(plans, self, title=title, initial_selection=initial_selection)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if self._exec_dialog(dialog) != QDialog.DialogCode.Accepted:
             self._append("[aviso] Aplicacao cancelada.")
             return
         selection, force = dialog.result_selection()

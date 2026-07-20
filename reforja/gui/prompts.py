@@ -84,6 +84,15 @@ class GuiInteraction(QObject):
         )
         req["result"] = bool(ok) and text.strip() == phrase
 
+    def _exec_dialog(self, dialog) -> int:
+        """Ponto unico de bloqueio modal, substituivel em teste.
+
+        Aqui o risco e duplo: o worker fica parado num threading.Event esperando a
+        resposta enquanto a UI fica no exec() — um teste sem esta costura trava as
+        duas pontas.
+        """
+        return dialog.exec()
+
     def _handle_multi(self, req: dict[str, Any]) -> None:
         dialog = QDialog(self._window)
         dialog.setWindowTitle("Reforja - selecione")
@@ -111,7 +120,7 @@ class GuiInteraction(QObject):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.resize(420, 360)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if self._exec_dialog(dialog) != QDialog.DialogCode.Accepted:
             # Cancelar NAO e "desmarquei tudo": aborta a etapa.
             req["cancelled"] = True
             req["result"] = []

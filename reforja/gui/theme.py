@@ -49,6 +49,8 @@ LIGHT_PALETTE = {
     # Sobre o preenchimento azul do primario o anel escuro so dava 2.7:1 (min 3:1):
     # ali o anel e claro, contrastando com o proprio botao (5.7:1).
     "focus_ring_on_primary": "#ffffff",
+    # No tema claro o primary_hover escurece, entao o anel segue branco.
+    "focus_ring_hover": "#ffffff",
 }
 
 DARK_PALETTE = {
@@ -82,6 +84,8 @@ DARK_PALETTE = {
     # No tema escuro o anel e claro pelo mesmo motivo invertido.
     "focus_ring": "#dbe7ff",
     "focus_ring_on_primary": "#ffffff",  # 3.3:1 sobre o primary do tema escuro
+    # No tema escuro o primary_hover CLAREIA: o anel branco sumiria (2.73:1).
+    "focus_ring_hover": "#0b1730",
 }
 
 # Paleta ativa (mutada por build_stylesheet). PALETTE continua exportado (a clara)
@@ -342,6 +346,11 @@ QPushButton#primary {{
     font-weight: 600;
 }}
 QPushButton#primary:hover {{ background: {p["primary_hover"]}; border-color: {p["primary_hover"]}; color: {p["on_primary"]}; }}
+/* Foco + hover coexistem (mouse parado sobre o botao focado). No tema escuro o
+   hover clareia o fundo e o anel branco caia para 2.73:1, sumindo justamente
+   ali; sobre o hover o anel usa o tom escuro, que contrasta com o azul claro. */
+QPushButton#primary:hover:focus {{ border: 2px solid {p["focus_ring_hover"]}; padding: 7px 13px; }}
+#itemCard QPushButton#primary:hover:focus {{ border: 2px solid {p["focus_ring_hover"]}; padding: 4px 8px; }}
 QPushButton#primary:pressed {{ background: {p["primary_pressed"]}; }}
 QPushButton#primary:disabled {{ background: {p["border_strong"]}; border-color: {p["border_strong"]}; color: {p["on_disabled"]}; }}
 
@@ -375,7 +384,18 @@ QToolButton#filterChip:focus {{ border: 2px solid {p["focus_ring"]}; padding: 3p
    QSS (quebra a folha inteira), e a unica lista navegavel do app e o #navMenu,
    ja tratado acima. Uma borda retangular ali fazia o item de menu parecer um
    campo de texto. */
-QCheckBox:focus {{ background: {p["primary_soft"]}; border-radius: 4px; }}
+/* Fundo sozinho dava 1.03:1 contra o bg — invisivel. O BatchPreviewDialog e
+   feito de checkboxes, entao sem borda a revisao do "Aplicar tudo" e cega ao
+   teclado. A borda contra o proprio fundo do foco da 13.4:1 / 10.6:1. */
+QCheckBox:focus {{
+    background: {p["primary_soft"]};
+    border: 2px solid {p["focus_ring"]};
+    border-radius: 4px;
+}}
+/* Alvo de clique: o indicador padrao mede 23px de altura, 1px abaixo do minimo
+   de 24x24 (WCAG 2.5.8). */
+QCheckBox {{ min-height: 24px; spacing: 8px; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; }}
 /* Lista de escolha multipla (ex.: discos do fstab): navegada por teclado. */
 #choiceList::item:focus {{ background: {p["primary_soft"]}; border: 1px solid {p["focus_ring"]}; }}
 

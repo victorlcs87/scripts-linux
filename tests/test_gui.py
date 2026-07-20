@@ -1007,6 +1007,58 @@ def test_card_diz_verificando_antes_da_sondagem(app, tmp_path: Path) -> None:
     assert card._state.text() == "verificando..."
 
 
+def test_indicador_de_foco_do_checkbox_e_visivel() -> None:
+    """O fundo sozinho dava 1.03:1 contra o bg — invisivel. O BatchPreviewDialog
+    e feito de checkboxes, entao sem borda a revisao do "Aplicar tudo" e cega."""
+    for escura in (False, True):
+        pal = theme.DARK_PALETTE if escura else theme.LIGHT_PALETTE
+        qss = theme.build_stylesheet(escura)
+        assert "QCheckBox:focus" in qss
+        razao = _contraste(pal["focus_ring"], pal["primary_soft"])
+        assert razao >= 3.0, f"foco do checkbox a {razao:.2f}:1"
+
+
+def test_anel_de_foco_passa_em_todos_os_estados_do_primario() -> None:
+    """Foco e hover coexistem (mouse parado sobre o botao focado). No tema escuro
+    o hover CLAREIA o fundo e o anel branco sumia (2.73:1)."""
+    for escura in (False, True):
+        pal = theme.DARK_PALETTE if escura else theme.LIGHT_PALETTE
+        tema = "escuro" if escura else "claro"
+        for anel, fundo, estado in (
+            ("focus_ring_on_primary", "primary", "repouso"),
+            ("focus_ring_hover", "primary_hover", "hover"),
+            ("focus_ring_on_primary", "primary_pressed", "pressed"),
+        ):
+            razao = _contraste(pal[anel], pal[fundo])
+            assert razao >= 3.0, f"{tema}/{estado}: {razao:.2f}:1"
+
+
+def test_modais_tem_costura_para_teste(app, tmp_path: Path, monkeypatch) -> None:
+    """Um .exec() inline trava a suite offscreen para sempre — ja aconteceu duas
+    vezes nesta base. Todo modal precisa de um ponto substituivel."""
+    from reforja.gui.prompts import GuiInteraction
+
+    window = MainWindow(tmp_path)
+    assert callable(window._exec_dialog)
+    assert callable(window._confirm_restart)
+    assert callable(window._confirm_removal)
+    assert callable(GuiInteraction._exec_dialog)
+
+    # "Aplicar tudo" ponta a ponta com um plano real: sem a costura isto travaria
+    # no exec() do BatchPreviewDialog, que e construido inline.
+    from PySide6.QtWidgets import QDialog
+
+    step_cls = _step("10")
+    tarefa = _task("pendente", key="Steam", label="Steam")
+    plans = [(step_cls, None, [tarefa])]
+    executados: list = []
+    monkeypatch.setattr(window, "_exec_dialog", lambda d: executados.append(d) or QDialog.DialogCode.Rejected)
+    window._on_batch_probed(plans, [step_cls], None)
+
+    assert executados, "o dialogo de lote precisa passar por _exec_dialog"
+    assert window._worker is None  # cancelado: nada foi executado
+
+
 # --- contraste (WCAG 2.1) ----------------------------------------------------------
 def _luminancia(cor: str) -> float:
     canais = [int(cor[i : i + 2], 16) / 255 for i in (1, 3, 5)]
