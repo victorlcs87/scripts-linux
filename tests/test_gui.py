@@ -807,6 +807,42 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
+# --- estado ocioso honesto ---------------------------------------------------------
+def test_parar_e_barra_de_progresso_somem_em_repouso(app, tmp_path: Path) -> None:
+    """Um "Parar" vermelho e uma barra em 0% parados na tela comunicam
+    "rodou e travou" — o oposto do estado real."""
+    # isVisible() e False em widget nao exibido (offscreen); isHidden() reflete o
+    # estado explicito de visibilidade, como nos demais testes deste arquivo.
+    window = MainWindow(tmp_path)
+    assert window._btn_stop.isHidden() is True
+    assert window._progress.isHidden() is True
+
+    window._set_running(True)
+    assert window._btn_stop.isHidden() is False
+    assert window._progress.isHidden() is False
+
+    window._set_running(False)
+    assert window._btn_stop.isHidden() is True
+
+
+def test_destructive_desabilitado_nao_fica_vermelho() -> None:
+    """A especificidade do seletor de ID vencia QPushButton:disabled."""
+    for dark in (False, True):
+        qss = theme.build_stylesheet(dark)
+        assert "QPushButton#destructive:disabled" in qss
+
+
+def test_card_diz_verificando_antes_da_sondagem(app, tmp_path: Path) -> None:
+    from reforja.gui.main_window import ItemCard
+    from reforja.steps_base import StepTask
+
+    window = MainWindow(tmp_path)
+    task = StepTask(key="steam", label="Steam", description="Loja da Valve", run=lambda: None)
+    card = ItemCard(ALL_STEPS[0], task, window)
+    card.set_probing()
+    assert card._state.text() == "verificando..."
+
+
 # --- contraste (WCAG 2.1) ----------------------------------------------------------
 def _luminancia(cor: str) -> float:
     canais = [int(cor[i : i + 2], 16) / 255 for i in (1, 3, 5)]

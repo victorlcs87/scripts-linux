@@ -339,6 +339,9 @@ QPushButton#primary:disabled {{ background: {p["border_strong"]}; border-color: 
 
 QPushButton#destructive {{ color: {p["error"]}; border-color: {p["error"]}; }}
 QPushButton#destructive:hover {{ background: {p["danger_soft"]}; color: {p["error"]}; border-color: {p["error"]}; }}
+/* Sem esta regra a especificidade do seletor de ID vencia QPushButton:disabled e o
+   botao "Parar" ficava vermelho vivo em repouso — sugerindo que algo rodava. */
+QPushButton#destructive:disabled {{ color: {p["text_faint"]}; border-color: {p["border"]}; background: {p["surface_alt"]}; }}
 
 /* --- foco visivel (navegacao por teclado) -------------------------------
    O anel e uma borda de 2px com o padding reduzido em 1px, para o widget nao

@@ -204,6 +204,19 @@ class ItemCard(QFrame):
         outer.addLayout(body, 1)
         self.apply_task_state(task)
 
+    def set_probing(self) -> None:
+        """Antes da sondagem responder, o card diz que esta verificando.
+
+        Dizer "estado desconhecido" em ~20 cards ao abrir a pagina fazia o app
+        anunciar que nao sabe o que a maquina tem — justamente para quem acabou de
+        formatar e tambem nao sabe.
+        """
+        if self._busy:
+            return
+        for widget in (self._chip, self._action, self._secondary, self._remove):
+            widget.setVisible(False)
+        self._state.setText("verificando...")
+
     def set_busy(self, label: str = "Processando...") -> None:
         """Estado transitorio durante instalar/remover: chip ocupado, botoes off."""
         self._busy = True
@@ -323,7 +336,7 @@ class ItemCard(QFrame):
             self._state.setText(task.detail or "acao sob demanda")
             self._action.setText("Executar")
         else:  # pendente ou desconhecido
-            self._state.setText("" if state == "pendente" else "estado desconhecido")
+            self._state.setText("" if state == "pendente" else "nao foi possivel verificar")
             self._action.setText("Instalar")
         self._action.setObjectName("primary")
         self._action.setVisible(True)
@@ -625,8 +638,10 @@ class StepPage(QWidget):
         """Re-sonda o estado das tarefas em segundo plano e atualiza os cards."""
         if not self._built or not self._cards:
             return
+        for card in self._cards:
+            card.set_probing()
         self._overall.setText("verificando...")
-        self._overall.setStyleSheet(f"color: {theme.PALETTE['text_faint']};")
+        self._overall.setStyleSheet(f"color: {theme.palette()['text_faint']};")
         self._window._probe_step(self._step_cls, self._apply_probe)
 
     def _apply_probe(self, tasks: list[StepTask]) -> None:
@@ -1097,6 +1112,8 @@ class MainWindow(QMainWindow):
         self._progress.setTextVisible(True)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
+        self._progress.setVisible(False)
+        self._btn_stop.setVisible(False)
         toolbar.addWidget(self._progress, 2)
         bottom_layout.addLayout(toolbar)
 
@@ -1405,6 +1422,10 @@ class MainWindow(QMainWindow):
         for btn in self._action_buttons:
             btn.setEnabled(not running)
         self._btn_stop.setEnabled(running)
+        # Em repouso os dois somem: um "Parar" e uma barra em 0% parados na tela
+        # comunicam "rodou e travou", que e o oposto do estado real.
+        self._btn_stop.setVisible(running)
+        self._progress.setVisible(running)
 
     def _run_action(
         self,
