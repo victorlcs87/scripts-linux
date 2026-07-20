@@ -223,7 +223,7 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 }}
 #stepCard:hover {{ border-color: {p["border_strong"]}; }}
 #cardTitle {{ font-size: 15px; font-weight: 600; color: {p["text"]}; }}
-#cardDesc {{ color: {p["text_muted"]}; font-size: 12px; }}
+#cardDesc {{ background: transparent; color: {p["text_muted"]}; font-size: 12px; }}
 #cardStatus {{ font-size: 12px; font-weight: 600; }}
 
 /* --- card de item (grade estilo Flathub) -------------------------------- */

@@ -382,9 +382,8 @@ def test_item_card_removivel_mostra_botao_remover(app, tmp_path: Path) -> None:
 
 def test_remove_item_injeta_acao_remove(app, tmp_path: Path, monkeypatch) -> None:
     window = MainWindow(tmp_path)
-    import reforja.gui.main_window as mw
 
-    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.Yes))
+    monkeypatch.setattr(window, "_confirm_removal", lambda _label: True)
     captured: dict = {}
     monkeypatch.setattr(window, "_run_action", lambda action, steps, **kw: captured.update(action=action, **kw))
     window._remove_item(_step("10"), "Discord", "Discord")
@@ -394,9 +393,8 @@ def test_remove_item_injeta_acao_remove(app, tmp_path: Path, monkeypatch) -> Non
 
 def test_remove_item_cancelado_nao_faz_nada(app, tmp_path: Path, monkeypatch) -> None:
     window = MainWindow(tmp_path)
-    import reforja.gui.main_window as mw
 
-    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(lambda *a, **k: mw.QMessageBox.StandardButton.No))
+    monkeypatch.setattr(window, "_confirm_removal", lambda _label: False)
     chamou = []
     monkeypatch.setattr(window, "_run_action", lambda *a, **k: chamou.append(True))
     window._remove_item(_step("10"), "Discord", "Discord")

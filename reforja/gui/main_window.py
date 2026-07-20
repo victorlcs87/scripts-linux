@@ -664,7 +664,9 @@ class StepPage(QWidget):
         else:
             compliance = "pendente" if pending else "desconhecido"
         glyph, color = theme.compliance(compliance)
-        legenda = f"{applied}/{total} instalado(s)" if total else "sem itens"
+        # "instalado(s)" nao serve para etapa de ajuste (Num Lock, gestos): o
+        # denominador ja exclui o indisponivel, entao o texto e generico.
+        legenda = f"{applied}/{total} aplicado(s)" if total else "sem itens"
         self._overall.setText(f"{glyph}  {legenda}")
         self._overall.setStyleSheet(f"color: {color};")
 
@@ -998,14 +1000,28 @@ class MainWindow(QMainWindow):
             on_done=on_done,
         )
 
+    def _confirm_removal(self, label: str) -> bool:
+        """Confirmacao de remocao com botao que nomeia a acao.
+
+        Metodo proprio (e nao um QMessageBox inline) para os testes poderem
+        substituir a decisao sem abrir um modal que bloqueia o processo.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Remover")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(f"Remover '{label}'?")
+        box.setInformativeText(
+            "O item e desinstalado desta maquina. As configuracoes dele podem permanecer no seu home."
+        )
+        remover = box.addButton("Remover", QMessageBox.ButtonRole.DestructiveRole)
+        cancelar = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancelar)  # o padrao e nao remover
+        box.exec()
+        return box.clickedButton() is remover
+
     def _remove_item(self, step_cls: type, key: str, label: str) -> None:
         """Remove UM item (botao Remover do card), com confirmacao."""
-        answer = QMessageBox.question(
-            self,
-            "Remover",
-            f"Remover '{label}'? Isso desinstala/apaga o item desta maquina.",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self._confirm_removal(label):
             return
         page = self._step_pages.get(step_cls.id)
         on_done = page.refresh if page is not None else None
