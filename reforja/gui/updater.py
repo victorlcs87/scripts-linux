@@ -19,6 +19,7 @@ import json
 import os
 import ssl
 import stat
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -30,6 +31,7 @@ from ._version import __version__
 _API_LATEST = "https://api.github.com/repos/victorlcs87/scripts-linux/releases/latest"
 _RELEASES_PAGE = "https://github.com/victorlcs87/scripts-linux/releases/latest"
 _TIMEOUT = 8
+UPDATED_ENV = "REFORJA_UPDATED_TO"
 
 try:  # certifi garante CAs validas mesmo no AppImage congelado (PyInstaller).
     import certifi
@@ -88,6 +90,42 @@ def running_appimage() -> Path | None:
     """Caminho do AppImage em execucao (variavel APPIMAGE), ou None fora de AppImage."""
     value = os.environ.get("APPIMAGE")
     return Path(value) if value else None
+
+
+def relaunch_appimage(updated_tag: str = "") -> bool:
+    """Lanca o AppImage atualizado num processo novo e desacoplado.
+
+    Nao usamos os.execv: o processo atual ainda segura o mount FUSE da versao
+    antiga, entao subimos um processo independente (start_new_session) e deixamos
+    o chamador encerrar este. Retorna False se nao estivermos num AppImage ou se
+    o lancamento falhar.
+
+    `updated_tag` viaja por REFORJA_UPDATED_TO para a nova instancia avisar que a
+    atualizacao concluiu.
+    """
+    target = running_appimage()
+    if target is None or not target.exists():
+        return False
+    env = dict(os.environ)
+    # Variaveis injetadas pelo runtime do AppImage antigo apontam para o mount em
+    # uso; limpamos para o novo runtime montar a si mesmo.
+    for key in ("APPDIR", "APPIMAGE", "ARGV0", "OWD"):
+        env.pop(key, None)
+    if updated_tag:
+        env[UPDATED_ENV] = updated_tag
+    try:
+        subprocess.Popen(  # noqa: S603 (caminho vem do proprio runtime do AppImage)
+            [str(target)],
+            cwd=str(Path.home()),
+            env=env,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001 - sem relançar: o app so avisa e segue aberto
+        return False
+    return True
 
 
 def _fetch_latest() -> dict:

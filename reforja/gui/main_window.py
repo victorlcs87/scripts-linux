@@ -19,7 +19,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -59,7 +59,14 @@ from .gui_logger import GuiLogger
 from .prompts import GuiInteraction
 from .step_runner import BatchProbeWorker, ProbeWorker, StepWorker, build_gui_step
 from .terminal import TerminalExecutor, TerminalWidget
-from .updater import CheckWorker, DownloadWorker, UpdateChecker, running_appimage
+from .updater import (
+    UPDATED_ENV,
+    CheckWorker,
+    DownloadWorker,
+    UpdateChecker,
+    relaunch_appimage,
+    running_appimage,
+)
 
 _BADGE_RE = re.compile(r"^\[(?P<name>[\w-]+)\]")
 
@@ -836,8 +843,11 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._terminal_executor = TerminalExecutor(self._terminal, on_activate=self._show_terminal)
         self._append("[info] Reforja pronto. Escolha uma secao no menu ao lado.")
+        self._announce_update_done()
 
         self._updating = False
+        self._restarting = False
+        self._updated_tag = ""
         self._check_worker: CheckWorker | None = None
         self._download_worker: DownloadWorker | None = None
         self._update_checker: UpdateChecker | None = None
@@ -1268,12 +1278,18 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         self._btn_update.setEnabled(True)
         if ok:
-            self._append(f"[done] Atualizado para v{tag}. Reabra o Reforja para concluir.")
-            QMessageBox.information(
-                self,
-                "Atualizacao concluida",
-                f"Reforja atualizado para a versao v{tag}.\nFeche e reabra o app para usar a nova versao.",
-            )
+            self._append(f"[done] Atualizado para v{tag}.")
+            box = QMessageBox(self)
+            box.setWindowTitle("Atualizacao concluida")
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(f"Reforja atualizado para a versao v{tag}.\nReiniciar agora para usar a nova versao?")
+            btn_restart = box.addButton("Reiniciar agora", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Depois", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(btn_restart)
+            box.exec()
+            self._updated_tag = tag
+            if box.clickedButton() is btn_restart:
+                self._restart_after_update()
         else:
             self._append(f"[erro] {message}")
             QMessageBox.critical(
@@ -1281,6 +1297,35 @@ class MainWindow(QMainWindow):
                 "Falha na atualizacao",
                 f"{message}\n\nVoce pode baixar manualmente em:\nhttps://github.com/victorlcs87/scripts-linux/releases/latest",
             )
+
+    def _announce_update_done(self) -> None:
+        """Avisa que a atualizacao concluiu quando esta instancia foi aberta pelo reinicio."""
+        tag = os.environ.pop(UPDATED_ENV, "")
+        if not tag:
+            return
+        self._append(f"[done] Atualizacao concluida: rodando a versao v{tag}.")
+        QTimer.singleShot(
+            0,
+            lambda: QMessageBox.information(
+                self,
+                "Atualizacao concluida",
+                f"Reforja foi atualizado com sucesso e agora esta rodando a versao v{tag}.",
+            ),
+        )
+
+    def _restart_after_update(self) -> None:
+        """Sobe a nova versao num processo desacoplado e fecha esta."""
+        self._append("[info] Reiniciando o Reforja na nova versao...")
+        if not relaunch_appimage(self._updated_tag):
+            self._append("[aviso] Nao foi possivel reiniciar automaticamente. Feche e reabra o app.")
+            QMessageBox.warning(
+                self,
+                "Reinicio",
+                "Nao foi possivel reiniciar automaticamente.\nFeche e reabra o Reforja para usar a nova versao.",
+            )
+            return
+        self._restarting = True
+        self.close()
 
     # --- execucao ----------------------------------------------------------------
     def _set_running(self, running: bool) -> None:

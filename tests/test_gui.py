@@ -798,3 +798,45 @@ def test_resolve_task_icon_usa_mapa_de_tema(app) -> None:
     task.icon = ""
     pix = icons.resolve_task_icon("08", task, 48)
     assert not pix.isNull()
+
+
+def test_relaunch_appimage_fora_de_appimage_retorna_false(monkeypatch) -> None:
+    from reforja.gui.updater import relaunch_appimage
+
+    monkeypatch.delenv("APPIMAGE", raising=False)
+    assert relaunch_appimage("1.0.9") is False
+
+
+def test_relaunch_appimage_lanca_processo_com_tag(tmp_path: Path, monkeypatch) -> None:
+    import subprocess as _sp
+
+    from reforja.gui import updater
+
+    fake = tmp_path / "Reforja.AppImage"
+    fake.write_bytes(b"x")
+    monkeypatch.setenv("APPIMAGE", str(fake))
+    monkeypatch.setenv("APPDIR", "/tmp/mount-antigo")
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(_sp, "Popen", lambda cmd, **kw: calls.append((cmd, kw)))
+
+    assert updater.relaunch_appimage("1.0.9") is True
+    cmd, kwargs = calls[0]
+    assert cmd == [str(fake)]
+    assert kwargs["env"][updater.UPDATED_ENV] == "1.0.9"
+    # variaveis do runtime antigo nao vazam para a nova instancia
+    assert "APPDIR" not in kwargs["env"] and "APPIMAGE" not in kwargs["env"]
+
+
+def test_announce_update_done_avisa_e_limpa_env(tmp_path: Path, monkeypatch) -> None:
+    import reforja.gui.main_window as mw
+    from reforja.gui.main_window import MainWindow
+    from reforja.gui.updater import UPDATED_ENV
+
+    shown: list[str] = []
+    monkeypatch.setattr(mw.QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2])))
+    monkeypatch.setattr(mw.QTimer, "singleShot", staticmethod(lambda _ms, fn: fn()))
+    monkeypatch.setenv(UPDATED_ENV, "1.0.9")
+
+    MainWindow(tmp_path)
+    assert shown and "v1.0.9" in shown[0]
+    assert UPDATED_ENV not in os.environ
