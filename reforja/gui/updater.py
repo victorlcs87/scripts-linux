@@ -86,6 +86,22 @@ def expected_sha256(sums_text: str, filename: str) -> str:
     return ""
 
 
+def _write_version_file(target: Path, tag: str) -> None:
+    """Registra a tag instalada no arquivo .version irmao do AppImage.
+
+    E o mesmo registro que a etapa 15 (Atualizar AppImages) le para decidir se
+    precisa baixar. Sem isso, uma atualizacao feita por aqui deixa o .version
+    desatualizado e a etapa 15 rebaixa o AppImage inteiro sem necessidade.
+    """
+    if not tag:
+        return
+    normalized = tag if tag.startswith("v") else f"v{tag}"
+    try:
+        target.with_suffix(".version").write_text(normalized + "\n", encoding="utf-8")
+    except OSError:
+        pass  # registro e best-effort: o download ja foi concluido com sucesso
+
+
 def running_appimage() -> Path | None:
     """Caminho do AppImage em execucao (variavel APPIMAGE), ou None fora de AppImage."""
     value = os.environ.get("APPIMAGE")
@@ -182,11 +198,12 @@ class DownloadWorker(QThread):
     finished = Signal(bool, str)  # (ok, message)
     progress = Signal(int)  # 0-100 (so quando ha Content-Length)
 
-    def __init__(self, url: str, target: Path, sha256_url: str = "") -> None:
+    def __init__(self, url: str, target: Path, sha256_url: str = "", tag: str = "") -> None:
         super().__init__()
         self._url = url
         self._target = target
         self._sha256_url = sha256_url
+        self._tag = tag
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -235,6 +252,7 @@ class DownloadWorker(QThread):
             tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             # Rename atomico no mesmo diretorio: a instancia em uso mantem o inode antigo.
             os.replace(tmp, target)
+            _write_version_file(target, self._tag)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             try:
                 tmp.unlink(missing_ok=True)

@@ -316,10 +316,12 @@ class UpdateAppImagesStep(Step):
         # Comparar com versao instalada
         installed_tag = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else ""
         app_ok = appimage_path.exists() and os.access(str(appimage_path), os.X_OK)
-        if installed_tag and installed_tag == latest_tag and app_ok:
+        # Compara sem o prefixo "v": quem grava o .version pode ou nao inclui-lo.
+        same_version = bool(installed_tag) and installed_tag.lstrip("v") == latest_tag.lstrip("v")
+        if same_version and app_ok:
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja esta na versao mais recente ({latest_tag}).")
             return "current"
-        if installed_tag and installed_tag == latest_tag and not app_ok:
+        if same_version and not app_ok:
             self.ctx.logger.write(
                 f"{badge('aviso', Color.WARNING)} {name} marcado como {latest_tag} mas arquivo ausente ou nao-executavel. Forcando re-download."
             )

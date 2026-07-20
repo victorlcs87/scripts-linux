@@ -542,10 +542,11 @@ def test_offer_update_inicia_download_quando_em_appimage(app, tmp_path: Path, mo
     started: dict[str, object] = {}
 
     class _FakeDownload:
-        def __init__(self, url, target, sha256_url="") -> None:
+        def __init__(self, url, target, sha256_url="", tag="") -> None:
             started["url"] = url
             started["target"] = target
             started["sha256_url"] = sha256_url
+            started["tag"] = tag
 
         finished = _FakeSignal()
         progress = _FakeSignal()
@@ -563,6 +564,8 @@ def test_offer_update_inicia_download_quando_em_appimage(app, tmp_path: Path, mo
 
     assert started.get("started") is True
     assert started["target"] == Path("/home/u/Reforja.AppImage")
+    # A tag precisa chegar ao worker: e ela que grava o .version lido pela etapa 15.
+    assert started["tag"] == "1.0.9"
     assert window._updating is True
 
 
@@ -764,6 +767,44 @@ def test_download_worker_rejeita_hash_divergente(tmp_path: Path, monkeypatch) ->
     assert results and results[0][0] is False
     assert "SHA256" in results[0][1]
     assert target.read_bytes() == b"antigo"  # binario preservado
+
+
+def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypatch) -> None:
+    """Apos atualizar por aqui, o .version irmao precisa refletir a nova tag —
+    senao a etapa 15 (Atualizar AppImages) rebaixa o AppImage inteiro a toa."""
+    from reforja.gui.updater import DownloadWorker
+
+    target = tmp_path / "Reforja-latest.AppImage"
+    target.write_bytes(b"antigo")
+    worker = DownloadWorker("http://x/Reforja.AppImage", target, tag="1.0.9")
+
+    class _Resp:
+        headers: dict[str, str] = {}
+
+        def __init__(self, payload: bytes) -> None:
+            self._payload = payload
+
+        def read(self, _n: int = -1) -> bytes:
+            data, self._payload = self._payload, b""
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    import urllib.request
+
+    monkeypatch.setattr(worker, "_expected_hash", lambda: "")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, **k: _Resp(b"novo"))
+    results: list[tuple[bool, str]] = []
+    worker.finished.connect(lambda ok, msg: results.append((ok, msg)))
+
+    worker.run()
+
+    assert results and results[0][0] is True
+    assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
 # --- icones das tarefas (config steps sem id Flathub proprio) ----------------------

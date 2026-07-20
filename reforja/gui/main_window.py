@@ -1260,7 +1260,7 @@ class MainWindow(QMainWindow):
         self._set_running(True)
         self._append(f"[info] Baixando e instalando a versao v{tag}...")
         self._progress.setRange(0, 0)  # ocupado ate o primeiro progresso chegar
-        worker = DownloadWorker(url, target, sha256_url)
+        worker = DownloadWorker(url, target, sha256_url, tag)
         worker.progress.connect(self._on_download_progress)
         worker.finished.connect(lambda ok, msg, t=tag: self._on_update_finished(ok, msg, t))
         self._download_worker = worker
