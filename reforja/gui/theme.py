@@ -22,7 +22,9 @@ LIGHT_PALETTE = {
     "sidebar": "#e7ebf3",
     "border": "#d3dae4",
     "border_strong": "#bcc6d4",
-    "border_input": "#767f8f",  # limite de componente precisa de 3:1 (WCAG 1.4.11)
+    # Limite de QUALQUER controle operavel (campo, botao, chip): WCAG 1.4.11 exige
+    # 3:1. Vale contra bg (3.57), surface (4.04) e surface_alt (3.76).
+    "border_control": "#767f8f",
     "on_disabled": "#2b3444",  # texto sobre o fundo do botao primario desabilitado
     "text": "#1b2432",
     "text_muted": "#586173",
@@ -32,7 +34,8 @@ LIGHT_PALETTE = {
     "primary_pressed": "#1f4499",
     "primary_soft": "#e7eefc",
     "on_primary": "#ffffff",
-    "ember": "#d4661f",  # acento de marca / barra de nav ativa
+    "ember": "#d4661f",  # acento de marca / barra de nav ativa (nao-textual)
+    "ember_text": "#a84d0c",  # o ember puro da 3.67:1 como texto; este da 5.63
     "success": "#1c7c3c",
     "success_soft": "#e8f4ec",
     "success_border": "#bfe0cb",
@@ -60,7 +63,7 @@ DARK_PALETTE = {
     "sidebar": "#171b24",
     "border": "#2b323f",
     "border_strong": "#3a4150",
-    "border_input": "#737d8c",
+    "border_control": "#737d8c",  # 4.26 / 3.87 / 3.50
     "on_disabled": "#c3cbd8",
     "text": "#e6e9ef",
     "text_muted": "#a4adbd",
@@ -68,9 +71,10 @@ DARK_PALETTE = {
     "primary": "#5b8bf0",
     "primary_hover": "#6f9bf5",
     "primary_pressed": "#4a79db",
-    "primary_soft": "#22304d",
+    "primary_soft": "#182238",  # escurecido: o texto primary em cima dava 4.00, agora 4.83
     "on_primary": "#0d1017",
     "ember": "#e8823a",
+    "ember_text": "#e8823a",  # no escuro o proprio ember ja da 5.90 como texto
     "success": "#4ccb74",
     "success_soft": "#17301f",
     "success_border": "#2c5a3a",
@@ -287,7 +291,7 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 }}
 QPushButton#ghost {{
     background: transparent;
-    border: 1px solid {p["border_strong"]};
+    border: 1px solid {p["border_control"]};
     padding: 6px 12px;
     font-size: 12px;
 }}
@@ -304,7 +308,7 @@ QCheckBox#installedCheck {{ color: {p["text_faint"]}; }}
 QToolButton#filterChip {{
     background: {p["surface_alt"]};
     color: {p["text_muted"]};
-    border: 1px solid {p["border"]};
+    border: 1px solid {p["border_control"]};
     border-radius: 12px;
     padding: 4px 12px;
     font-size: 12px;
@@ -319,18 +323,18 @@ QToolButton#filterChip:checked {{
 /* --- botao de preset (Home) --------------------------------------------- */
 QPushButton#preset {{
     background: {p["surface"]};
-    border: 1px solid {p["border_strong"]};
+    border: 1px solid {p["border_control"]};
     border-radius: 10px;
     padding: 10px 16px;
     font-weight: 600;
 }}
-QPushButton#preset:hover {{ border-color: {p["ember"]}; color: {p["ember"]}; }}
+QPushButton#preset:hover {{ border-color: {p["ember"]}; color: {p["ember_text"]}; }}
 
 /* --- botoes ------------------------------------------------------------- */
 QPushButton {{
     background: {p["surface"]};
     color: {p["text"]};
-    border: 1px solid {p["border_strong"]};
+    border: 1px solid {p["border_control"]};
     border-radius: 8px;
     padding: 8px 14px;
     font-weight: 500;
@@ -403,7 +407,7 @@ QCheckBox::indicator {{ width: 18px; height: 18px; }}
 QLineEdit, QComboBox {{
     background: {p["surface"]};
     color: {p["text"]};
-    border: 1px solid {p["border_input"]};
+    border: 1px solid {p["border_control"]};
     border-radius: 8px;
     padding: 7px 9px;
     selection-background-color: {p["primary"]};
@@ -445,10 +449,11 @@ QProgressBar#progress {{
     border: 1px solid {p["border"]};
     border-radius: 8px;
     background: {p["surface"]};
-    text-align: center;
-    color: {p["text"]};
     height: 22px;
 }}
+/* Sem texto dentro da barra: ele cairia sobre o preenchimento azul (2.7:1) em
+   parte do percurso. O rotulo vive ao lado, sobre o fundo da janela. */
+#progressLabel {{ color: {p["text"]}; font-size: 12px; font-weight: 600; }}
 QProgressBar#progress::chunk {{ background: {p["primary"]}; border-radius: 7px; }}
 
 /* --- faixa de conclusao -------------------------------------------------- */

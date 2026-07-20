@@ -1088,7 +1088,14 @@ def test_paleta_respeita_contraste_minimo(escura: bool) -> None:
         ("primary desabilitado", "on_disabled", "border_strong", 4.5),
         ("texto base", "text", "bg", 4.5),
         ("texto muted", "text_muted", "surface", 4.5),
-        ("borda de campo", "border_input", "surface", 3.0),
+        ("rotulo do progresso", "text", "bg", 4.5),
+        ("ember como texto", "ember_text", "surface", 4.5),
+        # Texto azul sobre o realce suave: nav selecionada, busyChip, chip marcado.
+        ("texto sobre primary_soft", "primary", "primary_soft", 4.5),
+        # Limite de controle operavel (WCAG 1.4.11): vale nas tres superficies.
+        ("borda de controle / bg", "border_control", "bg", 3.0),
+        ("borda de controle / surface", "border_control", "surface", 3.0),
+        ("borda de controle / surface_alt", "border_control", "surface_alt", 3.0),
     ]
     for rotulo, chave_texto, chave_fundo, minimo in pares:
         razao = _contraste(pal[chave_texto], pal[chave_fundo])
@@ -1099,6 +1106,14 @@ def test_text_faint_difere_entre_os_temas() -> None:
     """Era literalmente o mesmo hex nas duas paletas — a escura foi derivada da
     clara sem revisitar o token, e reprovava contraste nos dois."""
     assert theme.LIGHT_PALETTE["text_faint"] != theme.DARK_PALETTE["text_faint"]
+
+
+def test_barra_de_progresso_nao_desenha_texto_sobre_o_preenchimento(app, tmp_path: Path) -> None:
+    """Nao existe cor unica legivel sobre o trilho claro E o preenchimento azul
+    (2.7:1 em parte do percurso). O rotulo vive fora da barra."""
+    window = MainWindow(tmp_path)
+    assert window._progress.isTextVisible() is False
+    assert window._progress_label is not None
 
 
 # --- reflow da grade --------------------------------------------------------------

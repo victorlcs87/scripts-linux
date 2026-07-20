@@ -1179,9 +1179,16 @@ class MainWindow(QMainWindow):
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._stop_requested)
         toolbar.addWidget(self._btn_stop)
+        # Rotulo ao lado da barra (nao dentro): sobre o preenchimento azul o texto
+        # dava 2.7:1 em parte do percurso, e nao existe cor unica que sirva ao
+        # trilho claro e ao preenchimento ao mesmo tempo.
+        self._progress_label = QLabel()
+        self._progress_label.setObjectName("progressLabel")
+        self._progress_label.setVisible(False)
+        toolbar.addWidget(self._progress_label)
         self._progress = QProgressBar()
         self._progress.setObjectName("progress")
-        self._progress.setTextVisible(True)
+        self._progress.setTextVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._progress.setVisible(False)
@@ -1520,6 +1527,7 @@ class MainWindow(QMainWindow):
         # comunicam "rodou e travou", que e o oposto do estado real.
         self._btn_stop.setVisible(running)
         self._progress.setVisible(running)
+        self._progress_label.setVisible(running)
 
     def _run_action(
         self,
@@ -1649,7 +1657,7 @@ class MainWindow(QMainWindow):
         completed = self._queue_total - len(self._queue) - 1
         self._progress.setRange(0, self._queue_total)
         self._progress.setValue(completed)
-        self._progress.setFormat(f"{step_cls.title} — etapa {completed + 1} de {self._queue_total}")
+        self._progress_label.setText(f"{step_cls.title} — etapa {completed + 1} de {self._queue_total}")
         self._append(f"---- {step_cls.title} ----")
         self._start_worker(step_cls, action)
 
@@ -1723,7 +1731,6 @@ class MainWindow(QMainWindow):
         self._set_running(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
-        self._progress.setFormat("%p%")
         self._render_summary()
         self._stack.setCurrentWidget(self._console)
         # Depois do resumo: ele tambem escreve no console e reabriria o painel.
