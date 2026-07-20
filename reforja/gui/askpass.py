@@ -33,7 +33,14 @@ def run_askpass_dialog() -> int:
 
     O sudo passa o texto do prompt como argv[1]. Retorna 0 (ok) ou 1 (cancelado).
     """
-    from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
+    from PySide6.QtWidgets import (
+        QApplication,
+        QDialog,
+        QDialogButtonBox,
+        QLabel,
+        QLineEdit,
+        QVBoxLayout,
+    )
 
     app = QApplication.instance() or QApplication(sys.argv)
     try:
@@ -42,11 +49,56 @@ def run_askpass_dialog() -> int:
         app.setStyleSheet(build_stylesheet())
     except Exception:  # noqa: BLE001 - o dialogo funciona mesmo sem tema
         pass
+
+    # Este e o momento em que o app pede confianca total sobre a maquina. Um
+    # QInputDialog cru com o prompt bruto do sudo nao diz o que sera feito nem o
+    # que acontece com a senha — e exatamente onde o usuario mais precisa saber.
+    dialog = QDialog()
+    dialog.setWindowTitle("Reforja - autenticacao")
+    dialog.setMinimumWidth(460)
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(20, 18, 20, 16)
+    layout.setSpacing(10)
+
+    titulo = QLabel("O Reforja precisa da sua senha de administrador")
+    titulo.setObjectName("cardTitle")
+    titulo.setWordWrap(True)
+    layout.addWidget(titulo)
+
+    explicacao = QLabel(
+        "Algumas tarefas mexem no sistema (instalar pacotes, editar arquivos em /etc) "
+        "e por isso exigem sudo.\n\n"
+        "A senha vai direto para o sudo: o Reforja nao grava, nao envia para lugar "
+        "nenhum e nao registra no log. O que cada tarefa executa aparece no console."
+    )
+    explicacao.setObjectName("pageDesc")
+    explicacao.setWordWrap(True)
+    layout.addWidget(explicacao)
+
+    # O prompt bruto do sudo ainda aparece: e ele que diz de qual usuario e a senha
+    # (util em maquina com mais de uma conta administrativa).
     prompt = sys.argv[1] if len(sys.argv) > 1 else "Senha do sudo:"
-    text, ok = QInputDialog.getText(None, "Reforja - autenticacao", prompt, QLineEdit.EchoMode.Password)
-    if not ok:
+    rotulo = QLabel(prompt)
+    rotulo.setWordWrap(True)
+    layout.addWidget(rotulo)
+
+    campo = QLineEdit()
+    campo.setEchoMode(QLineEdit.EchoMode.Password)
+    campo.setAccessibleName("Senha de administrador")
+    layout.addWidget(campo)
+
+    botoes = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    botoes.button(QDialogButtonBox.StandardButton.Ok).setText("Autenticar")
+    botoes.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
+    botoes.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancelar")
+    botoes.accepted.connect(dialog.accept)
+    botoes.rejected.connect(dialog.reject)
+    layout.addWidget(botoes)
+    campo.setFocus()
+
+    if dialog.exec() != QDialog.DialogCode.Accepted:
         return 1
-    sys.stdout.write(text)
+    sys.stdout.write(campo.text())
     sys.stdout.flush()
     return 0
 

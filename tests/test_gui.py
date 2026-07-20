@@ -141,22 +141,50 @@ def test_askpass_self_invocation_nao_reabre_gui(monkeypatch) -> None:
     assert "reforja.gui" in body or askpass_mod.sys.executable in body
 
 
-def test_run_askpass_dialog_imprime_senha(app, monkeypatch, capsys) -> None:
-    from PySide6.QtWidgets import QInputDialog
+def _responde_dialogo(monkeypatch, *, aceitar: bool, senha: str = ""):
+    """Substitui QDialog.exec para o dialogo nao bloquear a suite offscreen."""
+    from PySide6.QtWidgets import QDialog, QLineEdit
 
-    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("minha-senha", True)))
+    def fake_exec(self):
+        if senha:
+            campo = self.findChild(QLineEdit)
+            if campo is not None:
+                campo.setText(senha)
+        return QDialog.DialogCode.Accepted if aceitar else QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+
+
+def test_run_askpass_dialog_imprime_senha(app, monkeypatch, capsys) -> None:
+    _responde_dialogo(monkeypatch, aceitar=True, senha="minha-senha")
     rc = askpass_mod.run_askpass_dialog()
     assert rc == 0
     assert capsys.readouterr().out == "minha-senha"
 
 
 def test_run_askpass_dialog_cancelado(app, monkeypatch, capsys) -> None:
-    from PySide6.QtWidgets import QInputDialog
-
-    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+    _responde_dialogo(monkeypatch, aceitar=False)
     rc = askpass_mod.run_askpass_dialog()
     assert rc == 1
     assert capsys.readouterr().out == ""
+
+
+def test_askpass_explica_o_que_faz_com_a_senha(app, monkeypatch) -> None:
+    """E o momento de maior desconfianca do app: precisa dizer por que pede e o
+    que acontece com a senha, nao so repassar o prompt cru do sudo."""
+    from PySide6.QtWidgets import QDialog, QLabel
+
+    textos: list[str] = []
+
+    def captura_exec(self):
+        textos.extend(label.text() for label in self.findChildren(QLabel))
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", captura_exec)
+    askpass_mod.run_askpass_dialog()
+    juntos = " ".join(textos).lower()
+    assert "administrador" in juntos
+    assert "nao grava" in juntos and "sudo" in juntos
 
 
 def test_app_main_askpass_mode_nao_abre_janela(monkeypatch) -> None:

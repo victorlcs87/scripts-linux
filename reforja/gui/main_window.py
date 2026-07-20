@@ -371,6 +371,24 @@ class ItemCard(QFrame):
             widget.style().polish(widget)
 
 
+def _page_action_label(step_cls: type, window: MainWindow) -> str:
+    """Verbo do botao principal da pagina da etapa.
+
+    Deriva do que as tarefas declaram (`action_label`): se todas concordam num
+    verbo, ele vale para a pagina; senao cai num generico. Evita prometer
+    "Instalar" numa etapa que faz backup ou ajusta o teclado.
+    """
+    try:
+        rotulos = {t.action_label for t in window._step_tasks(step_cls) if t.action_label}
+    except Exception:  # noqa: BLE001 - rotulo nunca derruba a pagina
+        rotulos = set()
+    if len(rotulos) == 1:
+        return f"{rotulos.pop()} o que falta"
+    if rotulos:
+        return "Aplicar o que falta"
+    return "Instalar o que falta"
+
+
 class StepPage(QWidget):
     """Pagina de uma etapa: cabecalho + grade multi-coluna de ItemCards."""
 
@@ -421,7 +439,9 @@ class StepPage(QWidget):
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        btn_apply = QPushButton("Instalar o que falta")
+        # O rotulo da pagina segue o mesmo principio dos cards: quem sabe o que a
+        # etapa faz e a etapa. "Instalar o que falta" mentia em Backup e Ajustes KDE.
+        btn_apply = QPushButton(_page_action_label(step_cls, window))
         btn_apply.setObjectName("primary")
         btn_apply.clicked.connect(lambda: window._run_action("apply", [step_cls], on_done=self.refresh))
         btn_status = QPushButton("Status")
@@ -540,8 +560,20 @@ class StepPage(QWidget):
         bar.addStretch(1)
         wrapper = QWidget()
         wrapper.setLayout(bar)
-        self._filter_holder.addWidget(wrapper)
-        self._filter_bar = wrapper
+        # Em janela estreita os chips eram espremidos ate virar "j...s", "c...o".
+        # Piso de largura por chip + rolagem horizontal da barra: o texto continua
+        # legivel e o que nao cabe fica alcancavel.
+        for chip in self._chip_buttons:
+            chip.setMinimumWidth(chip.sizeHint().width())
+        faixa = QScrollArea()
+        faixa.setWidgetResizable(True)
+        faixa.setFrameShape(QFrame.Shape.NoFrame)
+        faixa.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        faixa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        faixa.setWidget(wrapper)
+        faixa.setFixedHeight(wrapper.sizeHint().height() + 14)
+        self._filter_holder.addWidget(faixa)
+        self._filter_bar = faixa
 
     def _focus_search(self) -> None:
         """Ctrl+F: leva o foco para a busca. Etapas curtas nao tem barra de filtro."""
@@ -1186,6 +1218,7 @@ class MainWindow(QMainWindow):
         self._console_collapsed = False
         # Abertura automatica (por saida de comando) nao vira preferencia salva.
         self._console_auto_opened = False
+        self._falhas_para_repetir: list[str] = []
         self._apply_console_collapsed(settings.load().get("console_collapsed", True))
 
     # --- navegacao ---------------------------------------------------------------
@@ -1594,11 +1627,13 @@ class MainWindow(QMainWindow):
             return
         step_cls, action = self._queue.pop(0)
         self._running_step = step_cls
-        # Barra em modo "ocupado" enquanto o step corrente roda; a contagem por
-        # concluidas volta em _on_result/_finish_queue.
-        self._progress.setRange(0, 0)
+        # Determinada (por etapa) em vez de "ocupada": com setRange(0, 0) o Qt nao
+        # desenha o texto, entao a barra andava sem dizer o que estava rodando.
+        # Mede etapas, nao bytes — e o formato deixa isso explicito.
         completed = self._queue_total - len(self._queue) - 1
-        self._progress.setFormat(f"{step_cls.title} ({completed + 1}/{self._queue_total})")
+        self._progress.setRange(0, self._queue_total)
+        self._progress.setValue(completed)
+        self._progress.setFormat(f"{step_cls.title} — etapa {completed + 1} de {self._queue_total}")
         self._append(f"---- {step_cls.title} ----")
         self._start_worker(step_cls, action)
 
@@ -1767,6 +1802,8 @@ class MainWindow(QMainWindow):
             self._append(line)
 
     def _on_transient(self, message: str) -> None:
+        # Linha de status: e aqui que aparece o item corrente ("instalando steam"),
+        # granularidade que a barra por etapa nao tem.
         self._status_label.setText(message)
         self._transient_active = True
 
@@ -1807,7 +1844,9 @@ class MainWindow(QMainWindow):
         self._console_collapsed = collapsed
         for widget in self._console_body:
             widget.setVisible(not collapsed)
-        self._status_label.setVisible(not collapsed)
+        # Durante a execucao a linha de status fica visivel mesmo com o console
+        # recolhido: e o unico lugar que diz qual ITEM esta sendo instalado.
+        self._status_label.setVisible(not collapsed or self._worker is not None)
         self._btn_collapse.setText("▴ Mostrar console" if collapsed else "▾ Ocultar console")
         if collapsed:
             self._splitter.setSizes([740, 40])
