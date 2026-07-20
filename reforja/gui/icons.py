@@ -25,10 +25,17 @@ from . import theme
 _CACHE_DIR = Path.home() / ".cache/reforja/icons"
 # Padrao publico de icones do Flathub (best-effort; falha -> mantem avatar).
 _FLATHUB_ICON_URL = "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/{app_id}.png"
+_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 
 
 def _looks_like_path(value: str) -> bool:
+    if value.startswith(("http://", "https://")):
+        return False  # e URL remota, resolvida via cache/download
     return value.endswith((".png", ".svg", ".jpg", ".jpeg", ".ico")) or "/" in value
+
+
+def _looks_like_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
 
 
 def _looks_like_app_id(value: str) -> bool:
@@ -134,14 +141,15 @@ def resolve_icon(label: str, icon: str, category: str, size: int = 48) -> QPixma
         local = _local_pixmap(icon, size)
         if local is not None:
             return local
-    if icon and _looks_like_app_id(icon):
+    if icon and (_looks_like_app_id(icon) or _looks_like_url(icon)):
         cached = _cache_path(icon)
         if cached.exists():
             local = _local_pixmap(str(cached), size)
             if local is not None:
                 return local
     slug = label.lower().replace(" ", "-")
-    theme_names = [icon, slug] if icon else [slug]
+    tema = "" if _looks_like_url(icon) else icon
+    theme_names = [tema, slug] if tema else [slug]
     from_theme = _theme_pixmap(theme_names, size)
     if from_theme is not None:
         return from_theme
@@ -215,18 +223,28 @@ def _cache_path(app_id: str) -> Path:
     return _CACHE_DIR / f"{app_id}-{digest}.png"
 
 
-def flathub_icon_targets(tasks) -> list[tuple[str, str]]:
-    """(chave_da_tarefa, app_id) para tarefas cujo `icon` e um id Flathub."""
+def remote_icon_targets(tasks) -> list[tuple[str, str]]:
+    """(chave_da_tarefa, icone) para tarefas com icone remoto.
+
+    Cobre os dois formatos: id Flathub (vira URL do repo do Flathub) e URL http(s)
+    direta — usada pelos WebApps, cujo icone de verdade mora no proprio site.
+    """
     targets: list[tuple[str, str]] = []
     for task in tasks:
         icon = getattr(task, "icon", "") or ""
-        if icon and not _looks_like_path(icon) and _looks_like_app_id(icon):
+        if not icon or _looks_like_path(icon):
+            continue
+        if _looks_like_url(icon) or _looks_like_app_id(icon):
             targets.append((task.key, icon))
     return targets
 
 
-class FlathubIconWorker(QThread):
-    """Baixa icones do Flathub em segundo plano e emite (chave, caminho) por acerto."""
+class RemoteIconWorker(QThread):
+    """Baixa icones (Flathub ou URL do site) em segundo plano.
+
+    Emite (chave, caminho) por acerto; qualquer falha e silenciosa e o card
+    continua com o que ja tinha.
+    """
 
     iconReady = Signal(str, str)
 
@@ -235,19 +253,21 @@ class FlathubIconWorker(QThread):
         self._targets = targets
 
     def run(self) -> None:  # noqa: D401 (override QThread.run)
-        for key, app_id in self._targets:
-            path = _cache_path(app_id)
+        for key, icon in self._targets:
+            path = _cache_path(icon)
             if not path.exists():
-                if not self._download(app_id, path):
+                if not self._download(icon, path):
                     continue
             self.iconReady.emit(key, str(path))
 
     @staticmethod
-    def _download(app_id: str, path: Path) -> bool:
-        url = _FLATHUB_ICON_URL.format(app_id=app_id)
+    def _download(icon: str, path: Path) -> bool:
+        url = icon if _looks_like_url(icon) else _FLATHUB_ICON_URL.format(app_id=icon)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with urllib.request.urlopen(url, timeout=6) as resp:  # noqa: S310 (host fixo do Flathub)
+            # Alguns sites (chatgpt.com) devolvem 403 para User-Agent de script.
+            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+            with urllib.request.urlopen(req, timeout=6) as resp:  # noqa: S310 (http(s) declarado na tarefa)
                 if resp.status != 200:
                     return False
                 data = resp.read()
@@ -257,3 +277,8 @@ class FlathubIconWorker(QThread):
             return True
         except Exception:  # rede/HTTP falhou -> mantem o avatar, sem derrubar a UI
             return False
+
+
+# Compat: nomes antigos (uma unica fonte era o Flathub).
+flathub_icon_targets = remote_icon_targets
+FlathubIconWorker = RemoteIconWorker

@@ -21,9 +21,24 @@ from ..platform import (
 from ..steps_base import Step, StepTask
 from ._common import header
 
+# (nome, slug, url, manifest, icone). O icone e a URL do icone REAL do site (o do
+# manifest/favicon), nao um glifo generico de navegador: a GUI baixa em segundo
+# plano e cacheia, caindo no icone de tema enquanto nao chega.
 WEBAPPS = (
-    ("ChatGPT", "chatgpt", "https://chatgpt.com", "https://chatgpt.com/manifest.json"),
-    ("GSV Calendar", "gsv-calendar", "http://gsv-calendar.vercel.app", "https://gsv-calendar.vercel.app/manifest.json"),
+    (
+        "ChatGPT",
+        "chatgpt",
+        "https://chatgpt.com",
+        "https://chatgpt.com/manifest.json",
+        "https://chatgpt.com/favicon.ico",
+    ),
+    (
+        "GSV Calendar",
+        "gsv-calendar",
+        "http://gsv-calendar.vercel.app",
+        "https://gsv-calendar.vercel.app/manifest.json",
+        "https://gsv-calendar.vercel.app/gsv-logo.png?v=3",
+    ),
 )
 
 # Rotulo do item de navegador no menu (os demais itens vem de WEBAPPS).
@@ -48,12 +63,13 @@ class BrowserStep(Step):
                     "aplicativos com janela propria (os WebApps abaixo dependem dele)."
                 ),
                 short_description="Firefox + FirefoxPWA (base dos WebApps)",
+                icon="firefox",
                 category="navegador",
                 detect=self._browser_ready,
                 run=self._install_browser,
             )
         ]
-        for name, slug, url, _manifest in WEBAPPS:
+        for name, slug, url, _manifest, icon in WEBAPPS:
             items.append(
                 StepTask(
                     key=f"webapp-{slug}",
@@ -63,6 +79,7 @@ class BrowserStep(Step):
                         "se ele falhar, tenta o WebApp Manager e, por ultimo, um atalho .desktop simples."
                     ),
                     short_description=f"App de janela propria para {name}",
+                    icon=icon,
                     category="navegador",
                     detect=partial(self._webapp_detail, name, slug),
                     run=partial(self._create_one_webapp, name, slug),
@@ -110,7 +127,7 @@ class BrowserStep(Step):
         return f"WebApp {name} {'(ja existe)' if self._webapp_present(name, slug) else '(nao criado)'}"
 
     def _create_webapps(self, chosen) -> str:
-        if all(self._webapp_present(name, slug) for name, slug, _url, _manifest in chosen):
+        if all(self._webapp_present(name, slug) for name, slug, _url, _manifest, *_ in chosen):
             self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} WebApps/atalhos ja encontrados. Pulando criacao.")
             return ""
         # Os WebApps dependem do FirefoxPWA; garante mesmo sem o item de navegador marcado.
@@ -129,7 +146,7 @@ class BrowserStep(Step):
 
     def _try_firefoxpwa(self, webapps) -> bool:
         ok_all = True
-        for name, slug, _url, manifest in webapps:
+        for name, slug, _url, manifest, *_ in webapps:
             if self._webapp_present(name, slug):
                 self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja encontrado")
                 continue
@@ -176,7 +193,7 @@ class BrowserStep(Step):
 
     def _create_desktop_fallbacks(self, webapps) -> None:
         app_dir = self.ctx.user.home / ".local/share/applications"
-        for name, slug, url, _manifest in webapps:
+        for name, slug, url, _manifest, *_ in webapps:
             if self._webapp_present(name, slug):
                 self.ctx.logger.write(f"{badge('ok', Color.SUCCESS)} {name} ja encontrado")
                 continue
@@ -233,7 +250,7 @@ class BrowserStep(Step):
         # Casa pelo nome do WebApp ou pelo dominio da URL (robusto a nomes iguais).
         if name.lower() in listing:
             return True
-        url = next((u for n, s, u, _m in WEBAPPS if s == slug), "")
+        url = next((u for n, s, u, *_m in WEBAPPS if s == slug), "")
         host = re.sub(r"^https?://", "", url).split("/")[0].lower()
         return bool(host and host in listing)
 
@@ -251,14 +268,14 @@ class BrowserStep(Step):
             browser_missing.append("firefox")
         if not (system_installed("firefoxpwa") or command_exists("firefoxpwa")):
             browser_missing.append("firefoxpwa")
-        webapps_missing = [name for name, slug, _url, _m in WEBAPPS if not self._webapp_present(name, slug)]
+        webapps_missing = [name for name, slug, _url, *_m in WEBAPPS if not self._webapp_present(name, slug)]
 
         for name, ok in (
             ("firefox", "firefox" not in browser_missing),
             ("firefoxpwa", "firefoxpwa" not in browser_missing),
         ):
             self.ctx.logger.write(f"{badge(name, Color.SUCCESS if ok else Color.WARNING)} {'OK' if ok else 'ausente'}")
-        for name, slug, _url, _m in WEBAPPS:
+        for name, slug, _url, *_m in WEBAPPS:
             ok = name not in webapps_missing
             self.ctx.logger.write(f"{badge(slug, Color.SUCCESS if ok else Color.WARNING)} {'OK' if ok else 'ausente'}")
 
@@ -278,7 +295,7 @@ class BrowserStep(Step):
     def undo(self) -> None:
         header(self, self.title, "Removendo atalhos de WebApp criados; navegador fica")
         app_dir = self.ctx.user.home / ".local/share/applications"
-        for _name, slug, _url, _manifest in WEBAPPS:
+        for _name, slug, _url, _manifest, *_ in WEBAPPS:
             target = app_dir / f"{slug}.desktop"
             if self.ctx.runner.dry_run:
                 self.ctx.logger.write(f"{badge('dry-run', Color.DRY_RUN)} removeria {target}")

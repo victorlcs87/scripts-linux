@@ -621,10 +621,10 @@ class StepPage(QWidget):
         # destruida em execucao -> abort), alem de manter os testes deterministicos.
         if os.environ.get("REFORJA_NO_UPDATE_CHECK") == "1":
             return
-        targets = icons.flathub_icon_targets(tasks)
+        targets = icons.remote_icon_targets(tasks)
         if not targets:
             return
-        worker = icons.FlathubIconWorker(targets)
+        worker = icons.RemoteIconWorker(targets)
         worker.iconReady.connect(self._on_icon_ready)
         self._window._track_worker(worker)
         worker.start()

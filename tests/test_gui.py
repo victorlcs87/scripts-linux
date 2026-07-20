@@ -525,16 +525,33 @@ def test_icone_fallback_tipografico_sem_rede(app) -> None:
     assert pix.width() == 48 and pix.height() == 48
 
 
-def test_flathub_targets_ignora_caminhos_locais(app) -> None:
+def test_remote_icon_targets_cobre_flathub_e_url(app) -> None:
+    """Alvo remoto e id Flathub OU URL do site (WebApps). Caminho local fica fora."""
     from reforja.gui import icons
 
     tarefas = [
         _task("pendente", key="a", icon="com.discordapp.Discord"),
         _task("pendente", key="b", icon="assets/reforja.png"),
         _task("pendente", key="c", icon=""),
+        _task("pendente", key="d", icon="https://chatgpt.com/favicon.ico"),
     ]
-    alvos = icons.flathub_icon_targets(tarefas)
-    assert alvos == [("a", "com.discordapp.Discord")]
+    alvos = icons.remote_icon_targets(tarefas)
+    assert alvos == [("a", "com.discordapp.Discord"), ("d", "https://chatgpt.com/favicon.ico")]
+
+
+def test_url_de_icone_nao_e_tratada_como_caminho_local(app) -> None:
+    """Uma URL terminada em .png parecia caminho local e nunca era baixada."""
+    from reforja.gui import icons
+
+    assert icons._looks_like_path("https://exemplo.com/logo.png") is False
+    assert icons._looks_like_path("assets/reforja.png") is True
+
+
+def test_webapps_declaram_icone_real_do_site() -> None:
+    """ChatGPT mostrava um glifo generico de navegador; GSV, um calendario."""
+    from reforja.steps.browser import WEBAPPS
+
+    assert all(len(entry) == 5 and entry[4].startswith("http") for entry in WEBAPPS)
 
 
 # --- atualizacao do app -----------------------------------------------------------
