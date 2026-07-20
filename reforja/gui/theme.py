@@ -22,9 +22,11 @@ LIGHT_PALETTE = {
     "sidebar": "#e7ebf3",
     "border": "#d3dae4",
     "border_strong": "#bcc6d4",
+    "border_input": "#767f8f",  # limite de componente precisa de 3:1 (WCAG 1.4.11)
+    "on_disabled": "#2b3444",  # texto sobre o fundo do botao primario desabilitado
     "text": "#1b2432",
     "text_muted": "#586173",
-    "text_faint": "#7b8494",
+    "text_faint": "#5f6878",  # 5.2:1 no pior fundo (surface_alt); #7b8494 dava 3.5:1
     "primary": "#2f5fd0",
     "primary_hover": "#2650b6",
     "primary_pressed": "#1f4499",
@@ -34,7 +36,7 @@ LIGHT_PALETTE = {
     "success": "#1c7c3c",
     "success_soft": "#e8f4ec",
     "success_border": "#bfe0cb",
-    "pending": "#986a08",
+    "pending": "#7d5606",  # 5.8:1 sobre bg; #986a08 dava 4.2:1
     "attention": "#b1471a",
     "error": "#c62828",
     "danger_soft": "#fbeaea",
@@ -53,9 +55,11 @@ DARK_PALETTE = {
     "sidebar": "#171b24",
     "border": "#2b323f",
     "border_strong": "#3a4150",
+    "border_input": "#737d8c",
+    "on_disabled": "#c3cbd8",
     "text": "#e6e9ef",
     "text_muted": "#a4adbd",
-    "text_faint": "#7b8494",
+    "text_faint": "#9aa3b2",  # 5.7:1 no pior fundo; o valor antigo era o MESMO da paleta clara
     "primary": "#5b8bf0",
     "primary_hover": "#6f9bf5",
     "primary_pressed": "#4a79db",
@@ -331,7 +335,7 @@ QPushButton#primary {{
 }}
 QPushButton#primary:hover {{ background: {p["primary_hover"]}; border-color: {p["primary_hover"]}; color: {p["on_primary"]}; }}
 QPushButton#primary:pressed {{ background: {p["primary_pressed"]}; }}
-QPushButton#primary:disabled {{ background: {p["border_strong"]}; border-color: {p["border_strong"]}; color: {p["surface"]}; }}
+QPushButton#primary:disabled {{ background: {p["border_strong"]}; border-color: {p["border_strong"]}; color: {p["on_disabled"]}; }}
 
 QPushButton#destructive {{ color: {p["error"]}; border-color: {p["error"]}; }}
 QPushButton#destructive:hover {{ background: {p["danger_soft"]}; color: {p["error"]}; border-color: {p["error"]}; }}
@@ -362,7 +366,7 @@ QCheckBox:focus {{ background: {p["primary_soft"]}; border-radius: 4px; }}
 QLineEdit, QComboBox {{
     background: {p["surface"]};
     color: {p["text"]};
-    border: 1px solid {p["border_strong"]};
+    border: 1px solid {p["border_input"]};
     border-radius: 8px;
     padding: 7px 9px;
     selection-background-color: {p["primary"]};

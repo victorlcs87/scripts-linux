@@ -807,6 +807,48 @@ def test_download_worker_registra_version_para_etapa_15(tmp_path: Path, monkeypa
     assert (tmp_path / "Reforja-latest.version").read_text(encoding="utf-8").strip() == "v1.0.9"
 
 
+# --- contraste (WCAG 2.1) ----------------------------------------------------------
+def _luminancia(cor: str) -> float:
+    canais = [int(cor[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    canais = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in canais]
+    return 0.2126 * canais[0] + 0.7152 * canais[1] + 0.0722 * canais[2]
+
+
+def _contraste(a: str, b: str) -> float:
+    la, lb = _luminancia(a), _luminancia(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+@pytest.mark.parametrize("escura", [False, True], ids=["clara", "escura"])
+def test_paleta_respeita_contraste_minimo(escura: bool) -> None:
+    """Texto <18px precisa de 4.5:1; limite de componente, 3:1.
+
+    A borda decorativa do card fica de fora de proposito: ela agrupa conteudo que
+    ja se identifica sozinho, nao delimita um controle operavel (WCAG 1.4.11).
+    """
+    pal = theme.DARK_PALETTE if escura else theme.LIGHT_PALETTE
+    pares = [
+        ("itemState", "text_faint", "surface", 4.5),
+        ("sectionLabel", "text_faint", "bg", 4.5),
+        ("unavailableChip", "text_faint", "surface_alt", 4.5),
+        ("botao desabilitado", "text_faint", "surface_alt", 4.5),
+        ("status pendente", "pending", "bg", 4.5),
+        ("primary desabilitado", "on_disabled", "border_strong", 4.5),
+        ("texto base", "text", "bg", 4.5),
+        ("texto muted", "text_muted", "surface", 4.5),
+        ("borda de campo", "border_input", "surface", 3.0),
+    ]
+    for rotulo, chave_texto, chave_fundo, minimo in pares:
+        razao = _contraste(pal[chave_texto], pal[chave_fundo])
+        assert razao >= minimo, f"{rotulo}: {razao:.2f}:1 (minimo {minimo}:1)"
+
+
+def test_text_faint_difere_entre_os_temas() -> None:
+    """Era literalmente o mesmo hex nas duas paletas — a escura foi derivada da
+    clara sem revisitar o token, e reprovava contraste nos dois."""
+    assert theme.LIGHT_PALETTE["text_faint"] != theme.DARK_PALETTE["text_faint"]
+
+
 # --- reflow da grade --------------------------------------------------------------
 def test_reflow_desconta_margens_e_barra_de_rolagem(app, tmp_path: Path) -> None:
     """A largura util tem que excluir as margens do layout e a barra de rolagem.
@@ -815,19 +857,23 @@ def test_reflow_desconta_margens_e_barra_de_rolagem(app, tmp_path: Path) -> None
     contra a borda direita — sem recurso, porque o scroll horizontal e desligado.
     """
     window = MainWindow(tmp_path)
-    window._open_step_page("10")
-    page = window._step_pages["10"]
-    page.showEvent(None) if not page._built else None
+    try:
+        window._open_step_page("10")
+        page = window._step_pages["10"]
 
-    util = page._available_width()
-    viewport = page._scroll.viewport().width()
-    margens = page._grid.contentsMargins()
-    assert util <= viewport - margens.left() - margens.right()
+        util = page._available_width()
+        viewport = page._scroll.viewport().width()
+        margens = page._grid.contentsMargins()
+        assert util <= viewport - margens.left() - margens.right()
 
-    # A grade nunca pode pedir mais largura do que o viewport oferece.
-    colunas = max(1, (util + page._grid.spacing()) // (300 + page._grid.spacing()))
-    largura_pedida = colunas * 300 + (colunas - 1) * page._grid.spacing()
-    assert largura_pedida <= viewport, f"{colunas} colunas pedem {largura_pedida}px em {viewport}px"
+        # A grade nunca pode pedir mais largura do que o viewport oferece.
+        colunas = max(1, (util + page._grid.spacing()) // (300 + page._grid.spacing()))
+        largura_pedida = colunas * 300 + (colunas - 1) * page._grid.spacing()
+        assert largura_pedida <= viewport, f"{colunas} colunas pedem {largura_pedida}px em {viewport}px"
+    finally:
+        # Abrir a pagina dispara um ProbeWorker; closeEvent espera as threads.
+        # Sem isso o processo aborta no encerramento (QThread destruida rodando).
+        window.close()
 
 
 # --- foco visivel e nomes acessiveis ---------------------------------------------
