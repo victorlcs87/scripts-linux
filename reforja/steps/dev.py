@@ -188,17 +188,20 @@ class GitStep(Step):
             return ""
         self.ctx.logger.write(
             paint(
-                "O gh vai abrir um assistente: escolha GitHub.com, protocolo SSH e "
-                "aceite gerar/enviar a chave SSH. Depois autorize no navegador.",
+                "O gh vai mostrar um codigo de uso unico e abrir o navegador para autorizar. "
+                "A chave SSH desta conta e criada e enviada logo depois, automaticamente.",
                 Color.MUTED,
             )
         )
+        # Passamos as respostas por flag para NAO cair nos menus de setas do gh
+        # ("Where do you use GitHub?", protocolo, etc.), que travam no terminal.
+        # --skip-ssh-key porque a chave/alias sao criados por nos em _ensure_account_alias.
         self.ctx.runner.run(
-            ["gh", "auth", "login"],
+            ["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "ssh", "--skip-ssh-key", "--web"],
             check=False,
             interactive=True,
             interactive_tty=True,
-            manual_message="Login interativo: o gh abre o navegador e pode gerar/enviar sua chave SSH. Nao e travamento.",
+            manual_message="Login pelo navegador: copie o codigo, tecle Enter para abrir o navegador e autorize. Nao e travamento.",
         )
         # Configura o git para usar o gh como credential helper (clones HTTPS).
         self.ctx.runner.run(["gh", "auth", "setup-git"], check=False, action="Configurando git para usar o gh")
