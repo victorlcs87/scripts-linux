@@ -46,6 +46,13 @@ WEBAPPS = (
         "https://gerenciador-financeiro-gold.vercel.app/manifest.webmanifest",
         "https://gerenciador-financeiro-gold.vercel.app/icons/apple-touch-icon.png",
     ),
+    (
+        "Claude",
+        "claude",
+        "https://claude.ai/new",
+        "https://claude.ai/manifest.json",
+        "https://claude.ai/favicon.ico",
+    ),
 )
 
 # Rotulo do item de navegador no menu (os demais itens vem de WEBAPPS).
@@ -56,8 +63,8 @@ class BrowserStep(Step):
     id = "03"
     title = "Navegador e WebApps"
     description = (
-        "Instala o Firefox + FirefoxPWA e cria os WebApps do dia a dia (ChatGPT, GSV Calendar e "
-        "Gerenciador Financeiro) "
+        "Instala o Firefox + FirefoxPWA e cria os WebApps do dia a dia (ChatGPT, GSV Calendar, "
+        "Gerenciador Financeiro e Claude) "
         "num unico menu de selecao, com fallback para WebApp Manager ou atalho .desktop."
     )
 
