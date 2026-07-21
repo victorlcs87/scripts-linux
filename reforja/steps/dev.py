@@ -195,9 +195,22 @@ class GitStep(Step):
         )
         # Passamos as respostas por flag para NAO cair nos menus de setas do gh
         # ("Where do you use GitHub?", protocolo, etc.), que travam no terminal.
-        # --skip-ssh-key porque a chave/alias sao criados por nos em _ensure_account_alias.
+        # --skip-ssh-key porque a chave/alias sao criados por nos em _ensure_account_alias;
+        # -s admin:public_key para o token poder ENVIAR essa chave (gh ssh-key add).
         self.ctx.runner.run(
-            ["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "ssh", "--skip-ssh-key", "--web"],
+            [
+                "gh",
+                "auth",
+                "login",
+                "--hostname",
+                "github.com",
+                "--git-protocol",
+                "ssh",
+                "--skip-ssh-key",
+                "--web",
+                "--scopes",
+                "admin:public_key",
+            ],
             check=False,
             interactive=True,
             interactive_tty=True,
@@ -268,6 +281,9 @@ class GitStep(Step):
 
             opcoes: list[str] = ["Adicionar outra conta GitHub (login + alias SSH)"]
             acoes: list[tuple[str, str]] = [("add", "")]
+            if contas:
+                opcoes.append("Criar alias SSH para uma conta ja logada (sem novo login)")
+                acoes.append(("alias", ""))
             if len(contas) > 1:
                 opcoes.append("Trocar a conta ativa do gh")
                 acoes.append(("switch", ""))
@@ -290,6 +306,10 @@ class GitStep(Step):
             if kind == "add":
                 if self._login_account():
                     feito.append("conta adicionada")
+            elif kind == "alias":
+                novo = self._create_alias_for_logged_account()
+                if novo:
+                    feito.append(f"alias {novo} criado")
             elif kind == "switch":
                 self._maybe_switch_account()
                 feito.append("conta ativa trocada")
@@ -318,6 +338,35 @@ class GitStep(Step):
         if feito:
             return "Gerenciamento: " + "; ".join(feito) + "."
         return "Nenhuma alteracao nas contas/aliases."
+
+    def _create_alias_for_logged_account(self) -> str:
+        """Cria a chave/alias SSH dedicado de uma conta que ja esta logada no gh.
+
+        Permite que cada conta tenha sua propria chave (coexistindo), sem refazer
+        o login. Ativa a conta escolhida (a subida da chave vai para ela) e delega
+        a criacao/envio ao mesmo _ensure_account_alias do fluxo de login.
+        """
+        contas = self._logged_accounts()
+        if not contas:
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} nenhuma conta logada no gh.")
+            return ""
+        idx = select_many(
+            "Criar alias SSH para qual conta?",
+            contas,
+            self.ctx.logger,
+            detail="Marque UMA conta ja logada. Cada conta pode ter sua propria chave.",
+        )
+        if not idx:
+            return ""
+        conta = contas[idx[0]]
+        ativa = self._gh_user_field("login")
+        if conta != ativa:
+            self.ctx.runner.run(
+                ["gh", "auth", "switch", "--hostname", "github.com", "--user", conta],
+                check=False,
+                action=f"Ativando a conta {conta}",
+            )
+        return self._ensure_account_alias(conta)
 
     def _print_accounts_overview(self, contas: list[str], ativa: str, aliases: list[str]) -> None:
         linhas = ["", paint("===== CONTAS E ALIASES =====", Color.ACCENT)]
@@ -603,6 +652,26 @@ class GitStep(Step):
         pub = key.with_suffix(".pub")
         if not pub.exists() and not self.ctx.runner.dry_run:
             return False
+        if self._gh_ssh_key_add(alias, conta):
+            return True
+        if self.ctx.runner.dry_run:
+            return True
+        # Falha comum: o token nao tem o escopo admin:public_key (login antigo ou sem
+        # o escopo). Pedimos o escopo pelo navegador e tentamos enviar de novo.
+        self.ctx.logger.write(
+            f"{badge('aviso', Color.WARNING)} falta o escopo admin:public_key; pedindo autorizacao pelo navegador."
+        )
+        self.ctx.runner.run(
+            ["gh", "auth", "refresh", "--hostname", "github.com", "--scopes", "admin:public_key"],
+            check=False,
+            interactive=True,
+            interactive_tty=True,
+            manual_message="Autorize o escopo no navegador (copie o codigo, tecle Enter). Nao e travamento.",
+        )
+        return self._gh_ssh_key_add(alias, conta)
+
+    def _gh_ssh_key_add(self, alias: str, conta: str) -> bool:
+        pub = self._key_path(alias).with_suffix(".pub")
         res = self.ctx.runner.run(
             ["gh", "ssh-key", "add", str(pub), "--title", f"reforja-{alias}"],
             check=False,
@@ -626,6 +695,10 @@ class GitStep(Step):
                 "  1) Acesse https://github.com/settings/keys e clique em 'New SSH Key'.",
                 "  2) Cole a chave acima e salve.",
                 f"  3) Teste a conexao: ssh -T git@{alias}",
+                "",
+                paint("Ou envie pelo gh (pede autorizacao no navegador):", Color.MUTED),
+                "  gh auth refresh -h github.com -s admin:public_key",
+                f"  gh ssh-key add {pub} --title reforja-{alias}",
                 "",
             ],
         )
