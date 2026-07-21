@@ -805,6 +805,19 @@ class AppsStep(Step):
                 )
                 removed = True
         else:
+            # auto-cpufreq: quando instalado pelo instalador do GitHub nao existe
+            # pacote nativo; o proprio binario desfaz a instalacao (daemon + arquivos).
+            if name == "auto-cpufreq" and command_exists("auto-cpufreq"):
+                self.ctx.runner.run(
+                    ["auto-cpufreq", "--remove"],
+                    sudo=True,
+                    check=False,
+                    interactive=True,
+                    interactive_tty=True,
+                    manual_message="auto-cpufreq --remove pode pedir confirmacao/senha sudo.",
+                    action="Removendo auto-cpufreq (daemon + binario)",
+                )
+                removed = True
             installed = [alias for alias in definition["system_aliases"] if system_installed(alias)]
             if installed:
                 remove_system_packages(installed, self.ctx.runner)
