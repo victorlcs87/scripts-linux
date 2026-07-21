@@ -51,7 +51,7 @@ WEBAPPS = (
         "claude",
         "https://claude.ai/new",
         "https://claude.ai/manifest.json",
-        "https://claude.ai/favicon.ico",
+        "https://unpkg.com/@lobehub/icons-static-png@latest/light/claudecode-color.png",
     ),
 )
 
