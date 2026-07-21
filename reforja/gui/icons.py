@@ -176,6 +176,7 @@ TASK_THEME_ICONS: dict[tuple[str, str], str] = {
     ("06", "ferramentas"): "applications-development",
     ("06", "conta"): "preferences-system-users",
     ("06", "repos"): "folder-development",
+    ("06", "gerenciar"): "system-users",
     # 07 rclone
     ("07", "rclone"): "folder-cloud",
     ("07", "remote"): "folder-network",
