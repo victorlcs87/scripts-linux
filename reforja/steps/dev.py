@@ -59,6 +59,7 @@ class GitStep(Step):
         "Instalar Git + GitHub CLI (gh)",
         "Conectar uma conta GitHub (login + alias SSH da conta)",
         "Adicionar um repositorio (clonar + configurar autor)",
+        "Gerenciar contas e aliases SSH (adicionar, renomear, remover)",
     )
 
     # O veredito vem do status() proprio (ferramentas + contas + repos registrados).
@@ -100,6 +101,19 @@ class GitStep(Step):
                 stateless=True,
                 detail="adiciona mais um repositorio",
                 run=self._add_repos,
+            ),
+            StepTask(
+                key="gerenciar",
+                label=self._ACTIONS[3],
+                short_description="Varias contas/alias na mesma maquina",
+                description=(
+                    "Abre um menu para gerenciar suas contas GitHub e aliases SSH: adicionar uma "
+                    "segunda conta (ex: pessoal e trabalho), trocar a conta ativa do gh, renomear "
+                    "ou remover um alias SSH ja criado."
+                ),
+                stateless=True,
+                detail="adicionar/renomear/remover contas e alias",
+                run=self._manage_accounts,
             ),
         ]
 
@@ -232,6 +246,159 @@ class GitStep(Step):
             if mais not in ("s", "sim", "y", "yes"):
                 break
         return adicionados
+
+    # ------------------------------------------------------------------ gerenciar contas/alias
+
+    def _manage_accounts(self) -> str:
+        if not command_exists("gh") and not self.ctx.runner.dry_run:
+            self.ctx.logger.write(
+                f"{badge('aviso', Color.WARNING)} gh nao encontrado. Rode antes 'Instalar Git + GitHub CLI'."
+            )
+            self.add_hint("Instale o GitHub CLI antes de gerenciar contas.")
+            return ""
+        feito: list[str] = []
+        while True:
+            contas = self._logged_accounts()
+            aliases = self._configured_aliases()
+            ativa = self._gh_user_field("login")
+            self._print_accounts_overview(contas, ativa, aliases)
+
+            opcoes: list[str] = ["Adicionar outra conta GitHub (login + alias SSH)"]
+            acoes: list[tuple[str, str]] = [("add", "")]
+            if len(contas) > 1:
+                opcoes.append("Trocar a conta ativa do gh")
+                acoes.append(("switch", ""))
+            for a in aliases:
+                opcoes.append(f"Renomear alias SSH: {a}")
+                acoes.append(("rename", a))
+            for a in aliases:
+                opcoes.append(f"Remover alias SSH (chave + bloco no ~/.ssh/config): {a}")
+                acoes.append(("remove", a))
+
+            idx = select_many(
+                "O que voce quer fazer?",
+                opcoes,
+                self.ctx.logger,
+                detail="Marque UMA acao. Nada marcado = encerrar.",
+            )
+            if not idx:
+                break
+            kind, val = acoes[idx[0]]
+            if kind == "add":
+                if self._login_account():
+                    feito.append("conta adicionada")
+            elif kind == "switch":
+                self._maybe_switch_account()
+                feito.append("conta ativa trocada")
+            elif kind == "rename":
+                novo = self._rename_alias(val)
+                if novo:
+                    feito.append(f"alias {val} -> {novo}")
+            elif kind == "remove":
+                if self._confirm_remove_alias(val) and self._remove_account(val):
+                    feito.append(f"alias {val} removido")
+            try:
+                mais = (
+                    prompt_user(
+                        "Fazer outra alteracao nas contas/aliases? (s/N)",
+                        self.ctx.logger,
+                        prompt_label="Continuar",
+                        allow_empty=True,
+                    )
+                    .strip()
+                    .lower()
+                )
+            except PromptInterruptedError:
+                break
+            if mais not in ("s", "sim", "y", "yes"):
+                break
+        if feito:
+            return "Gerenciamento: " + "; ".join(feito) + "."
+        return "Nenhuma alteracao nas contas/aliases."
+
+    def _print_accounts_overview(self, contas: list[str], ativa: str, aliases: list[str]) -> None:
+        linhas = ["", paint("===== CONTAS E ALIASES =====", Color.ACCENT)]
+        if contas:
+            for c in contas:
+                marca = "  (ativa)" if c == ativa else ""
+                linhas.append(f"{badge('conta', Color.SUCCESS)} {c}{marca}")
+        else:
+            linhas.append("Nenhuma conta GitHub conectada ainda.")
+        if aliases:
+            for a in aliases:
+                linhas.append(f"{badge('alias', Color.INFO)} {a}  (git@{a}:owner/repo.git)")
+        else:
+            linhas.append("Nenhum alias SSH configurado ainda.")
+        print_lines(self.ctx.logger, linhas)
+
+    def _confirm_remove_alias(self, alias: str) -> bool:
+        try:
+            resp = (
+                prompt_user(
+                    f"Remover o alias '{alias}'? Apaga a chave SSH e o bloco Host (s/N)",
+                    self.ctx.logger,
+                    detail="Repositorios ja clonados com este alias precisarao de 'git remote set-url'.",
+                    prompt_label="Confirmar",
+                    allow_empty=True,
+                )
+                .strip()
+                .lower()
+            )
+        except PromptInterruptedError:
+            return False
+        return resp in ("s", "sim", "y", "yes")
+
+    def _rename_alias(self, old: str) -> str:
+        """Renomeia um alias SSH: chaves id_ed25519_<old> -> <new> e bloco Host."""
+        try:
+            new = prompt_user(
+                f"Novo nome para o alias '{old}'",
+                self.ctx.logger,
+                detail="Ex: github-trabalho. Vazio = cancelar.",
+                prompt_label="Novo alias",
+                allow_empty=True,
+            ).strip()
+        except PromptInterruptedError:
+            return ""
+        if not new or new == old:
+            return ""
+        new_key = self._key_path(new)
+        existing_config = self.config_file.read_text(encoding="utf-8") if self.config_file.exists() else ""
+        if new_key.exists() or f"Host {new}" in existing_config:
+            self.ctx.logger.write(f"{badge('aviso', Color.WARNING)} ja existe um alias '{new}'. Escolha outro nome.")
+            return ""
+        old_key = self._key_path(old)
+        for suffix in ("", ".pub"):
+            src = Path(str(old_key) + suffix)
+            dst = Path(str(new_key) + suffix)
+            if src.exists():
+                self.ctx.runner.run(
+                    ["mv", str(src), str(dst)],
+                    action=f"Renomeando {src.name} -> {dst.name}",
+                    show_progress=False,
+                )
+        # Reescreve o ~/.ssh/config: remove o bloco antigo e cria o novo apontando p/ a chave renomeada.
+        if existing_config:
+            backup_existing(self.config_file, self.ctx.runner)
+            write_text(self.config_file, self._strip_host_block(existing_config, old), self.ctx.runner, mode=0o600)
+        self._write_host_block(new, new_key)
+        # Atualiza os repos registrados que usavam o alias antigo.
+        state = self._load_state()
+        mudou = False
+        for r in state.get("repos", []):
+            if r.get("account") == old:
+                r["account"] = new
+                mudou = True
+        if mudou:
+            self._save_state(state)
+        self.ctx.logger.write(
+            paint(
+                f"Alias renomeado. Repos ja clonados com o alias antigo: "
+                f"git remote set-url origin git@{new}:OWNER/REPO.git",
+                Color.MUTED,
+            )
+        )
+        return new
 
     def _maybe_switch_account(self) -> None:
         contas = self._logged_accounts()
