@@ -28,8 +28,9 @@ from PySide6.QtCore import QThread, Signal
 
 from ._version import __version__
 
-_API_LATEST = "https://api.github.com/repos/victorlcs87/scripts-linux/releases/latest"
-_RELEASES_PAGE = "https://github.com/victorlcs87/scripts-linux/releases/latest"
+_REPO = "victorlcs87/scripts-linux"
+_API_LATEST = f"https://api.github.com/repos/{_REPO}/releases/latest"
+_RELEASES_PAGE = f"https://github.com/{_REPO}/releases/latest"
 _TIMEOUT = 8
 UPDATED_ENV = "REFORJA_UPDATED_TO"
 
@@ -144,10 +145,59 @@ def relaunch_appimage(updated_tag: str = "") -> bool:
     return True
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Impede o urllib de seguir o 302: queremos ler o header Location, nao a pagina."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+def _resolve_latest_tag() -> str:
+    """Descobre a tag do ultimo release sem a API: releases/latest redireciona
+    para releases/tag/vX.Y.Z, e o host github.com nao tem o rate limit de 60/h da
+    api.github.com. Retorna "" quando nao ha release."""
+    opener = urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_ssl_context()))
+    req = urllib.request.Request(_RELEASES_PAGE, method="HEAD")
+    try:
+        with opener.open(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (URL fixa, https)
+            resp.read()
+        return ""  # sem redirect => sem release publicado
+    except urllib.error.HTTPError as exc:
+        if exc.code in (301, 302, 303, 307, 308):
+            location = exc.headers.get("Location", "")
+            return location.rstrip("/").rsplit("/", 1)[-1]
+        raise
+
+
+def _fetch_via_redirect() -> dict:
+    """Monta um dict no formato da API a partir apenas da tag: os nomes dos assets
+    do release sao deterministicos (ver .github/workflows/ci.yml)."""
+    tag = _resolve_latest_tag()
+    if not tag:
+        raise urllib.error.URLError("nenhum release encontrado")
+    version = _norm(tag)
+    base = f"https://github.com/{_REPO}/releases/download/{tag}"
+    appimage = f"Reforja-{version}-x86_64.AppImage"
+    return {
+        "tag_name": tag,
+        "assets": [
+            {"name": appimage, "browser_download_url": f"{base}/{appimage}"},
+            {"name": "SHA256SUMS", "browser_download_url": f"{base}/SHA256SUMS"},
+        ],
+    }
+
+
 def _fetch_latest() -> dict:
     req = urllib.request.Request(_API_LATEST, headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT, context=_ssl_context()) as resp:  # noqa: S310 (URL fixa, https)
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT, context=_ssl_context()) as resp:  # noqa: S310 (URL fixa, https)
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Rate limit da api.github.com (60/h por IP sem token): cai para o
+        # github.com direto, que nao aplica esse limite.
+        if exc.code in (403, 429):
+            return _fetch_via_redirect()
+        raise
 
 
 class UpdateChecker(QThread):
