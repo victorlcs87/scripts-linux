@@ -576,10 +576,21 @@ def test_url_de_icone_nao_e_tratada_como_caminho_local(app) -> None:
 
 
 def test_webapps_declaram_icone_real_do_site() -> None:
-    """ChatGPT mostrava um glifo generico de navegador; GSV, um calendario."""
+    """ChatGPT mostrava um glifo generico de navegador; GSV, um calendario.
+
+    O icone e uma URL do proprio site OU um asset local (ex.: o Claude usa o
+    icone do Claude Code em assets/), nunca um glifo generico de navegador.
+    """
+    from reforja.cli import ROOT
     from reforja.steps.browser import WEBAPPS
 
-    assert all(len(entry) == 5 and entry[4].startswith("http") for entry in WEBAPPS)
+    for entry in WEBAPPS:
+        assert len(entry) == 5
+        icon = entry[4]
+        if icon.startswith("http"):
+            continue
+        assert icon.endswith((".png", ".svg", ".jpg", ".jpeg", ".ico"))
+        assert (ROOT / icon).exists(), f"asset de icone ausente: {icon}"
 
 
 # --- atualizacao do app -----------------------------------------------------------
